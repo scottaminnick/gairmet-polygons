@@ -1,0 +1,219 @@
+:root {
+  --bg: #0a0f1a;
+  --panel-bg: rgba(16, 23, 38, 0.92);
+  --panel-border: #2a3650;
+  --text-primary: #e7ecf5;
+  --text-secondary: #8b97b0;
+  --text-muted: #5d6a85;
+
+  --accent-ifr: #f5a623;
+  --accent-mtn: #b985ff;
+  --accent-artcc: #2dd4bf;
+  --accent-states: #64749a;
+
+  --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'JetBrains Mono', monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  font-family: var(--font-sans);
+  color: var(--text-primary);
+}
+
+#map {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+}
+
+/* Leaflet's default attribution/zoom controls need to read against our
+   dark basemap -- restyle just enough to stay legible without fighting
+   Leaflet's own layout. */
+.leaflet-control-attribution {
+  background: rgba(10, 15, 26, 0.75) !important;
+  color: var(--text-muted) !important;
+}
+.leaflet-control-attribution a {
+  color: var(--text-secondary) !important;
+}
+.leaflet-control-zoom a {
+  background: var(--panel-bg) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--panel-border) !important;
+}
+
+.panel {
+  position: absolute;
+  z-index: 1000;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  backdrop-filter: blur(3px);
+  min-width: 190px;
+}
+
+.panel-top-left {
+  top: 14px;
+  left: 14px;
+}
+
+.panel-top-right {
+  top: 14px;
+  right: 14px;
+}
+
+.panel-bottom-left {
+  bottom: 14px;
+  left: 14px;
+}
+
+.panel-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--panel-border);
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+}
+
+.panel-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.panel-row .label {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.panel-row .value {
+  color: var(--text-primary);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.layer-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.layer-toggle input[type="checkbox"] {
+  accent-color: var(--accent-ifr);
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+}
+
+.layer-disabled {
+  cursor: not-allowed;
+  color: var(--text-muted);
+}
+.layer-disabled input {
+  cursor: not-allowed;
+}
+
+.pending {
+  margin-left: auto;
+  font-size: 9px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  border: 1px solid var(--panel-border);
+  border-radius: 3px;
+  padding: 1px 4px;
+  text-transform: uppercase;
+}
+
+.swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+.swatch-ifr {
+  background: var(--accent-ifr);
+  opacity: 0.75;
+  border: 1px solid var(--accent-ifr);
+}
+.swatch-mtn {
+  background: var(--accent-mtn);
+  opacity: 0.75;
+  border: 1px solid var(--accent-mtn);
+}
+.swatch-states {
+  background: transparent;
+  border: 1.5px solid var(--accent-states);
+}
+.swatch-artcc {
+  background: transparent;
+  border: 1.5px dashed var(--accent-artcc);
+}
+
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.disclaimer {
+  position: absolute;
+  bottom: 14px;
+  right: 14px;
+  z-index: 1000;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--accent-ifr);
+  background: var(--panel-bg);
+  border: 1px solid var(--accent-ifr);
+  border-radius: 4px;
+  padding: 6px 10px;
+}
+
+/* Popup styling to match the console theme */
+.leaflet-popup-content-wrapper {
+  background: var(--panel-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+}
+.leaflet-popup-content {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.leaflet-popup-tip {
+  background: var(--panel-bg);
+}
+
+@media (max-width: 640px) {
+  .panel {
+    min-width: 150px;
+    font-size: 11px;
+    padding: 8px 10px;
+  }
+}
