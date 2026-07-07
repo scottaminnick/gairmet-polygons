@@ -1,0 +1,22 @@
+# --- Core polygon-generation logic (Track A) ---
+numpy
+shapely
+rasterio
+geojson
+
+# --- Web app (Railway) ---
+fastapi
+uvicorn[standard]
+
+# --- Dev / testing ---
+pytest
+matplotlib
+
+# --- Track B (real NBM fetching) will add here once we get to it:
+# herbie-data       # handles NBM's AWS/nomads paths + efficient byte-range fetching
+# xarray
+# cfgrib
+# pyproj            # for reprojecting NBM's native Lambert Conformal grid to lon/lat
+
+# --- Terrain/DEM handling (for Mountain Obscuration) will add here:
+# elevation         # or similar DEM-fetching package, TBD
