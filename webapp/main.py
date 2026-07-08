@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 BASE_DIR = Path(__file__).resolve().parent.parent
 BOUNDARIES_DIR = BASE_DIR / "data" / "boundaries"
 OUTPUT_DIR = BASE_DIR / "output"
-DEMO_GEOJSON = BASE_DIR / "data" / "simple" / "demo_ifr_polygons.geojson"
+DEMO_GEOJSON = BASE_DIR / "data" / "sample" / "demo_ifr_polygons.geojson"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 app = FastAPI(title="G-AIRMET Polygon Viewer")
