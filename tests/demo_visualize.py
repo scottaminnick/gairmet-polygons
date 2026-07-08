@@ -17,6 +17,10 @@ import numpy as np
 from matplotlib.patches import Polygon as MplPolygon
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# This script is meant to be run from the repo root (python3 tests/demo_visualize.py),
+# so these relative paths resolve there -- make sure the target dirs exist either way.
+Path("docs/images").mkdir(parents=True, exist_ok=True)
+Path("data/sample").mkdir(parents=True, exist_ok=True)
 
 from pipeline.polygons import GridSpec, grid_to_polygons, polygons_to_feature_collection
 from test_polygons import make_fake_ifr_probability_grid
@@ -52,14 +56,14 @@ axes[1].set_xlabel("longitude")
 axes[1].set_ylabel("latitude")
 
 plt.tight_layout()
-plt.savefig("tests/demo_output.png", dpi=130)
-print("Saved tests/demo_output.png")
+plt.savefig("doc/images/polygon_extraction_demo.png", dpi=130)
+print("Saved docs/images/polygon_extraction_demo.png")
 
 fc = polygons_to_feature_collection(
     polygons,
     properties={"hazard": "IFR", "threshold_pct": threshold, "valid_time": "2026-07-07T18:00:00Z"},
 )
-with open("tests/demo_output.geojson", "w") as f:
+with open("data/sample/demo_ifr_polygons.geojson", "w") as f:
     json.dump(fc, f, indent=2)
-print("Saved tests/demo_output.geojson")
+print("Saved data/sample/demo_ifr_polygons.geojson")
 print(f"\n{len(polygons)} polygon(s), total vertices: {sum(len(p.exterior.coords) for p in polygons)}")
