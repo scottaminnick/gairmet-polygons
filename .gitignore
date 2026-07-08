@@ -10,8 +10,6 @@ venv/
 # back to the repo (simple, but grows repo size over time) or pushes it
 # somewhere else (e.g. a tiny object store) instead.
 output/*.geojson
-tests/demo_output.png
-tests/demo_output.geojson
 
 # Large cached terrain/DEM files - regenerate locally, don't commit
 data/terrain/*.tif
