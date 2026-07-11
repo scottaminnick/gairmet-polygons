@@ -83,6 +83,16 @@ def regrid_to_regular_latlon(
             f"Shape mismatch: values{values.shape}, lats{native_lats.shape}, lons{native_lons.shape}"
         )
 
+    # NBM (like most NWP grib2 data) encodes longitude in 0-360 degrees
+    # East convention (e.g. 275 instead of -85), not the -180/180
+    # convention GeoJSON/web maps expect. Confirmed against real output:
+    # raw values like 275.11 and 234.34 only make sense as CONUS
+    # locations once converted (-84.89 near the Great Lakes, -125.66
+    # near the Pacific Northwest). Fixing this here, once, means every
+    # current and future hazard module gets it for free rather than
+    # each having to remember to do this themselves.
+    native_lons = np.where(native_lons > 180, native_lons - 360, native_lons)
+
     if target_bounds is None:
         margin = target_resolution_deg * 4
         west = float(native_lons.min()) + margin
