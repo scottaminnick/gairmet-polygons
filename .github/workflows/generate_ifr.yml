@@ -7,14 +7,22 @@ on:
   # a single near-term snapshot.
   schedule:
     - cron: "20 2,8,14,20 * * *"
-  # Manual trigger, with an optional threshold override so a forecaster
-  # can regenerate with a different cutoff without editing code.
+  # Manual trigger, with optional overrides so a forecaster can
+  # regenerate with different settings without editing code.
   workflow_dispatch:
     inputs:
       threshold_pct:
         description: "Probability threshold (%) for hazard polygons"
         required: false
         default: "50"
+      neighborhood_radius_nm:
+        description: "Neighborhood-max smoothing radius (nautical miles) -- pulls nearby smaller areas into larger ones"
+        required: false
+        default: "50"
+      min_area_sq_mi:
+        description: "Minimum polygon area (sq mi) -- matches AIRMET/G-AIRMET's historical 'widespread' criterion by default"
+        required: false
+        default: "3000"
 
 # Needed to commit the regenerated output/ifr_latest.geojson back to
 # the repo -- the default GITHUB_TOKEN is read-only unless granted this.
@@ -39,6 +47,8 @@ jobs:
       - name: Generate latest IFR polygons
         env:
           IFR_THRESHOLD_PCT: ${{ github.event.inputs.threshold_pct || '50' }}
+          IFR_NEIGHBORHOOD_RADIUS_NM: ${{ github.event.inputs.neighborhood_radius_nm || '50' }}
+          IFR_MIN_AREA_SQ_MI: ${{ github.event.inputs.min_area_sq_mi || '3000' }}
         run: python3 pipeline/generate_latest_ifr.py
 
       - name: Commit and push updated output
