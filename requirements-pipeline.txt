@@ -16,8 +16,8 @@ herbie-data     # handles NBM's AWS/nomads paths + efficient byte-range fetching
 pandas          # herbie's inventory() returns a pandas DataFrame
 xarray
 cfgrib
-pyproj          # for reprojecting NBM's native Lambert Conformal grid to lon/lat
-scipy           # pipeline/regrid.py uses scipy.interpolate.griddata
+pyproj          # regrid.py: reprojecting NBM's native grid; polygons.py: true geodesic area calculation
+scipy           # regrid.py: griddata interpolation; smoothing.py: neighborhood-max + Gaussian filters
 
 # --- Terrain/DEM handling (for Mountain Obscuration) will add here:
 # elevation         # or similar DEM-fetching package, TBD -- pending
