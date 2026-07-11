@@ -12,12 +12,13 @@ uvicorn[standard]
 # herbie-data etc. remain the right tool for the REAL pipeline (fetching
 # and parsing actual grib2 message data) -- pipeline/inspect_nbm.py just
 # doesn't need them, since it only reads the plain-text .idx index.
-requests        # used by pipeline/inspect_nbm.py to read NBM's .idx files directly
+requests        # used by pipeline/inspect_nbm.py and pipeline/fetch_nbm.py to read NBM's .idx files directly
 herbie-data     # handles NBM's AWS/nomads paths + efficient byte-range fetching
 pandas          # herbie's inventory() returns a pandas DataFrame
 xarray
 cfgrib
 pyproj          # for reprojecting NBM's native Lambert Conformal grid to lon/lat
+scipy           # pipeline/regrid.py uses scipy.interpolate.griddata
 
 # --- Terrain/DEM handling (for Mountain Obscuration) will add here:
 # elevation         # or similar DEM-fetching package, TBD -- pending
