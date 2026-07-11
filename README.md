@@ -20,9 +20,8 @@ Reference: NWS Instruction 10-811, *En Route Forecasts and Advisories*
       locally (all routes return 200).
 - [x] State boundary reference layer (`data/boundaries/us_states.json` —
       real Census-derived data, not placeholder)
-- [ ] ARTCC boundary reference layer — toggle exists in the UI but is
-      disabled; no data source wired up yet (see "Adding ARTCC boundaries"
-      below)
+- [x] ARTCC boundary reference layer (`data/boundaries/artcc.json` — real
+      20-facility CONUS ARTCC boundaries)
 - [ ] Real NBM fetching (Track B — needs a real internet connection to
       `noaa-nbm-grib2-pds` on AWS; not buildable/testable in a sandboxed dev
       environment without egress)
@@ -44,23 +43,13 @@ Then open http://localhost:8000 in a real browser (Leaflet needs actual
 browser JS + internet access to fetch basemap tiles -- this won't render
 in a terminal or a sandboxed dev environment without a display).
 
-## Adding ARTCC boundaries
+## ARTCC boundaries
 
-No public, directly-downloadable GeoJSON source was found during
-development (FAA publishes this via an ArcGIS Hub dataset, which requires
-either their web UI or an authenticated API call to export -- see
-https://hub.arcgis.com/datasets/6b6010f3a7614968a0efc3b2d4d65e26). To add
-it:
-
-1. Download the GeoJSON export from that FAA ArcGIS Hub page (or another
-   authoritative ARTCC boundary source).
-2. Save it as `data/boundaries/artcc.json`.
-3. Add a `/api/boundaries/artcc` route to `webapp/main.py` (copy the
-   pattern from `/api/boundaries/states`).
-4. In `webapp/static/map.js`, add an `artcc` entry to the `layers` object
-   and load it in `loadData()`.
-5. Remove the `disabled` attribute and `layer-disabled` class from the
-   ARTCC checkbox in `index.html`.
+`data/boundaries/artcc.json` — 20 domestic CONUS ARTCC polygons, each with
+a `name` property (e.g. `ZTL` for Atlanta Center). Sourced from the
+project owner's own `model-viewer` repo rather than FAA's ArcGIS Hub
+(which requires their web UI or an authenticated API export, neither
+reachable from a sandboxed dev environment during initial development).
 
 ## Deploying to Railway
 
