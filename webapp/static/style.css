@@ -210,6 +210,20 @@ html, body {
   background: var(--panel-bg);
 }
 
+.leaflet-tooltip {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 3px 7px;
+  box-shadow: none;
+}
+.leaflet-tooltip.artcc-tooltip {
+  border-color: var(--accent-artcc);
+  color: var(--accent-artcc);
+}
+
 @media (max-width: 640px) {
   .panel {
     min-width: 150px;
