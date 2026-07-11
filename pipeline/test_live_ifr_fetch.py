@@ -44,9 +44,12 @@ def _fetch_and_regrid(filters):
     """Calls the exact same fetch_probability_grid() that production
     code (pipeline.hazards.ifr.generate_ifr_polygons) uses, so this
     diagnostic is guaranteed to exercise the real code path rather than
-    a copy that could silently drift out of sync with it."""
+    a copy that could silently drift out of sync with it. Returns the
+    native (pre-regrid) arrays too, so callers needing both don't have
+    to fetch the same message twice."""
     values, lats, lons = fetch_probability_grid(RUN_DATE, FORECAST_HOUR, filters)
-    return regrid_to_regular_latlon(values, lats, lons)
+    regridded, grid_spec = regrid_to_regular_latlon(values, lats, lons)
+    return regridded, grid_spec, values, lats, lons
 
 
 def main():
@@ -54,9 +57,9 @@ def main():
 
     try:
         print("Fetching + regridding ceiling probability...")
-        ceil_regridded, grid_spec = _fetch_and_regrid(CEILING_PROB_FILTER)
+        ceil_regridded, grid_spec, ceil_native_values, ceil_native_lats, ceil_native_lons = _fetch_and_regrid(CEILING_PROB_FILTER)
         print("Fetching + regridding visibility probability...")
-        vis_regridded, _ = _fetch_and_regrid(VISIBILITY_PROB_FILTER)
+        vis_regridded, _, vis_native_values, vis_native_lats, vis_native_lons = _fetch_and_regrid(VISIBILITY_PROB_FILTER)
     except Exception:
         print("FAILED during fetch/regrid. Full traceback:\n")
         traceback.print_exc()
@@ -120,6 +123,50 @@ def main():
     plt.tight_layout()
     plt.savefig("test_ifr_live_diagnostic.png", dpi=130)
     print("Saved diagnostic plot to test_ifr_live_diagnostic.png")
+
+
+    # --- Diagnostic plots: ceiling and visibility SEPARATELY (before
+    # combining), plus the combined field -- if a domain-shape problem
+    # shows up in only one of the two, or only after combining, that
+    # tells us where to actually look for the bug. ---
+    def plot_field(ax, field, title):
+        lons_axis = grid_spec.west + np.arange(field.shape[1]) * grid_spec.dx
+        lats_axis = grid_spec.north + np.arange(field.shape[0]) * grid_spec.dy
+        extent = [lons_axis[0], lons_axis[-1], lats_axis[-1], lats_axis[0]]
+        im = ax.imshow(field, extent=extent, origin="upper", cmap="Blues", vmin=0, vmax=100)
+        ax.set_title(title)
+        ax.set_xlabel("longitude")
+        ax.set_ylabel("latitude")
+        return im
+
+    fig, axes = plt.subplots(1, 3, figsize=(22, 6))
+    plot_field(axes[0], ceil_regridded, "Ceiling probability (raw, incl. NaN as white gaps)")
+    plot_field(axes[1], vis_regridded, "Visibility probability (raw, incl. NaN as white gaps)")
+    im = plot_field(axes[2], combined, "Combined (nan_to_num + max)")
+    plt.colorbar(im, ax=axes[2], label="%", shrink=0.7)
+    plt.tight_layout()
+    plt.savefig("test_ifr_live_diagnostic_split.png", dpi=130)
+    print("Saved split diagnostic plot to test_ifr_live_diagnostic_split.png")
+
+    # Also plot the RAW native scattered points (before any regridding),
+    # colored by value -- this shows us the true shape of NBM's domain
+    # in lon/lat space, straight from cfgrib, with no interpolation
+    # involved at all. If the real native domain is a clean shape but
+    # the regridded one isn't, the bug is in regrid.py. If the native
+    # domain ITSELF already looks wrong, the bug is upstream of that
+    # (grid decoding, or a lat/lon vs. data misalignment).
+    # Reuses the ceiling data already fetched above -- no second fetch.
+    fig2, ax2 = plt.subplots(figsize=(10, 8))
+    sc = ax2.scatter(ceil_native_lons, ceil_native_lats, c=ceil_native_values, cmap="Blues", vmin=0, vmax=100, s=1)
+    ax2.set_title("RAW native ceiling-probability points (straight from cfgrib, no regridding)")
+    ax2.set_xlabel("longitude (as decoded, before any conversion)")
+    ax2.set_ylabel("latitude")
+    plt.colorbar(sc, ax=ax2, label="%")
+    plt.tight_layout()
+    plt.savefig("test_ifr_live_native_scatter.png", dpi=130)
+    print("Saved native (pre-regrid) scatter plot to test_ifr_live_native_scatter.png")
+    print(f"Native lon range as decoded: [{ceil_native_lons.min():.3f}, {ceil_native_lons.max():.3f}]")
+    print(f"Native lat range as decoded: [{ceil_native_lats.min():.3f}, {ceil_native_lats.max():.3f}]")
 
 
 if __name__ == "__main__":
