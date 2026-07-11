@@ -36,6 +36,8 @@ from pipeline.hazards.ifr import generate_ifr_polygons
 FORECAST_HOUR = 3  # near-term snapshot; see project notes on why not 0 (NBM doesn't provide fxx=0)
 MAX_CYCLES_TO_TRY = 12  # NBM runs hourly; try up to this many hours back before giving up
 THRESHOLD_PCT = float(os.environ.get("IFR_THRESHOLD_PCT", "50.0"))
+NEIGHBORHOOD_RADIUS_NM = float(os.environ.get("IFR_NEIGHBORHOOD_RADIUS_NM", "50.0"))
+MIN_AREA_SQ_MI = float(os.environ.get("IFR_MIN_AREA_SQ_MI", "3000.0"))
 
 OUTPUT_PATH = Path(__file__).resolve().parent.parent / "output" / "ifr_latest.geojson"
 
@@ -61,11 +63,20 @@ def find_latest_available_cycle(fxx: int) -> datetime:
 
 
 def main():
-    print(f"Generating latest IFR polygons (F{FORECAST_HOUR:03d}, threshold={THRESHOLD_PCT}%)\n")
+    print(
+        f"Generating latest IFR polygons (F{FORECAST_HOUR:03d}, threshold={THRESHOLD_PCT}%, "
+        f"neighborhood_radius={NEIGHBORHOOD_RADIUS_NM}nm, min_area={MIN_AREA_SQ_MI}sq mi)\n"
+    )
 
     try:
         cycle_date = find_latest_available_cycle(FORECAST_HOUR)
-        fc = generate_ifr_polygons(cycle_date, FORECAST_HOUR, threshold_pct=THRESHOLD_PCT)
+        fc = generate_ifr_polygons(
+            cycle_date,
+            FORECAST_HOUR,
+            threshold_pct=THRESHOLD_PCT,
+            neighborhood_radius_nm=NEIGHBORHOOD_RADIUS_NM,
+            min_area_sq_mi=MIN_AREA_SQ_MI,
+        )
     except Exception:
         print("FAILED. Full traceback:\n")
         traceback.print_exc()
