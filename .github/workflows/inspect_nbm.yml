@@ -1,0 +1,40 @@
+name: Inspect NBM Data
+
+# Manual trigger only (via the "Run workflow" button on the Actions tab).
+# This is a one-off discovery task, not something that needs to run on a
+# schedule -- once we know the real field names, this workflow can be
+# deleted or repurposed into the real scheduled pipeline.
+on:
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Deliberately installing just what this script needs, rather than
+      # the full requirements.txt (which also has rasterio/fastapi/etc
+      # that this script doesn't touch) -- keeps this run fast.
+      - name: Install dependencies
+        run: pip install herbie-data pandas
+
+      - name: Run inspection script
+        run: python3 pipeline/inspect_nbm.py
+
+      # The script's print() output above will show directly in this
+      # step's log in the Actions UI -- no extra config needed for that.
+      # This just also grabs the CSV it saves, so it's downloadable.
+      - name: Upload full inventory CSV
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nbm-inventory
+          path: nbm_full_inventory.csv
+          if-no-files-found: warn
