@@ -41,7 +41,7 @@ CEILING_PROB_FILTER = {"variable": "CEIL", "level": "cloud ceiling", "extra": "p
 VISIBILITY_PROB_FILTER = {"variable": "VIS", "level": "surface", "extra": "prob <4828.03"}
 
 
-def _fetch_probability_grid(date: datetime, fxx: int, filters: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def fetch_probability_grid(date: datetime, fxx: int, filters: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Fetches one probability field's message from NBM and returns
     (values, native_lats, native_lons) as decoded by cfgrib/eccodes
@@ -94,8 +94,8 @@ def generate_ifr_polygons(
     -------
     dict (GeoJSON FeatureCollection)
     """
-    ceil_values, ceil_lats, ceil_lons = _fetch_probability_grid(date, fxx, CEILING_PROB_FILTER)
-    vis_values, vis_lats, vis_lons = _fetch_probability_grid(date, fxx, VISIBILITY_PROB_FILTER)
+    ceil_values, ceil_lats, ceil_lons = fetch_probability_grid(date, fxx, CEILING_PROB_FILTER)
+    vis_values, vis_lats, vis_lons = fetch_probability_grid(date, fxx, VISIBILITY_PROB_FILTER)
 
     ceil_regridded, grid_spec = regrid_to_regular_latlon(
         ceil_values, ceil_lats, ceil_lons, target_resolution_deg=target_resolution_deg
