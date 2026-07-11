@@ -46,8 +46,58 @@ import geojson
 import numpy as np
 import rasterio.features
 from affine import Affine
+from pyproj import Geod
 from shapely.geometry import shape as shapely_shape
 from shapely.geometry import mapping as shapely_mapping
+
+# WGS84 geodesic calculator -- gives TRUE area on the Earth's surface,
+# correctly accounting for the fact that a degree of longitude covers
+# less real distance at higher latitudes. Used for accurate "square
+# miles" filtering (e.g. matching AIRMET/G-AIRMET's real 3,000 sq mi
+# "widespread" criterion), instead of the older, cruder degrees-squared
+# proxy (which is still available for callers that don't need real-world
+# precision, e.g. small synthetic test grids).
+_GEOD = Geod(ellps="WGS84")
+SQ_METERS_PER_SQ_MILE = 2_589_988.11
+
+
+def geodesic_area_sq_mi(polygon) -> float:
+    """
+    True area of a shapely polygon on the Earth's surface, in square
+    miles, using proper geodesic calculation (not a flat-projection
+    approximation). Works directly on lon/lat coordinates.
+    """
+    area_sq_m, _perimeter = _GEOD.geometry_area_perimeter(polygon)
+    return abs(area_sq_m) / SQ_METERS_PER_SQ_MILE
+
+
+def smooth_polygon_boundary(polygon, smoothing_deg: float):
+    """
+    Rounds off jagged, raster-derived polygon edges into something
+    closer to a hand-drawn shape, using the standard "buffer out, buffer
+    in, buffer in, buffer out" morphological closing+opening trick with
+    round joins:
+
+      - Closing (buffer out then in) fills small concave notches.
+      - Opening (buffer in then out) trims small convex spikes.
+
+    Together they knock off small-scale jaggedness while preserving the
+    polygon's overall shape and size reasonably well. smoothing_deg is
+    in degrees (matching simplify_tolerance_deg's units elsewhere in
+    this module) -- 0 or negative disables this and returns the polygon
+    unchanged.
+    """
+    if smoothing_deg <= 0 or polygon.is_empty:
+        return polygon
+
+    closed = polygon.buffer(smoothing_deg, join_style=1).buffer(-smoothing_deg, join_style=1)
+    opened = closed.buffer(-smoothing_deg, join_style=1).buffer(smoothing_deg, join_style=1)
+
+    if opened.is_empty:
+        # Over-aggressive smoothing erased a small polygon entirely --
+        # better to keep the original than to silently drop it.
+        return polygon
+    return opened
 
 
 @dataclass
@@ -87,7 +137,9 @@ def grid_to_polygons(
     grid: GridSpec,
     threshold: float,
     min_area_deg2: float = 0.01,
+    min_area_sq_mi: float | None = None,
     simplify_tolerance_deg: float = 0.02,
+    boundary_smoothing_deg: float = 0.0,
 ) -> list:
     """
     Convert a 2D grid into a list of shapely polygons/multipolygons
@@ -103,14 +155,22 @@ def grid_to_polygons(
         Cells with value >= threshold are considered "inside" the hazard.
     min_area_deg2 : float
         Polygons smaller than this (in square degrees) are dropped as
-        noise/speckle. This is a crude filter -- 1 degree of longitude
-        is a different real distance depending on latitude -- but it's
-        good enough to strip out single-pixel artifacts. We can swap in
-        a proper equal-area projection for this filter later if we find
-        we need more precision.
+        noise/speckle. Crude -- a degree of longitude is a different
+        real distance depending on latitude. Used only when
+        min_area_sq_mi is NOT provided (kept around for small synthetic
+        test grids where real-world precision doesn't matter).
+    min_area_sq_mi : float, optional
+        If provided, filters using TRUE geodesic area in square miles
+        instead of the crude degrees^2 proxy above -- use this for real
+        data. E.g. AIRMET/G-AIRMET's historical "widespread" criterion
+        is 3,000 sq mi.
     simplify_tolerance_deg : float
         Shapely `simplify()` tolerance, in degrees. Keeps vertex counts
         (and therefore GeoJSON file size) sane for a 2.5km CONUS grid.
+    boundary_smoothing_deg : float
+        If > 0, rounds off jagged raster-derived edges into a more
+        hand-drawn-looking shape (see smooth_polygon_boundary()). 0
+        (default) disables this.
 
     Returns
     -------
@@ -133,8 +193,15 @@ def grid_to_polygons(
         if value != 1:
             continue
         poly = shapely_shape(geom)
-        if poly.area < min_area_deg2:
+
+        if min_area_sq_mi is not None:
+            if geodesic_area_sq_mi(poly) < min_area_sq_mi:
+                continue
+        elif poly.area < min_area_deg2:
             continue
+
+        if boundary_smoothing_deg > 0:
+            poly = smooth_polygon_boundary(poly, boundary_smoothing_deg)
         if simplify_tolerance_deg > 0:
             poly = poly.simplify(simplify_tolerance_deg, preserve_topology=True)
         if not poly.is_empty:
