@@ -8,6 +8,18 @@ geojson
 fastapi
 uvicorn[standard]
 
+# --- Track B: real NBM fetching ---
+herbie-data     # handles NBM's AWS/nomads paths + efficient byte-range fetching
+pandas          # herbie's inventory() returns a pandas DataFrame
+xarray
+cfgrib
+pyproj          # for reprojecting NBM's native Lambert Conformal grid to lon/lat
+
+# --- Terrain/DEM handling (for Mountain Obscuration) will add here:
+# elevation         # or similar DEM-fetching package, TBD -- pending
+#                     inspect_nbm.py results (NBM may have its own
+#                     terrain field we can reuse instead)
+
 # --- Dev / testing ---
 pytest
 matplotlib
