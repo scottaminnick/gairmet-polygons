@@ -128,6 +128,8 @@ async function loadData() {
     if (firstProps) {
       document.getElementById('valid-time').textContent = formatValidTime(firstProps.valid_time);
       document.getElementById('legend-threshold').textContent = firstProps.threshold_pct ?? '?';
+      document.getElementById('legend-radius').textContent = firstProps.neighborhood_radius_nm ?? '--';
+      document.getElementById('legend-min-area').textContent = firstProps.min_area_sq_mi ?? '--';
     }
 
     // Zoom to fit the hazard polygons so first-time viewers immediately
