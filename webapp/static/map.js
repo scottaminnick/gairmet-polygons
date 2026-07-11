@@ -117,7 +117,7 @@ async function loadData() {
   }
 
   try {
-    const ifrResp = await fetch('/api/hazards/demo');
+    const ifrResp = await fetch('/api/hazards/ifr');
     const ifrGeoJSON = await ifrResp.json();
     layers.ifr.addData(ifrGeoJSON);
 
