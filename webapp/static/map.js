@@ -47,6 +47,19 @@ const layers = {
       if (name) layer.bindTooltip(name, { sticky: true });
     },
   }),
+
+  artcc: L.geoJSON(null, {
+    style: {
+      color: '#2dd4bf',
+      weight: 1.5,
+      fill: false,
+      dashArray: '6 4',
+    },
+    onEachFeature: (feature, layer) => {
+      const name = feature.properties && feature.properties.name;
+      if (name) layer.bindTooltip(name, { sticky: true, className: 'artcc-tooltip' });
+    },
+  }),
 };
 
 layers.states.addTo(map);
@@ -63,8 +76,13 @@ document.getElementById('toggle-states').addEventListener('change', (e) => {
   else map.removeLayer(layers.states);
 });
 
-// toggle-mtn and toggle-artcc are intentionally disabled in the HTML
-// until those data sources exist -- see project README.
+document.getElementById('toggle-artcc').addEventListener('change', (e) => {
+  if (e.target.checked) map.addLayer(layers.artcc);
+  else map.removeLayer(layers.artcc);
+});
+
+// toggle-mtn is intentionally disabled in the HTML until Mountain
+// Obscuration is implemented -- see project README.
 
 // --- Formats an ISO timestamp as a DDHHMMZ group, matching the date/time
 //     group convention used in real SIGMET/AIRMET bulletins (e.g. "071800Z"
@@ -88,6 +106,14 @@ async function loadData() {
     layers.states.addData(statesGeoJSON);
   } catch (err) {
     console.error('Failed to load state boundaries:', err);
+  }
+
+  try {
+    const artccResp = await fetch('/api/boundaries/artcc');
+    const artccGeoJSON = await artccResp.json();
+    layers.artcc.addData(artccGeoJSON);
+  } catch (err) {
+    console.error('Failed to load ARTCC boundaries:', err);
   }
 
   try {
