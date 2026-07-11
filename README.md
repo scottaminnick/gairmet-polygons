@@ -32,6 +32,16 @@ Currently working:
       validated against live NBM data: ceiling<1000ft and visibility<3SM
       probability fields identified from an actual NBM inventory, combined
       via max(), forecaster-adjustable threshold (default 50%)
+- [x] **Forecaster-drawn-look post-processing** — raw NBM resolution
+      (~2.5km) produces far more detail than a real G-AIRMET forecaster
+      draws by hand, so three steps close that gap: neighborhood-maximum
+      smoothing (`pipeline/smoothing.py`, forecaster-adjustable radius,
+      default 50nm) pulls nearby smaller areas into larger ones; Gaussian
+      smoothing rounds off small-scale grid noise before contouring; true
+      geodesic area filtering (`pipeline/polygons.py`, forecaster-
+      adjustable, default matches AIRMET/G-AIRMET's historical 3,000 sq mi
+      "widespread" criterion) plus boundary buffer-smoothing rounds off
+      remaining jagged edges
 - [x] **Production driver** (`pipeline/generate_latest_ifr.py`) — finds the
       most recently available NBM cycle and generates real polygons
 - [x] **Scheduled generation** (`.github/workflows/generate_ifr.yml`) —
@@ -63,6 +73,17 @@ python3 pipeline/generate_latest_ifr.py
 Writes `output/ifr_latest.geojson`. Requires real internet access to
 NOAA's servers (won't work from a sandboxed dev environment without
 egress).
+
+## Forecaster-adjustable parameters
+
+All three can be overridden per-run via the "Run workflow" button on the
+Actions tab (`generate_ifr.yml`), without editing any code:
+
+| Parameter | Default | What it controls |
+|---|---|---|
+| `threshold_pct` | 50% | Probability above which a grid cell counts as hazard |
+| `neighborhood_radius_nm` | 50 nm | Real-world radius used to pull nearby smaller hazard areas into larger ones |
+| `min_area_sq_mi` | 3,000 sq mi | Minimum true geodesic polygon area (matches AIRMET/G-AIRMET's historical "widespread" criterion) |
 
 ## ARTCC boundaries
 
