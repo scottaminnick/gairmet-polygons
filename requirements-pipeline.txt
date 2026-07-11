@@ -1,0 +1,29 @@
+# Data pipeline dependencies -- installed by GitHub Actions workflows
+# that run pipeline/*.py scripts (fetching NBM data, generating
+# polygons). NOT installed by Railway -- the deployed web app never
+# needs any of this, it just serves whatever GeoJSON the pipeline
+# already wrote to output/.
+
+# --- Core polygon-generation logic (Track A) ---
+numpy
+shapely
+rasterio
+geojson
+
+# --- Track B: real NBM fetching ---
+requests        # used by pipeline/inspect_nbm.py and pipeline/fetch_nbm.py to read NBM's .idx files directly
+herbie-data     # handles NBM's AWS/nomads paths + efficient byte-range fetching
+pandas          # herbie's inventory() returns a pandas DataFrame
+xarray
+cfgrib
+pyproj          # for reprojecting NBM's native Lambert Conformal grid to lon/lat
+scipy           # pipeline/regrid.py uses scipy.interpolate.griddata
+
+# --- Terrain/DEM handling (for Mountain Obscuration) will add here:
+# elevation         # or similar DEM-fetching package, TBD -- pending
+#                     inspect_nbm.py results (NBM may have its own
+#                     terrain field we can reuse instead)
+
+# --- Dev / testing ---
+pytest
+matplotlib
