@@ -8,12 +8,13 @@ polygons, and does NOT know anything about grib2. Its only job is:
     2. Serve whatever GeoJSON files currently exist in data/ and output/
        as small JSON API endpoints
 
-The actual polygon generation happens in pipeline/ (Track A: proven
-working; Track B: real NBM fetch, to be run on a machine with real
-internet access -- see project README) and, eventually, on a schedule
-via GitHub Actions that writes fresh files into output/. This file
-never needs to change when that pipeline logic changes -- it just reads
-whatever's on disk at request time.
+The actual polygon generation happens in pipeline/ and runs on a
+schedule via GitHub Actions (.github/workflows/generate_ifr.yml), which
+commits fresh output/ifr_latest.geojson back to the repo -- this file
+never needs to change when that pipeline logic changes, it just reads
+whatever's on disk at request time. Deliberately NOT in requirements.txt:
+the pipeline's heavy GRIB2/geospatial dependencies (see
+requirements-pipeline.txt) -- this app never touches NBM data directly.
 """
 
 from pathlib import Path
@@ -47,14 +48,32 @@ def get_artcc_boundaries():
     return FileResponse(path, media_type="application/geo+json")
 
 
+@app.get("/api/hazards/ifr")
+def get_ifr_hazard():
+    """
+    Real IFR hazard polygons, regenerated on a schedule by
+    .github/workflows/generate_ifr.yml (see pipeline/generate_latest_ifr.py).
+
+    Falls back to the demo GeoJSON if the pipeline hasn't produced
+    output yet (e.g. right after first deploy, before the scheduled
+    workflow has run once) -- so the map always shows SOMETHING rather
+    than a blank error, while still preferring real data whenever it
+    exists.
+    """
+    live_path = OUTPUT_DIR / "ifr_latest.geojson"
+    if live_path.exists():
+        return FileResponse(live_path, media_type="application/geo+json")
+    if DEMO_GEOJSON.exists():
+        return FileResponse(DEMO_GEOJSON, media_type="application/geo+json")
+    raise HTTPException(
+        status_code=404,
+        detail="No IFR data available yet (pipeline hasn't run, and no demo fallback found)",
+    )
+
+
 @app.get("/api/hazards/demo")
 def get_demo_hazard():
-    """
-    Placeholder endpoint. Once Track B (real NBM fetch) and the GitHub
-    Actions scheduled job exist, this will be replaced by something like
-    GET /api/hazards/{hazard_type}/{valid_time} reading from output/,
-    with this demo file kept around purely as a fallback/example.
-    """
+    """Kept as a stable reference/example endpoint -- always the original synthetic demo data, never real output."""
     if not DEMO_GEOJSON.exists():
         raise HTTPException(
             status_code=404,
