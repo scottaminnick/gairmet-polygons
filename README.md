@@ -10,27 +10,39 @@ Reference: NWS Instruction 10-811, *En Route Forecasts and Advisories*
 
 ## Status
 
-🚧 Early scaffolding. Currently working:
+Currently working:
 
 - [x] `pipeline/polygons.py` — hazard-agnostic grid → polygon → GeoJSON core
-- [x] `tests/test_polygons.py` — unit tests using synthetic data
 - [x] Web app (`webapp/`) — FastAPI backend + Leaflet frontend, dark
-      aviation-console theme, layer toggles. Currently shows placeholder/demo
-      IFR polygons + real US state boundaries. Fully tested end-to-end
-      locally (all routes return 200).
+      aviation-console theme, layer toggles
 - [x] State boundary reference layer (`data/boundaries/us_states.json` —
-      real Census-derived data, not placeholder)
+      real Census-derived data)
 - [x] ARTCC boundary reference layer (`data/boundaries/artcc.json` — real
       20-facility CONUS ARTCC boundaries)
-- [ ] Real NBM fetching (Track B — needs a real internet connection to
-      `noaa-nbm-grib2-pds` on AWS; not buildable/testable in a sandboxed dev
-      environment without egress)
+- [x] Real NBM fetching (`pipeline/fetch_nbm.py`) — byte-range `.idx`-based
+      fetch, deliberately not using `herbie-data` for the actual fetch (see
+      that file's docstring for the internal timezone bug we hit and
+      couldn't resolve)
+- [x] Reprojection (`pipeline/regrid.py`) — NBM's native curvilinear grid
+      resampled onto a regular lon/lat grid; also fixes NBM's 0-360
+      longitude convention to the -180/180 convention GeoJSON expects
+      (found and fixed after seeing real output shifted 360° — see git
+      history if curious)
+- [x] **IFR hazard definition** (`pipeline/hazards/ifr.py`) — real,
+      validated against live NBM data: ceiling<1000ft and visibility<3SM
+      probability fields identified from an actual NBM inventory, combined
+      via max(), forecaster-adjustable threshold (default 50%)
+- [x] **Production driver** (`pipeline/generate_latest_ifr.py`) — finds the
+      most recently available NBM cycle and generates real polygons
+- [x] **Scheduled generation** (`.github/workflows/generate_ifr.yml`) —
+      runs every 6 hours, commits `output/ifr_latest.geojson` back to the
+      repo, which triggers Railway to redeploy with fresh data
+- [x] Web app serves real data at `/api/hazards/ifr`, with graceful
+      fallback to demo data if the pipeline hasn't produced output yet
 - [ ] Terrain/DEM sourcing for Mountain Obscuration
-- [ ] IFR hazard definition (`pipeline/hazards/ifr.py`) — wire the real
-      probability-based polygons into `/api/hazards/...` in place of the
-      current demo file
 - [ ] Mountain Obscuration hazard definition (`pipeline/hazards/mtn_obsc.py`)
-- [ ] GitHub Actions scheduled job to regenerate polygons on NBM's cycle
+- [ ] Full 0/3/6/9/12-hour G-AIRMET-style forecast set (currently single
+      near-term snapshot, F003, only)
 
 ## Running the web app locally
 
@@ -39,9 +51,18 @@ pip install -r requirements.txt
 uvicorn webapp.main:app --reload --port 8000
 ```
 
-Then open http://localhost:8000 in a real browser (Leaflet needs actual
-browser JS + internet access to fetch basemap tiles -- this won't render
-in a terminal or a sandboxed dev environment without a display).
+Then open http://localhost:8000 in a real browser.
+
+## Running the data pipeline locally
+
+```bash
+pip install -r requirements-pipeline.txt
+python3 pipeline/generate_latest_ifr.py
+```
+
+Writes `output/ifr_latest.geojson`. Requires real internet access to
+NOAA's servers (won't work from a sandboxed dev environment without
+egress).
 
 ## ARTCC boundaries
 
@@ -53,10 +74,22 @@ reachable from a sandboxed dev environment during initial development).
 
 ## Deploying to Railway
 
-Not done yet -- deliberately. The app works locally, but deploying now
-would just put an app showing demo data online. Once real NBM-derived
-polygons are flowing (Track B), point a new Railway project at this
-GitHub repo; it will auto-detect the `Procfile`.
+Point a Railway project at this GitHub repo; it auto-detects the
+`Procfile` and `requirements.txt` (the lightweight web-app-only one —
+Railway never installs the heavy pipeline dependencies, see
+`requirements-pipeline.txt` vs `requirements.txt` below). The scheduled
+GitHub Action commits fresh `output/ifr_latest.geojson` every 6 hours,
+which triggers Railway to redeploy with updated data automatically.
+
+## Why there are two requirements files
+
+- `requirements.txt` — just `fastapi` + `uvicorn`. What Railway installs
+  to run the web app. The web app never touches NBM data directly, it
+  only reads whatever GeoJSON is already on disk.
+- `requirements-pipeline.txt` — the heavy stuff (`cfgrib`, `eccodes`,
+  `xarray`, `pyproj`, `scipy`, etc.) needed to actually fetch and process
+  NBM grib2 data. Only installed by GitHub Actions workflows, never by
+  Railway.
 
 ## Why the code is split this way
 
@@ -68,18 +101,20 @@ polygons. That means:
   needed.
 - Adding a new hazard later is just "write a new grid + call this module."
 - The one-time reprojection/regridding of NBM's native Lambert Conformal
-  Conic grid onto a plain lon/lat grid lives elsewhere (`pipeline/regrid.py`,
-  not yet written), keeping this module simple.
+  Conic grid onto a plain lon/lat grid lives elsewhere (`pipeline/regrid.py`),
+  keeping this module simple.
 
 ## Development
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-pipeline.txt
 python3 -m pytest tests/ -v
-python3 tests/demo_visualize.py   # produces tests/demo_output.png + .geojson
+python3 tests/demo_visualize.py   # produces docs/images/polygon_extraction_demo.png + data/sample/demo_ifr_polygons.geojson
 ```
 
-## Getting this onto GitHub (from scratch)
+## Getting this onto GitHub (historical -- already done for this repo)
+
+For reference, if you're ever starting a similar project from scratch:
 
 1. Create a new **empty** repo on github.com (no README/gitignore — we
    already have our own), e.g. `gairmet-polygons`.
@@ -93,6 +128,3 @@ python3 tests/demo_visualize.py   # produces tests/demo_output.png + .geojson
    git remote add origin https://github.com/<your-username>/gairmet-polygons.git
    git push -u origin main
    ```
-
-Railway deployment comes later, once `webapp/` actually has something worth
-deploying — no point pointing Railway at an empty app yet.
