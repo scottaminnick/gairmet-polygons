@@ -1,30 +1,9 @@
-# --- Core polygon-generation logic (Track A) ---
-numpy
-shapely
-rasterio
-geojson
-
-# --- Web app (Railway) ---
+# Web app dependencies ONLY -- this is what Railway auto-detects and
+# installs to run webapp/main.py. Deliberately does NOT include the
+# pipeline's heavy GRIB2/geospatial stack (cfgrib, eccodes, xarray,
+# pyproj, etc.) -- the web app only ever reads already-generated
+# GeoJSON files from disk; it never touches NBM data directly. See
+# requirements-pipeline.txt for everything the data-generation side
+# needs (installed separately, only in GitHub Actions).
 fastapi
 uvicorn[standard]
-
-# --- Track B: real NBM fetching ---
-# herbie-data etc. remain the right tool for the REAL pipeline (fetching
-# and parsing actual grib2 message data) -- pipeline/inspect_nbm.py just
-# doesn't need them, since it only reads the plain-text .idx index.
-requests        # used by pipeline/inspect_nbm.py and pipeline/fetch_nbm.py to read NBM's .idx files directly
-herbie-data     # handles NBM's AWS/nomads paths + efficient byte-range fetching
-pandas          # herbie's inventory() returns a pandas DataFrame
-xarray
-cfgrib
-pyproj          # for reprojecting NBM's native Lambert Conformal grid to lon/lat
-scipy           # pipeline/regrid.py uses scipy.interpolate.griddata
-
-# --- Terrain/DEM handling (for Mountain Obscuration) will add here:
-# elevation         # or similar DEM-fetching package, TBD -- pending
-#                     inspect_nbm.py results (NBM may have its own
-#                     terrain field we can reuse instead)
-
-# --- Dev / testing ---
-pytest
-matplotlib
