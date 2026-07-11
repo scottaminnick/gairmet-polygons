@@ -39,6 +39,14 @@ def get_state_boundaries():
     return FileResponse(path, media_type="application/geo+json")
 
 
+@app.get("/api/boundaries/artcc")
+def get_artcc_boundaries():
+    path = BOUNDARIES_DIR / "artcc.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="artcc.json not found in data/boundaries/")
+    return FileResponse(path, media_type="application/geo+json")
+
+
 @app.get("/api/hazards/demo")
 def get_demo_hazard():
     """
