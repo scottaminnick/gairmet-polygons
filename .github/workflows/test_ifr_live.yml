@@ -17,11 +17,12 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Full requirements.txt this time -- unlike inspect_nbm.py, this
+      # Full pipeline requirements -- unlike inspect_nbm.py, this
       # actually needs cfgrib/eccodes/xarray/pyproj/scipy to parse real
-      # GRIB2 messages and reproject them.
+      # GRIB2 messages and reproject them. (requirements.txt itself is
+      # now just the lightweight web-app deps Railway needs.)
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-pipeline.txt
 
       - name: Run live IFR pipeline test
         run: python3 pipeline/test_live_ifr_fetch.py
