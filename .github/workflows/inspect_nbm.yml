@@ -19,22 +19,21 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Deliberately installing just what this script needs, rather than
-      # the full requirements.txt (which also has rasterio/fastapi/etc
-      # that this script doesn't touch) -- keeps this run fast.
+      # Just `requests` now -- this script reads NBM's .idx text file
+      # directly rather than going through herbie-data/cfgrib/eccodes,
+      # which aren't needed just to inspect an index.
       - name: Install dependencies
-        run: pip install herbie-data pandas
+        run: pip install requests
 
       - name: Run inspection script
         run: python3 pipeline/inspect_nbm.py
 
-      # The script's print() output above will show directly in this
-      # step's log in the Actions UI -- no extra config needed for that.
-      # This just also grabs the CSV it saves, so it's downloadable.
-      - name: Upload full inventory CSV
+      - name: Upload inventory files
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: nbm-inventory
-          path: nbm_full_inventory.csv
+          path: |
+            nbm_full_inventory.csv
+            nbm_idx_raw.txt
           if-no-files-found: warn
