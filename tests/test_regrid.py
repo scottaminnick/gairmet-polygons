@@ -92,5 +92,41 @@ def test_regrid_preserves_location_and_range():
     print("\n[OK] Regridding preserved both the blob's location and its value range.")
 
 
+def test_regrid_converts_0_360_longitude_convention():
+    """
+    Regression test for a real bug found in production output: NBM (like
+    most NWP grib2 data) encodes longitude in 0-360 convention (e.g. 275
+    instead of -85). Feeding that straight through produced polygons
+    shifted 360 degrees away from their real location. This confirms the
+    conversion happens, and that normal -180/180 input passes through
+    unaffected (i.e. this fix doesn't break the common case).
+    """
+    values, native_lats, native_lons, (target_lon, target_lat) = make_synthetic_lcc_grid()
+
+    # Simulate what cfgrib actually handed us in production: same real
+    # locations, but in 0-360 convention.
+    native_lons_0_360 = np.where(native_lons < 0, native_lons + 360, native_lons)
+    assert native_lons_0_360.min() > 180, "test setup should produce 0-360-style values"
+
+    regridded, grid_spec = regrid_to_regular_latlon(
+        values, native_lats, native_lons_0_360, target_resolution_deg=0.02
+    )
+
+    peak_row, peak_col = np.unravel_index(np.nanargmax(regridded), regridded.shape)
+    peak_lon = grid_spec.west + peak_col * grid_spec.dx
+    peak_lat = grid_spec.north + peak_row * grid_spec.dy
+
+    print(f"0-360 input converted; peak found at lon={peak_lon:.3f}, lat={peak_lat:.3f} "
+          f"(expected near {target_lon}, {target_lat})")
+
+    assert -180 <= grid_spec.west <= 180, f"grid_spec.west={grid_spec.west} wasn't converted to -180/180"
+    assert abs(peak_lon - target_lon) < 0.05, "0-360 input wasn't correctly converted to real location"
+    assert abs(peak_lat - target_lat) < 0.05
+
+    print("[OK] 0-360 longitude convention correctly converted to real -180/180 location.")
+
+
 if __name__ == "__main__":
     test_regrid_preserves_location_and_range()
+    test_regrid_converts_0_360_longitude_convention()
+    print("\nAll manual checks passed.")
