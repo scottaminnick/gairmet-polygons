@@ -36,7 +36,7 @@ from herbie import Herbie
 # NBM CONUS cycles run every hour; we don't need the very latest one,
 # just one guaranteed to exist. 2 days back, 12Z cycle, forecast hour 6
 # roughly matches one of the real G-AIRMET valid times (0/3/6/9/12h).
-RUN_DATE = (datetime.now(timezone.utc) - timedelta(days=2)).replace(
+RUN_DATE = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=2)).replace(
     hour=12, minute=0, second=0, microsecond=0
 )
 FORECAST_HOUR = 6
