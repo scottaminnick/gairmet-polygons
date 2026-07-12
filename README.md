@@ -34,14 +34,20 @@ Currently working:
       via max(), forecaster-adjustable threshold (default 50%)
 - [x] **Forecaster-drawn-look post-processing** — raw NBM resolution
       (~2.5km) produces far more detail than a real G-AIRMET forecaster
-      draws by hand, so three steps close that gap: neighborhood-maximum
-      smoothing (`pipeline/smoothing.py`, forecaster-adjustable radius,
-      default 50nm) pulls nearby smaller areas into larger ones; Gaussian
-      smoothing rounds off small-scale grid noise before contouring; true
-      geodesic area filtering (`pipeline/polygons.py`, forecaster-
-      adjustable, default matches AIRMET/G-AIRMET's historical 3,000 sq mi
-      "widespread" criterion) plus boundary buffer-smoothing rounds off
-      remaining jagged edges
+      draws by hand: lots of tiny separate polygons and jagged edges, not
+      the straight-segment, sharp-vertex look of an actual forecaster-drawn
+      product. Contour close to native resolution first (preserves real
+      sharp features, e.g. a West Coast marine layer's coastal cutoff),
+      then merge nearby polygons (`pipeline/polygons.py`, forecaster-
+      adjustable radius, default 50nm) — a polygon-level union, not a
+      grid-level blur; an earlier grid-blur version inflated isolated
+      hazard areas into literal circles (caught by comparing real output
+      against an actual G-AIRMET graphic), which polygon-level merging
+      avoids since an isolated shape with nothing nearby comes back out
+      close to its original form. True geodesic area filtering (default
+      matches AIRMET/G-AIRMET's historical 3,000 sq mi "widespread"
+      criterion, applied after merging) plus mitre-jointed boundary
+      smoothing and a generous simplify pass — sharp corners, not rounded
 - [x] **Production driver** (`pipeline/generate_latest_ifr.py`) — finds the
       most recently available NBM cycle and generates real polygons
 - [x] **Scheduled generation** (`.github/workflows/generate_ifr.yml`) —
