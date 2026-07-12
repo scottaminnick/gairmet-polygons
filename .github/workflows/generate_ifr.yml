@@ -24,7 +24,7 @@ on:
         required: false
         default: "3000"
 
-# Needed to commit the regenerated output/ifr_latest.geojson back to
+# Needed to commit the regenerated forecast-hour snapshots back to
 # the repo -- the default GITHUB_TOKEN is read-only unless granted this.
 permissions:
   contents: write
@@ -55,7 +55,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add output/ifr_latest.geojson
+          git add output/
           git diff --staged --quiet && echo "No changes to commit" && exit 0
           git commit -m "Auto-update IFR polygons [skip ci]"
           git push
