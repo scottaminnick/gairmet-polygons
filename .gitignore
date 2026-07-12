@@ -5,14 +5,19 @@ __pycache__/
 venv/
 
 # Generated outputs - ignored by default so ad-hoc local/test runs
-# don't clutter the repo, EXCEPT ifr_latest.geojson, which
-# generate_ifr.yml deliberately commits and overwrites on schedule --
-# that's the file the web app actually serves. Without the negation
-# line below, 'git add' would silently refuse to stage it (matches
-# .gitignore), the workflow's commit step would never have anything
-# staged, and the site would never update.
+# don't clutter the repo, EXCEPT the files generate_ifr.yml deliberately
+# commits and overwrites on schedule -- those are what the web app
+# actually serves. Without these negation lines, 'git add' would
+# silently refuse to stage them (matches .gitignore), the workflow's
+# commit step would never have anything staged, and the site would
+# never update. (ifr_manifest.json isn't a .geojson file, so it isn't
+# caught by the pattern below at all -- no exception needed for it.)
 output/*.geojson
-!output/ifr_latest.geojson
+!output/ifr_f00.geojson
+!output/ifr_f03.geojson
+!output/ifr_f06.geojson
+!output/ifr_f09.geojson
+!output/ifr_f12.geojson
 
 # Large cached terrain/DEM files - regenerate locally, don't commit
 data/terrain/*.tif
