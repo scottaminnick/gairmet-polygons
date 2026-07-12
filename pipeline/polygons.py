@@ -46,9 +46,11 @@ import geojson
 import numpy as np
 import rasterio.features
 from affine import Affine
-from pyproj import Geod
+from pyproj import CRS, Geod, Transformer
 from shapely.geometry import shape as shapely_shape
 from shapely.geometry import mapping as shapely_mapping
+from shapely.ops import transform as shapely_transform
+from shapely.ops import unary_union
 
 # WGS84 geodesic calculator -- gives TRUE area on the Earth's surface,
 # correctly accounting for the fact that a degree of longitude covers
@@ -59,6 +61,7 @@ from shapely.geometry import mapping as shapely_mapping
 # precision, e.g. small synthetic test grids).
 _GEOD = Geod(ellps="WGS84")
 SQ_METERS_PER_SQ_MILE = 2_589_988.11
+NM_TO_METERS = 1852.0
 
 
 def geodesic_area_sq_mi(polygon) -> float:
@@ -71,31 +74,104 @@ def geodesic_area_sq_mi(polygon) -> float:
     return abs(area_sq_m) / SQ_METERS_PER_SQ_MILE
 
 
-def smooth_polygon_boundary(polygon, smoothing_deg: float):
+def filter_polygons_by_area(polygons: list, min_area_sq_mi: float) -> list:
+    """Drops polygons smaller than min_area_sq_mi, using true geodesic area."""
+    return [p for p in polygons if geodesic_area_sq_mi(p) >= min_area_sq_mi]
+
+
+def merge_nearby_polygons(polygons: list, radius_nm: float) -> list:
     """
-    Rounds off jagged, raster-derived polygon edges into something
-    closer to a hand-drawn shape, using the standard "buffer out, buffer
-    in, buffer in, buffer out" morphological closing+opening trick with
-    round joins:
+    Merges polygons that are within radius_nm of each other into single
+    combined shapes -- this is how "pull nearby smaller areas into
+    larger ones" should actually work, replacing an earlier approach
+    that blurred the GRID with a circular filter before contouring.
+
+    Why this is different (and avoids turning isolated areas into
+    circles): this uses morphological CLOSING (buffer every polygon out
+    by radius_nm, union any that now overlap, then buffer back in by
+    the same amount) on the POLYGONS themselves, not the underlying
+    grid. An isolated polygon with nothing else nearby buffers out and
+    then immediately back in to very close to its ORIGINAL shape --
+    closing is a no-op-ish operation for isolated shapes. Two polygons
+    within 2x radius_nm of each other, though, have their buffered
+    versions overlap, so they union into one connected shape with a
+    smoothed "bridge" between them. Grid-level blurring can't do this:
+    it grows EVERY point by the same disk regardless of whether
+    there's anything nearby to justify it, which is exactly what
+    produced literal circles around isolated hazard areas.
+
+    Uses a locally-accurate azimuthal equidistant projection (centered
+    on the combined bounding box of all input polygons) so the
+    real-world buffer distance is correct regardless of latitude --
+    unlike buffering directly in lon/lat degrees, which would distort
+    unevenly.
+
+    Parameters
+    ----------
+    polygons : list of shapely geometries (lon/lat)
+    radius_nm : float
+        Real-world radius, nautical miles. 0 or negative = no-op.
+
+    Returns
+    -------
+    list of shapely geometries (lon/lat), possibly fewer than the input
+    if some were merged together.
+    """
+    if not polygons or radius_nm <= 0:
+        return polygons
+
+    bounds = [p.bounds for p in polygons]
+    minx = min(b[0] for b in bounds)
+    miny = min(b[1] for b in bounds)
+    maxx = max(b[2] for b in bounds)
+    maxy = max(b[3] for b in bounds)
+    center_lon = (minx + maxx) / 2
+    center_lat = (miny + maxy) / 2
+
+    aeqd = CRS.from_proj4(f"+proj=aeqd +lat_0={center_lat} +lon_0={center_lon} +units=m")
+    to_aeqd = Transformer.from_crs("EPSG:4326", aeqd, always_xy=True).transform
+    to_lonlat = Transformer.from_crs(aeqd, "EPSG:4326", always_xy=True).transform
+
+    radius_m = radius_nm * NM_TO_METERS
+
+    projected = [shapely_transform(to_aeqd, p) for p in polygons]
+    grown = [p.buffer(radius_m) for p in projected]
+    closed = unary_union(grown).buffer(-radius_m)
+
+    if closed.is_empty:
+        return polygons  # shouldn't happen, but don't silently lose everything
+
+    result_geoms = list(closed.geoms) if hasattr(closed, "geoms") else [closed]
+    return [shapely_transform(to_lonlat, g) for g in result_geoms if not g.is_empty]
+
+
+def smooth_polygon_boundary(polygon, smoothing_deg: float, join_style: int = 2):
+    """
+    Rounds off small-scale jaggedness in a polygon's boundary using the
+    "buffer out, buffer in, buffer in, buffer out" morphological
+    closing+opening trick:
 
       - Closing (buffer out then in) fills small concave notches.
       - Opening (buffer in then out) trims small convex spikes.
 
-    Together they knock off small-scale jaggedness while preserving the
-    polygon's overall shape and size reasonably well. smoothing_deg is
-    in degrees (matching simplify_tolerance_deg's units elsewhere in
-    this module) -- 0 or negative disables this and returns the polygon
-    unchanged.
+    join_style controls the CHARACTER of the result: 1=round (smooth
+    curves -- can look "blobby" if overused), 2=mitre (sharp corners,
+    default here -- closer to a hand-drawn look), 3=bevel. Real
+    forecaster-drawn G-AIRMET polygons have straight segments and sharp
+    vertices, not smooth curves, so mitre is the better default despite
+    "smooth_polygon_boundary" sounding like it should mean rounded --
+    the goal is removing small-scale jaggedness, not adding roundness.
+
+    smoothing_deg is in degrees -- 0 or negative disables this and
+    returns the polygon unchanged.
     """
     if smoothing_deg <= 0 or polygon.is_empty:
         return polygon
 
-    closed = polygon.buffer(smoothing_deg, join_style=1).buffer(-smoothing_deg, join_style=1)
-    opened = closed.buffer(-smoothing_deg, join_style=1).buffer(smoothing_deg, join_style=1)
+    closed = polygon.buffer(smoothing_deg, join_style=join_style).buffer(-smoothing_deg, join_style=join_style)
+    opened = closed.buffer(-smoothing_deg, join_style=join_style).buffer(smoothing_deg, join_style=join_style)
 
     if opened.is_empty:
-        # Over-aggressive smoothing erased a small polygon entirely --
-        # better to keep the original than to silently drop it.
         return polygon
     return opened
 
