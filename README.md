@@ -49,16 +49,22 @@ Currently working:
       criterion, applied after merging) plus mitre-jointed boundary
       smoothing and a generous simplify pass — sharp corners, not rounded
 - [x] **Production driver** (`pipeline/generate_latest_ifr.py`) — finds the
-      most recently available NBM cycle and generates real polygons
+      most recent NBM cycle aligned to G-AIRMET's REAL issuance schedule
+      (03/09/15/21Z), and generates all 5 real G-AIRMET valid-time
+      snapshots (00/03/06/09/12h) per run. F00 falls back to NBM's F001
+      when there's no true 0-hour file, recorded honestly in the manifest
+      rather than silently mislabeled.
 - [x] **Scheduled generation** (`.github/workflows/generate_ifr.yml`) —
-      runs every 6 hours, commits `output/ifr_latest.geojson` back to the
-      repo, which triggers Railway to redeploy with fresh data
-- [x] Web app serves real data at `/api/hazards/ifr`, with graceful
-      fallback to demo data if the pipeline hasn't produced output yet
+      runs every 6 hours, commits `output/ifr_f00.geojson` through
+      `ifr_f12.geojson` plus `output/ifr_manifest.json` back to the repo,
+      which triggers Railway to redeploy with fresh data
+- [x] Web app serves real data with a full forecast-hour selector
+      (`/api/hazards/ifr/manifest`, `/api/hazards/ifr/{fxx}`) — the map
+      viewer's top-left panel lets you switch between F00/F03/F06/F09/F12
+      without reloading the page, with graceful fallback to demo data if
+      the pipeline hasn't produced output yet
 - [ ] Terrain/DEM sourcing for Mountain Obscuration
 - [ ] Mountain Obscuration hazard definition (`pipeline/hazards/mtn_obsc.py`)
-- [ ] Full 0/3/6/9/12-hour G-AIRMET-style forecast set (currently single
-      near-term snapshot, F003, only)
 
 ## Running the web app locally
 
@@ -76,9 +82,10 @@ pip install -r requirements-pipeline.txt
 python3 pipeline/generate_latest_ifr.py
 ```
 
-Writes `output/ifr_latest.geojson`. Requires real internet access to
-NOAA's servers (won't work from a sandboxed dev environment without
-egress).
+Writes `output/ifr_f00.geojson` through `ifr_f12.geojson` (one per real
+G-AIRMET valid-time offset) plus `output/ifr_manifest.json` describing
+them. Requires real internet access to NOAA's servers (won't work from a
+sandboxed dev environment without egress).
 
 ## Forecaster-adjustable parameters
 
@@ -105,7 +112,7 @@ Point a Railway project at this GitHub repo; it auto-detects the
 `Procfile` and `requirements.txt` (the lightweight web-app-only one —
 Railway never installs the heavy pipeline dependencies, see
 `requirements-pipeline.txt` vs `requirements.txt` below). The scheduled
-GitHub Action commits fresh `output/ifr_latest.geojson` every 6 hours,
+GitHub Action commits fresh forecast-hour snapshots every 6 hours,
 which triggers Railway to redeploy with updated data automatically.
 
 ## Why there are two requirements files
