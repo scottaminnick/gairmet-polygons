@@ -10,13 +10,16 @@ polygons, and does NOT know anything about grib2. Its only job is:
 
 The actual polygon generation happens in pipeline/ and runs on a
 schedule via GitHub Actions (.github/workflows/generate_ifr.yml), which
-commits fresh output/ifr_latest.geojson back to the repo -- this file
-never needs to change when that pipeline logic changes, it just reads
-whatever's on disk at request time. Deliberately NOT in requirements.txt:
-the pipeline's heavy GRIB2/geospatial dependencies (see
+generates a full set of forecast-hour snapshots (matching G-AIRMET's
+real 00/03/06/09/12h valid-time schedule) plus a manifest describing
+them, and commits them back to the repo -- this file never needs to
+change when that pipeline logic changes, it just reads whatever's on
+disk at request time. Deliberately NOT in requirements.txt: the
+pipeline's heavy GRIB2/geospatial dependencies (see
 requirements-pipeline.txt) -- this app never touches NBM data directly.
 """
 
+import json
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -48,21 +51,56 @@ def get_artcc_boundaries():
     return FileResponse(path, media_type="application/geo+json")
 
 
+@app.get("/api/hazards/ifr/manifest")
+def get_ifr_manifest():
+    """
+    Describes what forecast-hour snapshots are currently available
+    (see pipeline/generate_latest_ifr.py) -- the frontend fetches this
+    first to build its forecast-hour selector. Registered BEFORE the
+    /api/hazards/ifr/{fxx} route below: FastAPI matches path templates
+    in registration order, and a generic {fxx} string parameter would
+    otherwise happily (and wrongly) match the literal word "manifest".
+    """
+    manifest_path = OUTPUT_DIR / "ifr_manifest.json"
+    if not manifest_path.exists():
+        raise HTTPException(status_code=404, detail="No manifest available yet (pipeline hasn't run)")
+    return FileResponse(manifest_path, media_type="application/json")
+
+
+@app.get("/api/hazards/ifr/{fxx}")
+def get_ifr_snapshot(fxx: str):
+    """
+    A specific forecast-hour snapshot, e.g. /api/hazards/ifr/06 for the
+    6-hour snapshot. fxx is the REQUESTED forecast hour as it appears
+    in the filename (ifr_f06.geojson) -- this may differ from the hour
+    actually used internally for F00 specifically, since NBM has no
+    true 0-hour file (see the manifest's "substituted" field).
+    """
+    path = OUTPUT_DIR / f"ifr_f{fxx}.geojson"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"No snapshot for F{fxx}")
+    return FileResponse(path, media_type="application/geo+json")
+
+
 @app.get("/api/hazards/ifr")
 def get_ifr_hazard():
     """
-    Real IFR hazard polygons, regenerated on a schedule by
-    .github/workflows/generate_ifr.yml (see pipeline/generate_latest_ifr.py).
-
-    Falls back to the demo GeoJSON if the pipeline hasn't produced
-    output yet (e.g. right after first deploy, before the scheduled
-    workflow has run once) -- so the map always shows SOMETHING rather
-    than a blank error, while still preferring real data whenever it
-    exists.
+    Backward-compatible default endpoint: serves the FIRST available
+    snapshot from the manifest (the shortest forecast hour). Falls back
+    to the demo GeoJSON if the pipeline hasn't produced output yet
+    (e.g. right after first deploy) -- so the map always shows
+    SOMETHING rather than a blank error, while still preferring real
+    data whenever it exists.
     """
-    live_path = OUTPUT_DIR / "ifr_latest.geojson"
-    if live_path.exists():
-        return FileResponse(live_path, media_type="application/geo+json")
+    manifest_path = OUTPUT_DIR / "ifr_manifest.json"
+    if manifest_path.exists():
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        snapshots = manifest.get("snapshots") or []
+        if snapshots:
+            default_path = OUTPUT_DIR / snapshots[0]["filename"]
+            if default_path.exists():
+                return FileResponse(default_path, media_type="application/geo+json")
     if DEMO_GEOJSON.exists():
         return FileResponse(DEMO_GEOJSON, media_type="application/geo+json")
     raise HTTPException(
