@@ -203,6 +203,71 @@ def test_boundary_smoothing_reduces_jaggedness():
     assert 0.7 < area_ratio < 1.3, "Smoothing shouldn't drastically change the polygon's size"
 
 
+def test_merge_nearby_polygons_preserves_isolated_shape():
+    """
+    The whole point of using polygon-level merging instead of a grid-level
+    circular blur: an isolated polygon with nothing nearby should come
+    back out close to its ORIGINAL shape and area, not inflated into a
+    circle. This was a real bug found from comparing real output against
+    an actual G-AIRMET graphic -- grid-level neighborhood-max smoothing
+    inflated every isolated hazard area into a literal circle.
+    """
+    from shapely.geometry import box
+    from pipeline.polygons import merge_nearby_polygons
+
+    isolated = box(-100, 40, -99.5, 40.4)  # a simple rectangle, far from anything else
+    far_away_other = box(-70, 25, -69.5, 25.4)  # nowhere near the first one
+
+    result = merge_nearby_polygons([isolated, far_away_other], radius_nm=50)
+
+    assert len(result) == 2, "Two far-apart polygons should remain separate"
+
+    original_area = isolated.area
+    matched = min(result, key=lambda p: abs(p.area - original_area))
+    area_change_pct = 100 * abs(matched.area - original_area) / original_area
+    print(f"\nIsolated polygon area change after merge pass: {area_change_pct:.1f}%")
+    assert area_change_pct < 15, (
+        f"An isolated polygon's area changed by {area_change_pct:.1f}% -- should stay close to "
+        "its original size, not inflate like a grid-level circular blur would"
+    )
+
+
+def test_merge_nearby_polygons_merges_close_ones():
+    """Two polygons within radius_nm of each other should merge into one connected shape."""
+    from shapely.geometry import box
+    from pipeline.polygons import geodesic_area_sq_mi, merge_nearby_polygons
+
+    # Two small boxes about 10nm apart (roughly -- close enough for this test's purposes)
+    box1 = box(-100.0, 40.0, -99.9, 40.1)
+    box2 = box(-99.75, 40.0, -99.65, 40.1)
+
+    far_radius_result = merge_nearby_polygons([box1, box2], radius_nm=50)
+    close_radius_result = merge_nearby_polygons([box1, box2], radius_nm=1)
+
+    print(f"\nWith large radius: {len(far_radius_result)} polygon(s)")
+    print(f"With tiny radius: {len(close_radius_result)} polygon(s)")
+
+    assert len(far_radius_result) == 1, "A radius large enough to span the gap should merge them"
+    assert len(close_radius_result) == 2, "A radius much smaller than the gap should NOT merge them"
+
+    merged_area = geodesic_area_sq_mi(far_radius_result[0])
+    sum_of_originals = geodesic_area_sq_mi(box1) + geodesic_area_sq_mi(box2)
+    assert merged_area > sum_of_originals, "Merging should add some bridging area, not just touch the two boxes"
+
+
+def test_filter_polygons_by_area():
+    """Basic sanity check that the standalone area filter actually filters."""
+    from shapely.geometry import box
+    from pipeline.polygons import filter_polygons_by_area
+
+    tiny = box(0, 0, 0.01, 0.01)
+    huge = box(0, 0, 5, 5)
+
+    result = filter_polygons_by_area([tiny, huge], min_area_sq_mi=1000)
+    assert len(result) == 1
+    assert result[0] is huge
+
+
 def test_feature_collection_round_trip():
     """Confirm the GeoJSON wrapping works and carries properties through."""
     values = make_fake_ifr_probability_grid()
@@ -230,5 +295,8 @@ if __name__ == "__main__":
     test_geodesic_area_correctly_varies_with_latitude()
     test_min_area_sq_mi_filters_using_real_area_not_degrees()
     test_boundary_smoothing_reduces_jaggedness()
+    test_merge_nearby_polygons_preserves_isolated_shape()
+    test_merge_nearby_polygons_merges_close_ones()
+    test_filter_polygons_by_area()
     test_feature_collection_round_trip()
     print("\nAll manual checks passed.")
