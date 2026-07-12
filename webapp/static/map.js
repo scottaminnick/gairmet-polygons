@@ -98,6 +98,65 @@ function formatValidTime(iso) {
   return `${dd}${hh}${mm}Z`;
 }
 
+// --- Loads one specific IFR snapshot by its REQUESTED forecast hour
+//     (matching the manifest's "requested_forecast_hour" and the
+//     filename convention ifr_fNN.geojson), replaces the ifr layer's
+//     data, and updates the valid-time/legend readouts. ---
+async function loadIfrSnapshot(requestedFxx) {
+  const fxxStr = String(requestedFxx).padStart(2, '0');
+  const resp = await fetch(`/api/hazards/ifr/${fxxStr}`);
+  if (!resp.ok) throw new Error(`Snapshot F${fxxStr} not available (${resp.status})`);
+  const geojson = await resp.json();
+
+  layers.ifr.clearLayers();
+  layers.ifr.addData(geojson);
+
+  const firstProps = geojson.features?.[0]?.properties;
+  if (firstProps) {
+    document.getElementById('valid-time').textContent = formatValidTime(firstProps.valid_time);
+    document.getElementById('legend-threshold').textContent = firstProps.threshold_pct ?? '?';
+    document.getElementById('legend-radius').textContent = firstProps.neighborhood_radius_nm ?? '--';
+    document.getElementById('legend-min-area').textContent = firstProps.min_area_sq_mi ?? '--';
+  }
+
+  // Only re-fit the view the FIRST time data loads (on subsequent
+  // snapshot switches, keep whatever pan/zoom the person already has --
+  // re-fitting every time they click a forecast hour would be jarring).
+  if (!loadIfrSnapshot._hasFitBounds && geojson.features?.length) {
+    map.fitBounds(layers.ifr.getBounds(), { padding: [60, 60], maxZoom: 7 });
+    loadIfrSnapshot._hasFitBounds = true;
+  }
+}
+
+// --- Builds the FCST HR button row from the manifest, and wires up
+//     clicking a button to switch snapshots. ---
+function buildFxxSelector(manifest) {
+  const container = document.getElementById('fxx-buttons');
+  container.innerHTML = '';
+
+  document.getElementById('model-cycle').textContent = formatValidTime(manifest.model_cycle);
+
+  manifest.snapshots.forEach((snap, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'fxx-btn' + (i === 0 ? ' active' : '');
+    btn.textContent = `F${String(snap.requested_forecast_hour).padStart(2, '0')}`;
+    if (snap.substituted) {
+      btn.title = `NBM has no true F${String(snap.requested_forecast_hour).padStart(2, '0')} -- showing F${String(snap.actual_forecast_hour).padStart(2, '0')} instead`;
+    }
+    btn.addEventListener('click', async () => {
+      if (btn.classList.contains('active')) return;
+      container.querySelectorAll('.fxx-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      try {
+        await loadIfrSnapshot(snap.requested_forecast_hour);
+      } catch (err) {
+        console.error('Failed to switch forecast hour:', err);
+      }
+    });
+    container.appendChild(btn);
+  });
+}
+
 // --- Load data from our API and populate the layers ---
 async function loadData() {
   try {
@@ -116,29 +175,39 @@ async function loadData() {
     console.error('Failed to load ARTCC boundaries:', err);
   }
 
+  // Try the manifest first -- if it exists, build the forecast-hour
+  // selector and load its first (shortest) snapshot. If it doesn't
+  // (e.g. demo-data-only situations, or an older deployment), fall back
+  // to the single default endpoint and hide the selector row entirely
+  // rather than show a selector with nothing behind it.
   try {
-    const ifrResp = await fetch('/api/hazards/ifr');
-    const ifrGeoJSON = await ifrResp.json();
-    layers.ifr.addData(ifrGeoJSON);
+    const manifestResp = await fetch('/api/hazards/ifr/manifest');
+    if (!manifestResp.ok) throw new Error(`manifest not available (${manifestResp.status})`);
+    const manifest = await manifestResp.json();
+    if (!manifest.snapshots?.length) throw new Error('manifest has no snapshots');
 
-    // Pull the valid time / threshold from the first feature's properties
-    // to populate the top-left readout and legend, so they're never
-    // hardcoded out of sync with the actual data being shown.
-    const firstProps = ifrGeoJSON.features?.[0]?.properties;
-    if (firstProps) {
-      document.getElementById('valid-time').textContent = formatValidTime(firstProps.valid_time);
-      document.getElementById('legend-threshold').textContent = firstProps.threshold_pct ?? '?';
-      document.getElementById('legend-radius').textContent = firstProps.neighborhood_radius_nm ?? '--';
-      document.getElementById('legend-min-area').textContent = firstProps.min_area_sq_mi ?? '--';
-    }
-
-    // Zoom to fit the hazard polygons so first-time viewers immediately
-    // see something instead of an empty CONUS view.
-    if (ifrGeoJSON.features?.length) {
-      map.fitBounds(layers.ifr.getBounds(), { padding: [60, 60], maxZoom: 7 });
-    }
+    buildFxxSelector(manifest);
+    await loadIfrSnapshot(manifest.snapshots[0].requested_forecast_hour);
   } catch (err) {
-    console.error('Failed to load demo hazard polygons:', err);
+    console.warn('No forecast-hour manifest available, falling back to single snapshot:', err);
+    document.getElementById('fxx-row').style.display = 'none';
+    try {
+      const ifrResp = await fetch('/api/hazards/ifr');
+      const ifrGeoJSON = await ifrResp.json();
+      layers.ifr.addData(ifrGeoJSON);
+      const firstProps = ifrGeoJSON.features?.[0]?.properties;
+      if (firstProps) {
+        document.getElementById('valid-time').textContent = formatValidTime(firstProps.valid_time);
+        document.getElementById('legend-threshold').textContent = firstProps.threshold_pct ?? '?';
+        document.getElementById('legend-radius').textContent = firstProps.neighborhood_radius_nm ?? '--';
+        document.getElementById('legend-min-area').textContent = firstProps.min_area_sq_mi ?? '--';
+      }
+      if (ifrGeoJSON.features?.length) {
+        map.fitBounds(layers.ifr.getBounds(), { padding: [60, 60], maxZoom: 7 });
+      }
+    } catch (fallbackErr) {
+      console.error('Failed to load any hazard polygons:', fallbackErr);
+    }
   }
 }
 
