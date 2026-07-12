@@ -95,6 +95,57 @@ html, body {
   margin-bottom: 4px;
 }
 
+.fxx-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.fxx-row .label {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.fxx-buttons {
+  display: flex;
+  gap: 4px;
+}
+
+.fxx-btn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  border-radius: 3px;
+  padding: 3px 7px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.fxx-btn:hover {
+  border-color: var(--accent-ifr);
+  color: var(--text-primary);
+}
+
+.fxx-btn.active {
+  border-color: var(--accent-ifr);
+  color: var(--accent-ifr);
+  background: rgba(245, 166, 35, 0.12);
+}
+
+.fxx-btn[title]:not([title=""]) {
+  /* substituted-hour buttons (F00 -> F01) get a title tooltip; a dotted
+     underline hints there's a note without needing extra chrome */
+  border-bottom: 1px dotted var(--text-muted);
+}
+
 .panel-row .label {
   color: var(--text-muted);
   font-family: var(--font-mono);
