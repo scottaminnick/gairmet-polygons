@@ -1,0 +1,48 @@
+{
+  "model_cycle": "2026-07-12T03:00:00Z",
+  "threshold_pct": 50.0,
+  "neighborhood_radius_nm": 50.0,
+  "min_area_sq_mi": 3000.0,
+  "snapshots": [
+    {
+      "requested_forecast_hour": 0,
+      "actual_forecast_hour": 1,
+      "substituted": true,
+      "valid_time": "2026-07-12T04:00:00Z",
+      "filename": "ifr_f00.geojson",
+      "feature_count": 4
+    },
+    {
+      "requested_forecast_hour": 3,
+      "actual_forecast_hour": 3,
+      "substituted": false,
+      "valid_time": "2026-07-12T06:00:00Z",
+      "filename": "ifr_f03.geojson",
+      "feature_count": 5
+    },
+    {
+      "requested_forecast_hour": 6,
+      "actual_forecast_hour": 6,
+      "substituted": false,
+      "valid_time": "2026-07-12T09:00:00Z",
+      "filename": "ifr_f06.geojson",
+      "feature_count": 6
+    },
+    {
+      "requested_forecast_hour": 9,
+      "actual_forecast_hour": 9,
+      "substituted": false,
+      "valid_time": "2026-07-12T12:00:00Z",
+      "filename": "ifr_f09.geojson",
+      "feature_count": 8
+    },
+    {
+      "requested_forecast_hour": 12,
+      "actual_forecast_hour": 12,
+      "substituted": false,
+      "valid_time": "2026-07-12T15:00:00Z",
+      "filename": "ifr_f12.geojson",
+      "feature_count": 3
+    }
+  ]
+}
