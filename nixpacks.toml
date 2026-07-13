@@ -1,0 +1,4 @@
+[phases.setup]
+nixPkgs = ["...", "expat"]
+nixLibs = ["...", "expat"]
+aptPkgs = ["...", "libexpat1"]
