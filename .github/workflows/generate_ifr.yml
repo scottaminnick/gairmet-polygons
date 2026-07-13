@@ -1,12 +1,13 @@
 name: Generate Latest IFR Polygons
 
 on:
-  # Every 6 hours, offset 20 minutes to give NBM's posting lag some room.
-  # Loosely mirrors real G-AIRMET's ~6-hour cadence rather than NBM's
-  # own hourly cycle -- no need to regenerate more often than that for
-  # a single near-term snapshot.
+  # Fires 20 minutes after each real G-AIRMET cycle hour (03/09/15/21Z,
+  # see GAIRMET_CYCLE_HOURS in pipeline/generate_latest_ifr.py) to give
+  # NBM's posting lag some room -- NOT 20 minutes before, which would
+  # always miss the cycle it's meant to be chasing and fall back to
+  # the previous one.
   schedule:
-    - cron: "20 2,8,14,20 * * *"
+    - cron: "20 3,9,15,21 * * *"
   # Manual trigger, with optional overrides so a forecaster can
   # regenerate with different settings without editing code.
   workflow_dispatch:
