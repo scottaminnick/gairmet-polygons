@@ -7,7 +7,7 @@
 # --- Core polygon-generation logic (Track A) ---
 numpy
 shapely
-rasterio
+scikit-image    # raster-to-vector polygonization (see pipeline/polygons.py) -- replaced rasterio, which broke Railway
 geojson
 
 # --- Track B: real NBM fetching ---
