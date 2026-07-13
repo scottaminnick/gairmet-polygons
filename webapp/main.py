@@ -1,12 +1,22 @@
 """
 webapp/main.py
 --------------
-Deliberately thin. This app does NOT talk to NBM, does NOT generate
-polygons, and does NOT know anything about grib2. Its only job is:
+Deliberately thin, with ONE deliberate exception. This app does NOT
+fetch from NBM, does NOT know anything about grib2, and never installs
+the heavy GRIB2 stack (cfgrib/eccodes/xarray/herbie-data -- see
+requirements-pipeline.txt vs requirements.txt). Its jobs are:
 
     1. Serve the static frontend (index.html/style.css/map.js)
     2. Serve whatever GeoJSON files currently exist in data/ and output/
        as small JSON API endpoints
+    3. Re-process an ALREADY-FETCHED, cached probability grid with
+       forecaster-chosen parameters (threshold/neighborhood-radius/
+       min-area) for live interactive adjustment -- see
+       recompute_ifr_snapshot() below. This is the one place this app
+       does real computation rather than just serving files, but it's
+       cheap (numpy/shapely/scipy math against a small cached grid, no
+       network access, no NBM), which is why it's safe to do inside a
+       request handler.
 
 The actual polygon generation happens in pipeline/ and runs on a
 schedule via GitHub Actions (.github/workflows/generate_ifr.yml), which
@@ -14,12 +24,11 @@ generates a full set of forecast-hour snapshots (matching G-AIRMET's
 real 00/03/06/09/12h valid-time schedule) plus a manifest describing
 them, and commits them back to the repo -- this file never needs to
 change when that pipeline logic changes, it just reads whatever's on
-disk at request time. Deliberately NOT in requirements.txt: the
-pipeline's heavy GRIB2/geospatial dependencies (see
-requirements-pipeline.txt) -- this app never touches NBM data directly.
+disk at request time.
 """
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -65,6 +74,74 @@ def get_ifr_manifest():
     if not manifest_path.exists():
         raise HTTPException(status_code=404, detail="No manifest available yet (pipeline hasn't run)")
     return FileResponse(manifest_path, media_type="application/json")
+
+
+def _load_manifest_and_snapshot(fxx: str):
+    """Shared lookup used by both the recompute endpoint and (indirectly) get_ifr_snapshot."""
+    manifest_path = OUTPUT_DIR / "ifr_manifest.json"
+    if not manifest_path.exists():
+        raise HTTPException(status_code=404, detail="No manifest available yet (pipeline hasn't run)")
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+    snapshot = next(
+        (s for s in manifest.get("snapshots", []) if str(s["requested_forecast_hour"]).zfill(2) == fxx.zfill(2)),
+        None,
+    )
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail=f"No snapshot for F{fxx}")
+    return manifest, snapshot
+
+
+@app.get("/api/hazards/ifr/{fxx}/recompute")
+def recompute_ifr_snapshot(
+    fxx: str,
+    threshold_pct: float = 50.0,
+    neighborhood_radius_nm: float = 50.0,
+    min_area_sq_mi: float = 3000.0,
+):
+    """
+    Live parameter adjustment: re-runs ONLY the cheap, NBM-independent
+    part of the pipeline (threshold -> merge -> area filter -> boundary
+    smoothing, see pipeline.hazards.ifr.polygonize_ifr_grid) against an
+    ALREADY-FETCHED, cached probability grid for this forecast hour.
+    No network access, no NBM, no heavy GRIB2 parsing -- just numpy/
+    shapely/scipy math against a small cached array, which is what
+    makes this fast enough to call live from the browser as someone
+    drags a slider.
+
+    Query params: threshold_pct, neighborhood_radius_nm, min_area_sq_mi
+    (all optional, matching the same forecaster-adjustable parameters
+    used by the scheduled pipeline).
+    """
+    manifest, snapshot = _load_manifest_and_snapshot(fxx)
+
+    cache_filename = snapshot.get("cache_filename")
+    if not cache_filename:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No cached grid for F{fxx} (this snapshot may have been generated before caching was added)",
+        )
+    cache_path = OUTPUT_DIR / cache_filename
+    if not cache_path.exists():
+        raise HTTPException(status_code=404, detail=f"Cached grid file missing: {cache_filename}")
+
+    # Imported here rather than at module level to keep this file's own
+    # top-level imports minimal and obviously safe on Railway -- these
+    # are exactly the lightweight libraries in requirements.txt (numpy/
+    # shapely/scipy/rasterio/pyproj/geojson), never the heavy GRIB2 ones.
+    from pipeline.hazards.ifr import polygonize_ifr_grid
+    from pipeline.polygons import load_grid_cache
+
+    values, grid_spec = load_grid_cache(cache_path)
+    model_cycle = datetime.fromisoformat(manifest["model_cycle"].rstrip("Z"))
+
+    fc = polygonize_ifr_grid(
+        values, grid_spec, model_cycle, snapshot["actual_forecast_hour"],
+        threshold_pct=threshold_pct,
+        neighborhood_radius_nm=neighborhood_radius_nm,
+        min_area_sq_mi=min_area_sq_mi,
+    )
+    return fc
 
 
 @app.get("/api/hazards/ifr/{fxx}")
