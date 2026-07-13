@@ -55,7 +55,7 @@ def test_grid_to_polygons_basic_shape():
 
     # Pretend this grid covers a small lon/lat box (doesn't matter which
     # real place -- we're just testing the math). dy is negative because
-    # row 0 = north edge (rasterio/"image" convention).
+    # row 0 = north edge ("image" convention).
     grid = GridSpec(west=-110.0, north=45.0, dx=0.02, dy=-0.02)
 
     threshold = 70.0  # "probability of IFR >= 70%" -- a plausible G-AIRMET-like cutoff
@@ -298,6 +298,49 @@ def test_grid_cache_round_trip_within_quantization_tolerance():
     assert original_spec.dy == loaded_spec.dy
 
 
+def test_grid_to_polygons_correctly_handles_holes():
+    """
+    Regression-guard for the switch away from rasterio.features.shapes()
+    (which handled holes natively) to skimage.measure.find_contours()
+    (which doesn't distinguish shells from holes on its own -- see
+    _rings_to_nested_polygons() in polygons.py). Builds a synthetic
+    "donut": a filled disk with a smaller below-threshold disk in the
+    center, and confirms exactly one polygon with exactly one correctly
+    placed hole comes out, with containment behaving as expected on
+    both sides of the hole boundary.
+    """
+    from shapely.geometry import Point
+
+    n = 200
+    yy, xx = np.mgrid[0:n, 0:n]
+    center = n / 2
+    dist = np.sqrt((yy - center) ** 2 + (xx - center) ** 2)
+
+    values = np.zeros((n, n))
+    values[dist < 70] = 80  # outer disk
+    values[dist < 30] = 10  # inner hole (below threshold)
+
+    grid_spec = GridSpec(west=-100.0, north=40.0, dx=0.01, dy=-0.01)
+    polygons = grid_to_polygons(values, grid_spec, threshold=50.0, min_area_deg2=0.001, simplify_tolerance_deg=0)
+
+    print(f"\nFound {len(polygons)} polygon(s)")
+    assert len(polygons) == 1, f"Expected exactly 1 donut polygon, got {len(polygons)}"
+
+    donut = polygons[0]
+    print(f"Interior rings (holes): {len(donut.interiors)}")
+    assert len(donut.interiors) == 1, f"Expected exactly 1 hole, got {len(donut.interiors)}"
+
+    center_lon, center_lat = grid_spec.to_affine() * (center, center)
+    center_point = Point(center_lon, center_lat)
+    assert not donut.contains(center_point), "Center point should be excluded -- it's in the hole"
+
+    ring_lon, ring_lat = grid_spec.to_affine() * (center + 50, center)
+    ring_point = Point(ring_lon, ring_lat)
+    assert donut.contains(ring_point), "A point in the ring itself should be included"
+
+    print("[OK] Exactly one polygon with exactly one correctly-placed hole.")
+
+
 def test_feature_collection_round_trip():
     """Confirm the GeoJSON wrapping works and carries properties through."""
     values = make_fake_ifr_probability_grid()
@@ -329,5 +372,6 @@ if __name__ == "__main__":
     test_merge_nearby_polygons_merges_close_ones()
     test_filter_polygons_by_area()
     test_grid_cache_round_trip_within_quantization_tolerance()
+    test_grid_to_polygons_correctly_handles_holes()
     test_feature_collection_round_trip()
     print("\nAll manual checks passed.")
