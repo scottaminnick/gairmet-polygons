@@ -53,16 +53,30 @@ Currently working:
       (03/09/15/21Z), and generates all 5 real G-AIRMET valid-time
       snapshots (00/03/06/09/12h) per run. F00 falls back to NBM's F001
       when there's no true 0-hour file, recorded honestly in the manifest
-      rather than silently mislabeled.
+      rather than silently mislabeled. Also caches each snapshot's
+      prepared probability grid (uint8-quantized, ~70x smaller than naive
+      float32 storage) so parameters can be re-applied later without
+      re-fetching from NBM.
 - [x] **Scheduled generation** (`.github/workflows/generate_ifr.yml`) —
       runs every 6 hours, commits `output/ifr_f00.geojson` through
-      `ifr_f12.geojson` plus `output/ifr_manifest.json` back to the repo,
-      which triggers Railway to redeploy with fresh data
+      `ifr_f12.geojson`, their cached `*_grid.npz` grids, and
+      `output/ifr_manifest.json` back to the repo, which triggers Railway
+      to redeploy with fresh data
 - [x] Web app serves real data with a full forecast-hour selector
       (`/api/hazards/ifr/manifest`, `/api/hazards/ifr/{fxx}`) — the map
       viewer's top-left panel lets you switch between F00/F03/F06/F09/F12
       without reloading the page, with graceful fallback to demo data if
       the pipeline hasn't produced output yet
+- [x] **Live parameter adjustment** (`/api/hazards/ifr/{fxx}/recompute`) —
+      sliders in the map viewer let you adjust threshold/neighborhood-
+      radius/min-area and see results in about a second, by re-running
+      just the cheap threshold→merge→filter→smooth steps
+      (`pipeline.hazards.ifr.polygonize_ifr_grid`) against the cached
+      grid — no NBM access, no heavy GRIB2 parsing. This is also why
+      Railway's `requirements.txt` grew a few lightweight libraries
+      (numpy/scipy/shapely/rasterio/pyproj/geojson) — still never the
+      heavy cfgrib/eccodes/xarray stack, which stays pipeline-only (see
+      `requirements-pipeline.txt`).
 - [ ] Terrain/DEM sourcing for Mountain Obscuration
 - [ ] Mountain Obscuration hazard definition (`pipeline/hazards/mtn_obsc.py`)
 
@@ -117,13 +131,17 @@ which triggers Railway to redeploy with updated data automatically.
 
 ## Why there are two requirements files
 
-- `requirements.txt` — just `fastapi` + `uvicorn`. What Railway installs
-  to run the web app. The web app never touches NBM data directly, it
-  only reads whatever GeoJSON is already on disk.
+- `requirements.txt` — `fastapi` + `uvicorn` plus a handful of
+  lightweight geospatial libraries (`numpy`, `scipy`, `shapely`,
+  `rasterio`, `pyproj`, `geojson`) needed for live parameter adjustment
+  (re-processing an already-cached grid — see `polygonize_ifr_grid`).
+  What Railway installs to run the web app. Still deliberately excludes
+  the heavy GRIB2 stack below — the web app never fetches from NBM
+  directly, it only reads/reprocesses what's already on disk.
 - `requirements-pipeline.txt` — the heavy stuff (`cfgrib`, `eccodes`,
-  `xarray`, `pyproj`, `scipy`, etc.) needed to actually fetch and process
-  NBM grib2 data. Only installed by GitHub Actions workflows, never by
-  Railway.
+  `xarray`, `herbie-data`, `requests`, etc.) needed to actually fetch and
+  parse NBM grib2 data from NOAA. Only installed by GitHub Actions
+  workflows, never by Railway.
 
 ## Why the code is split this way
 
