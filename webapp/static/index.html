@@ -25,29 +25,51 @@
   </div>
 </div>
 
-<div class="panel panel-top-right">
-  <div class="panel-title">LAYERS</div>
-  <label class="layer-toggle">
-    <input type="checkbox" id="toggle-ifr" checked />
-    <span class="swatch swatch-ifr"></span>
-    <span class="mono">IFR CIG/VIS</span>
-  </label>
-  <label class="layer-toggle layer-disabled" title="Mountain obscuration hazard not yet implemented -- see project README">
-    <input type="checkbox" id="toggle-mtn" disabled />
-    <span class="swatch swatch-mtn"></span>
-    <span class="mono">MTN OBSC</span>
-    <span class="pending">soon</span>
-  </label>
-  <label class="layer-toggle">
-    <input type="checkbox" id="toggle-states" checked />
-    <span class="swatch swatch-states"></span>
-    <span class="mono">STATE BOUNDARIES</span>
-  </label>
-  <label class="layer-toggle">
-    <input type="checkbox" id="toggle-artcc" />
-    <span class="swatch swatch-artcc"></span>
-    <span class="mono">ARTCC BOUNDARIES</span>
-  </label>
+<div class="panel-stack panel-stack-top-right">
+  <div class="panel">
+    <div class="panel-title">LAYERS</div>
+    <label class="layer-toggle">
+      <input type="checkbox" id="toggle-ifr" checked />
+      <span class="swatch swatch-ifr"></span>
+      <span class="mono">IFR CIG/VIS</span>
+    </label>
+    <label class="layer-toggle layer-disabled" title="Mountain obscuration hazard not yet implemented -- see project README">
+      <input type="checkbox" id="toggle-mtn" disabled />
+      <span class="swatch swatch-mtn"></span>
+      <span class="mono">MTN OBSC</span>
+      <span class="pending">soon</span>
+    </label>
+    <label class="layer-toggle">
+      <input type="checkbox" id="toggle-states" checked />
+      <span class="swatch swatch-states"></span>
+      <span class="mono">STATE BOUNDARIES</span>
+    </label>
+    <label class="layer-toggle">
+      <input type="checkbox" id="toggle-artcc" />
+      <span class="swatch swatch-artcc"></span>
+      <span class="mono">ARTCC BOUNDARIES</span>
+    </label>
+  </div>
+
+  <div class="panel" id="adjust-panel">
+    <div class="panel-title">ADJUST (LIVE) <span id="adjust-status" class="mono"></span></div>
+    <div class="adjust-row">
+      <span class="mono adjust-label">THRESH</span>
+      <input type="range" id="adjust-threshold" min="10" max="90" step="5" value="50" />
+      <span class="mono adjust-value"><span id="adjust-threshold-val">50</span>%</span>
+    </div>
+    <div class="adjust-row">
+      <span class="mono adjust-label">RADIUS</span>
+      <input type="range" id="adjust-radius" min="0" max="150" step="5" value="50" />
+      <span class="mono adjust-value"><span id="adjust-radius-val">50</span>nm</span>
+    </div>
+    <div class="adjust-row">
+      <span class="mono adjust-label">MIN AREA</span>
+      <input type="range" id="adjust-minarea" min="0" max="10000" step="250" value="3000" />
+      <span class="mono adjust-value"><span id="adjust-minarea-val">3000</span>mi&sup2;</span>
+    </div>
+    <button id="adjust-reset" class="fxx-btn adjust-reset-btn">RESET TO SCHEDULED</button>
+  </div>
 </div>
 
 <div class="panel panel-bottom-left" id="legend">
@@ -55,26 +77,6 @@
   <div class="legend-row"><span class="swatch swatch-ifr"></span><span class="mono">PROB(IFR) &ge; <span id="legend-threshold">70</span>%</span></div>
   <div class="panel-row"><span class="label">SMOOTHING</span><span class="mono value"><span id="legend-radius">--</span>nm radius</span></div>
   <div class="panel-row"><span class="label">MIN AREA</span><span class="mono value"><span id="legend-min-area">--</span> sq mi</span></div>
-</div>
-
-<div class="panel panel-bottom-right" id="adjust-panel">
-  <div class="panel-title">ADJUST (LIVE) <span id="adjust-status" class="mono"></span></div>
-  <div class="adjust-row">
-    <span class="mono adjust-label">THRESH</span>
-    <input type="range" id="adjust-threshold" min="10" max="90" step="5" value="50" />
-    <span class="mono adjust-value"><span id="adjust-threshold-val">50</span>%</span>
-  </div>
-  <div class="adjust-row">
-    <span class="mono adjust-label">RADIUS</span>
-    <input type="range" id="adjust-radius" min="0" max="150" step="5" value="50" />
-    <span class="mono adjust-value"><span id="adjust-radius-val">50</span>nm</span>
-  </div>
-  <div class="adjust-row">
-    <span class="mono adjust-label">MIN AREA</span>
-    <input type="range" id="adjust-minarea" min="0" max="10000" step="250" value="3000" />
-    <span class="mono adjust-value"><span id="adjust-minarea-val">3000</span>mi&sup2;</span>
-  </div>
-  <button id="adjust-reset" class="fxx-btn adjust-reset-btn">RESET TO SCHEDULED</button>
 </div>
 
 <div class="disclaimer">
