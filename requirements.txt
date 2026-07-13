@@ -30,3 +30,9 @@ shapely
 scikit-image
 pyproj
 geojson
+affine          # pipeline.polygons imports this directly (GridSpec.to_affine) -- was
+                # previously installed "for free" as a transitive dependency of
+                # rasterio, and silently disappeared when rasterio was removed.
+                # Caught via a real clean-venv install test, not just simulating
+                # missing packages -- that approach doesn't catch a package that's
+                # still actually present in the test environment from earlier.
