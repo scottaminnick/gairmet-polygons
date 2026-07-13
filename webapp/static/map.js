@@ -98,11 +98,122 @@ function formatValidTime(iso) {
   return `${dd}${hh}${mm}Z`;
 }
 
+// --- Tracks which forecast hour is currently displayed, so the
+//     live-adjustment sliders know what to recompute against. Also
+//     tracks whether live adjustment is even possible (it isn't in the
+//     demo-fallback case, where there's no cached grid to recompute
+//     from). ---
+let currentFxx = null;
+let liveAdjustAvailable = false;
+
+// --- Simple debounce: waits `delay` ms after the LAST call before
+//     actually running `fn`, so dragging a slider doesn't fire a
+//     network request on every pixel of movement. ---
+function debounce(fn, delay) {
+  let timer = null;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), delay);
+  };
+}
+
+// --- Sets the three sliders (and their live labels) to match a
+//     snapshot's actual parameters -- used both on initial load and
+//     when switching forecast hours, so the sliders always reflect
+//     what's actually on screen rather than leftover values from
+//     fiddling with a different snapshot. ---
+function updateSlidersFromProps(props) {
+  if (!props) return;
+  const thresholdEl = document.getElementById('adjust-threshold');
+  const radiusEl = document.getElementById('adjust-radius');
+  const minAreaEl = document.getElementById('adjust-minarea');
+
+  if (props.threshold_pct != null) {
+    thresholdEl.value = props.threshold_pct;
+    document.getElementById('adjust-threshold-val').textContent = props.threshold_pct;
+  }
+  if (props.neighborhood_radius_nm != null) {
+    radiusEl.value = props.neighborhood_radius_nm;
+    document.getElementById('adjust-radius-val').textContent = props.neighborhood_radius_nm;
+  }
+  if (props.min_area_sq_mi != null) {
+    minAreaEl.value = props.min_area_sq_mi;
+    document.getElementById('adjust-minarea-val').textContent = props.min_area_sq_mi;
+  }
+}
+
+// --- Re-processes the CURRENTLY selected forecast hour's cached grid
+//     with whatever the sliders currently say, and swaps in the
+//     result. Does NOT re-fit the map view or touch the fxx button
+//     state -- this is the same forecast hour, just re-drawn with
+//     different parameters. ---
+async function recomputeCurrentSnapshot() {
+  if (currentFxx == null || !liveAdjustAvailable) return;
+
+  const threshold = document.getElementById('adjust-threshold').value;
+  const radius = document.getElementById('adjust-radius').value;
+  const minArea = document.getElementById('adjust-minarea').value;
+  const statusEl = document.getElementById('adjust-status');
+  const fxxStr = String(currentFxx).padStart(2, '0');
+
+  statusEl.textContent = 'computing...';
+  try {
+    const url = `/api/hazards/ifr/${fxxStr}/recompute?threshold_pct=${threshold}&neighborhood_radius_nm=${radius}&min_area_sq_mi=${minArea}`;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`recompute failed (${resp.status})`);
+    const geojson = await resp.json();
+
+    layers.ifr.clearLayers();
+    layers.ifr.addData(geojson);
+
+    const firstProps = geojson.features?.[0]?.properties;
+    document.getElementById('legend-threshold').textContent = threshold;
+    document.getElementById('legend-radius').textContent = radius;
+    document.getElementById('legend-min-area').textContent = minArea;
+    if (firstProps) {
+      document.getElementById('valid-time').textContent = formatValidTime(firstProps.valid_time);
+    }
+    statusEl.textContent = '';
+  } catch (err) {
+    console.error('Recompute failed:', err);
+    statusEl.textContent = 'error (see console)';
+  }
+}
+
+const debouncedRecompute = debounce(recomputeCurrentSnapshot, 300);
+
+// --- Wire up the three sliders: update the live numeric label
+//     immediately (feels responsive even before the network call
+//     resolves), and debounce the actual recompute. ---
+document.getElementById('adjust-threshold').addEventListener('input', (e) => {
+  document.getElementById('adjust-threshold-val').textContent = e.target.value;
+  debouncedRecompute();
+});
+document.getElementById('adjust-radius').addEventListener('input', (e) => {
+  document.getElementById('adjust-radius-val').textContent = e.target.value;
+  debouncedRecompute();
+});
+document.getElementById('adjust-minarea').addEventListener('input', (e) => {
+  document.getElementById('adjust-minarea-val').textContent = e.target.value;
+  debouncedRecompute();
+});
+
+// --- Reset button: reloads the ORIGINAL scheduled snapshot (its
+//     committed parameters, not whatever the sliders currently say). ---
+document.getElementById('adjust-reset').addEventListener('click', async () => {
+  if (currentFxx == null) return;
+  try {
+    await loadIfrSnapshot(currentFxx, { refit: false });
+  } catch (err) {
+    console.error('Failed to reset to scheduled snapshot:', err);
+  }
+});
+
 // --- Loads one specific IFR snapshot by its REQUESTED forecast hour
 //     (matching the manifest's "requested_forecast_hour" and the
 //     filename convention ifr_fNN.geojson), replaces the ifr layer's
 //     data, and updates the valid-time/legend readouts. ---
-async function loadIfrSnapshot(requestedFxx) {
+async function loadIfrSnapshot(requestedFxx, { refit = true } = {}) {
   const fxxStr = String(requestedFxx).padStart(2, '0');
   const resp = await fetch(`/api/hazards/ifr/${fxxStr}`);
   if (!resp.ok) throw new Error(`Snapshot F${fxxStr} not available (${resp.status})`);
@@ -110,6 +221,7 @@ async function loadIfrSnapshot(requestedFxx) {
 
   layers.ifr.clearLayers();
   layers.ifr.addData(geojson);
+  currentFxx = requestedFxx;
 
   const firstProps = geojson.features?.[0]?.properties;
   if (firstProps) {
@@ -117,12 +229,13 @@ async function loadIfrSnapshot(requestedFxx) {
     document.getElementById('legend-threshold').textContent = firstProps.threshold_pct ?? '?';
     document.getElementById('legend-radius').textContent = firstProps.neighborhood_radius_nm ?? '--';
     document.getElementById('legend-min-area').textContent = firstProps.min_area_sq_mi ?? '--';
+    updateSlidersFromProps(firstProps);
   }
 
   // Only re-fit the view the FIRST time data loads (on subsequent
   // snapshot switches, keep whatever pan/zoom the person already has --
   // re-fitting every time they click a forecast hour would be jarring).
-  if (!loadIfrSnapshot._hasFitBounds && geojson.features?.length) {
+  if (refit && !loadIfrSnapshot._hasFitBounds && geojson.features?.length) {
     map.fitBounds(layers.ifr.getBounds(), { padding: [60, 60], maxZoom: 7 });
     loadIfrSnapshot._hasFitBounds = true;
   }
@@ -188,9 +301,11 @@ async function loadData() {
 
     buildFxxSelector(manifest);
     await loadIfrSnapshot(manifest.snapshots[0].requested_forecast_hour);
+    liveAdjustAvailable = true;
   } catch (err) {
     console.warn('No forecast-hour manifest available, falling back to single snapshot:', err);
     document.getElementById('fxx-row').style.display = 'none';
+    document.getElementById('adjust-panel').style.display = 'none'; // nothing cached to recompute from
     try {
       const ifrResp = await fetch('/api/hazards/ifr');
       const ifrGeoJSON = await ifrResp.json();
