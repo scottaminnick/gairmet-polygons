@@ -66,19 +66,32 @@ html, body {
   left: 14px;
 }
 
-.panel-top-right {
-  top: 14px;
-  right: 14px;
-}
-
 .panel-bottom-left {
   bottom: 14px;
   left: 14px;
 }
 
-.panel-bottom-right {
-  bottom: 78px; /* stacks above .disclaimer, which also sits bottom-right */
+/* LAYERS and ADJUST (LIVE) share the top-right corner. A flex column
+   stacks them one after another so ADJUST's height never has to be
+   guessed with a fixed offset -- and, critically, so it can't drift
+   into the FCST HR row anchored under the top-left panel. */
+.panel-stack {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.panel-stack .panel {
+  position: static;
+}
+
+.panel-stack-top-right {
+  top: 14px;
   right: 14px;
+}
+
+#adjust-panel {
   min-width: 220px;
 }
 
