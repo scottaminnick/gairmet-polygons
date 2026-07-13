@@ -9,6 +9,8 @@ numpy
 shapely
 scikit-image    # raster-to-vector polygonization (see pipeline/polygons.py) -- replaced rasterio, which broke Railway
 geojson
+affine          # pipeline.polygons imports this directly -- was a transitive
+                # dependency of rasterio before rasterio was removed
 
 # --- Track B: real NBM fetching ---
 requests        # used by pipeline/inspect_nbm.py and pipeline/fetch_nbm.py to read NBM's .idx files directly
