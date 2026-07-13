@@ -39,7 +39,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.fetch_nbm import fetch_idx
-from pipeline.hazards.ifr import generate_ifr_polygons
+from pipeline.hazards.ifr import polygonize_ifr_grid, prepare_ifr_grid
+from pipeline.polygons import save_grid_cache
 
 # Real G-AIRMET issuance hours (UTC) and real G-AIRMET valid-time
 # offsets -- see NWSI 10-811 section 7.2 ("G-AIRMETs will be issued on
@@ -95,27 +96,29 @@ def generate_one_snapshot(cycle_date: datetime, fxx: int):
     """
     Generates one forecast-hour snapshot, falling back from F000 to
     F001 if NBM doesn't have a true 0-hour file. Returns
-    (actual_fxx_used, feature_collection).
+    (actual_fxx_used, feature_collection, combined_grid, grid_spec) --
+    the grid/grid_spec are returned too so main() can cache them for
+    the web app's live parameter-adjustment endpoint (see
+    pipeline.polygons.save_grid_cache).
     """
     try:
-        fc = generate_ifr_polygons(
-            cycle_date, fxx,
-            threshold_pct=THRESHOLD_PCT,
-            neighborhood_radius_nm=NEIGHBORHOOD_RADIUS_NM,
-            min_area_sq_mi=MIN_AREA_SQ_MI,
-        )
-        return fxx, fc
+        combined, grid_spec = prepare_ifr_grid(cycle_date, fxx)
+        actual_fxx = fxx
     except RuntimeError:
         if fxx == 0:
             print("  F000 not available (expected -- NBM has no true 0-hour file), trying F001 instead")
-            fc = generate_ifr_polygons(
-                cycle_date, 1,
-                threshold_pct=THRESHOLD_PCT,
-                neighborhood_radius_nm=NEIGHBORHOOD_RADIUS_NM,
-                min_area_sq_mi=MIN_AREA_SQ_MI,
-            )
-            return 1, fc
-        raise
+            combined, grid_spec = prepare_ifr_grid(cycle_date, 1)
+            actual_fxx = 1
+        else:
+            raise
+
+    fc = polygonize_ifr_grid(
+        combined, grid_spec, cycle_date, actual_fxx,
+        threshold_pct=THRESHOLD_PCT,
+        neighborhood_radius_nm=NEIGHBORHOOD_RADIUS_NM,
+        min_area_sq_mi=MIN_AREA_SQ_MI,
+    )
+    return actual_fxx, fc, combined, grid_spec
 
 
 def main():
@@ -144,7 +147,7 @@ def main():
     for requested_fxx in FORECAST_HOURS:
         print(f"\n--- F{requested_fxx:02d} ---")
         try:
-            actual_fxx, fc = generate_one_snapshot(cycle_date, requested_fxx)
+            actual_fxx, fc, combined, grid_spec = generate_one_snapshot(cycle_date, requested_fxx)
         except Exception:
             print(f"  FAILED for F{requested_fxx:02d}, skipping this snapshot. Traceback:")
             traceback.print_exc()
@@ -154,6 +157,12 @@ def main():
         with open(OUTPUT_DIR / filename, "w") as f:
             json.dump(fc, f, indent=2)
 
+        # Cache the prepared grid too -- lets the web app re-run just the
+        # threshold/merge/area-filter/smoothing steps with different
+        # forecaster-chosen parameters, without re-fetching from NBM.
+        cache_filename = f"ifr_f{requested_fxx:02d}_grid.npz"
+        save_grid_cache(OUTPUT_DIR / cache_filename, combined, grid_spec)
+
         valid_time = cycle_date + timedelta(hours=actual_fxx)
         manifest["snapshots"].append({
             "requested_forecast_hour": requested_fxx,
@@ -161,9 +170,11 @@ def main():
             "substituted": actual_fxx != requested_fxx,
             "valid_time": valid_time.isoformat() + "Z",
             "filename": filename,
+            "cache_filename": cache_filename,
             "feature_count": len(fc["features"]),
         })
         print(f"  wrote {len(fc['features'])} polygon(s) to {filename} (valid {valid_time:%Y-%m-%d %HZ})")
+        print(f"  cached prepared grid to {cache_filename}")
         any_succeeded = True
 
     if not any_succeeded:
