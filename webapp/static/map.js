@@ -248,6 +248,9 @@ function buildFxxSelector(manifest) {
   container.innerHTML = '';
 
   document.getElementById('model-cycle').textContent = formatValidTime(manifest.model_cycle);
+  document.getElementById('nbm-source-cycle').textContent = manifest.nbm_source_cycle
+    ? formatValidTime(manifest.nbm_source_cycle)
+    : '--------Z'; // older manifests generated before this field existed
 
   manifest.snapshots.forEach((snap, i) => {
     const btn = document.createElement('button');
