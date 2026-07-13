@@ -1,9 +1,22 @@
-# Web app dependencies ONLY -- this is what Railway auto-detects and
-# installs to run webapp/main.py. Deliberately does NOT include the
-# pipeline's heavy GRIB2/geospatial stack (cfgrib, eccodes, xarray,
-# pyproj, etc.) -- the web app only ever reads already-generated
-# GeoJSON files from disk; it never touches NBM data directly. See
-# requirements-pipeline.txt for everything the data-generation side
-# needs (installed separately, only in GitHub Actions).
+# Web app dependencies -- what Railway auto-detects and installs to run
+# webapp/main.py. Deliberately does NOT include the pipeline's heavy
+# GRIB2/geospatial stack (cfgrib, eccodes, xarray, herbie-data, pandas,
+# requests-for-NBM-fetch) -- the web app never touches NBM data or
+# fetches anything from NOAA directly. See requirements-pipeline.txt for
+# that side.
+#
+# It DOES need a handful of lightweight, pure-wheel geospatial libraries
+# below, though: the live parameter-adjustment endpoint
+# (/api/hazards/ifr/{fxx}/recompute) re-runs the threshold/merge/area-
+# filter/smoothing steps against a cached, ALREADY-fetched probability
+# grid (see pipeline.polygons.load_grid_cache) -- fast, no NBM access
+# needed, but it does need the same polygon-processing libraries the
+# pipeline uses for that specific piece.
 fastapi
 uvicorn[standard]
+numpy
+scipy
+shapely
+rasterio
+pyproj
+geojson
