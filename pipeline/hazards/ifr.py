@@ -24,32 +24,29 @@ discussed simplification, not an oversight).
 RAW NBM RESOLUTION vs. FORECASTER-DRAWN LOOK: NBM's ~2.5km resolution
 produces far more small-scale detail than a real G-AIRMET forecaster
 draws by hand in N-AWIPS -- lots of tiny, separate polygons and jagged
-edges that wouldn't look like an operational product, and real
-forecaster-drawn polygons have straight segments and sharp vertices,
-not smooth curves. Getting there is a POLYGON-level pipeline, not a
-grid-blurring one:
+edges. Getting there is a POLYGON-level pipeline (contour close to
+native resolution -> merge nearby polygons -> geodesic area filter ->
+mitre-jointed boundary smoothing + simplify), not a grid-blurring one --
+see merge_nearby_polygons()'s docstring in pipeline/polygons.py for why
+that distinction matters.
 
-  1. Contour first, at close to native resolution -- this preserves
-     genuinely sharp real features (e.g. a West Coast marine layer's
-     abrupt land/water cutoff) instead of blurring them away.
-  2. Merge nearby polygons (pipeline.polygons.merge_nearby_polygons) --
-     pulls smaller areas into larger ones by unioning polygons that are
-     within some real-world radius of each other. Deliberately NOT a
-     grid-level circular blur: an earlier version did that and it
-     inflated every isolated hazard area into a literal circle (visible
-     directly on a real forecaster-comparison screenshot -- grid-level
-     dilation grows EVERY point by the same disk regardless of whether
-     there's anything nearby to merge with; polygon-level closing
-     naturally leaves isolated shapes close to their original form).
-  3. Geodesic-area filtering -- drops anything smaller than the real
-     AIRMET/G-AIRMET "widespread" criterion (historically 3,000 sq mi),
-     applied AFTER merging so small areas that successfully merged into
-     something bigger survive.
-  4. Mitre-jointed boundary smoothing + a generous simplify pass --
-     knocks off small jagged noise using SHARP (not round) joins, then
-     reduces vertex count enough to look like a small number of
-     hand-drawn straight segments rather than a dense, pixel-following
-     contour.
+TWO-PHASE DESIGN (important for the web app's live parameter
+adjustment): this module is deliberately split into an EXPENSIVE,
+NBM-dependent phase (prepare_ifr_grid -- fetch + regrid + combine +
+Gaussian smooth) and a CHEAP, NBM-independent phase (polygonize_ifr_grid
+-- threshold + merge + area filter + boundary smoothing, using the
+three forecaster-adjustable parameters). The pipeline (GitHub Actions)
+calls both via generate_ifr_polygons(); the web app calls ONLY
+polygonize_ifr_grid() against a cached copy of an already-prepared grid,
+so a forecaster can adjust threshold/radius/min-area and see results in
+about a second, without re-fetching from NBM each time.
+
+This is also why fetch_probability_grid()'s imports of xarray and
+pipeline.fetch_nbm are deferred to INSIDE the function rather than at
+module level: Railway's web app imports this module for
+polygonize_ifr_grid() alone, and doesn't have (and doesn't need)
+xarray/cfgrib/eccodes installed. A module-level `import xarray` would
+crash the web app on import before it ever got the chance to not use it.
 """
 
 from __future__ import annotations
@@ -57,9 +54,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import numpy as np
-import xarray as xr
 
-from pipeline.fetch_nbm import fetch_idx, fetch_message_bytes, find_message, parse_idx, save_message_to_tempfile
 from pipeline.polygons import (
     filter_polygons_by_area,
     grid_to_polygons,
@@ -87,7 +82,7 @@ VISIBILITY_PROB_FILTER = {"variable": "VIS", "level": "surface", "extra": "prob 
 # down single-pixel grid noise, NOT enough to blur away a real sharp
 # transition like a marine layer's coastal edge. A heavier touch was
 # tried and reduced (this used to be 1.5) after real output showed
-# rounded bulges; most of that problem turned out to be the (now
+# rounded bulges; most of that problem turned out to be a (since
 # removed) grid-level neighborhood-max filter, but keeping this light
 # too errs on the side of preserving real sharp gradients.
 GAUSSIAN_SIGMA_CELLS = 0.6
@@ -100,7 +95,15 @@ def fetch_probability_grid(date: datetime, fxx: int, filters: dict) -> tuple[np.
     Fetches one probability field's message from NBM and returns
     (values, native_lats, native_lons) as decoded by cfgrib/eccodes
     from that message's own grid definition.
+
+    NOTE: imports xarray and pipeline.fetch_nbm locally (not at module
+    level) -- see this module's docstring for why that matters for the
+    web app's lightweight footprint.
     """
+    import xarray as xr
+
+    from pipeline.fetch_nbm import fetch_idx, fetch_message_bytes, find_message, parse_idx, save_message_to_tempfile
+
     raw_idx, grib_url = fetch_idx(date, fxx)
     rows = parse_idx(raw_idx)
     message = find_message(rows, **filters)
@@ -118,49 +121,19 @@ def fetch_probability_grid(date: datetime, fxx: int, filters: dict) -> tuple[np.
     return da.values, da.latitude.values, da.longitude.values
 
 
-def generate_ifr_polygons(
-    date: datetime,
-    fxx: int,
-    threshold_pct: float = 50.0,
-    neighborhood_radius_nm: float = 50.0,
-    min_area_sq_mi: float = 3000.0,
-    target_resolution_deg: float = 0.025,
-) -> dict:
+def prepare_ifr_grid(date: datetime, fxx: int, target_resolution_deg: float = 0.025):
     """
-    Fetches real NBM ceiling + visibility probability data for the
-    given model cycle (date) and forecast hour (fxx), combines and
-    generalizes them, and returns a GeoJSON FeatureCollection of IFR
-    hazard polygons shaped to resemble a forecaster-drawn product
-    rather than raw NBM-resolution detail.
+    THE EXPENSIVE, NBM-DEPENDENT PHASE: fetches real NBM ceiling +
+    visibility probability data, regrids to a common regular lon/lat
+    grid, combines via max(), and applies the fixed (non-adjustable)
+    Gaussian smoothing pass. Needs real internet access to NOAA's
+    servers and the heavy cfgrib/xarray/eccodes stack -- this is what
+    runs in GitHub Actions, never in the web app.
 
-    Parameters
-    ----------
-    date : datetime
-        Model cycle initialization time (naive, UTC -- see
-        pipeline/inspect_nbm.py's note on why this must NOT be
-        timezone-aware).
-    fxx : int
-        Forecast hour.
-    threshold_pct : float
-        Probability (0-100) above which a grid cell counts as "IFR
-        hazard present." Forecaster-adjustable -- 50% is the project's
-        starting default, not a fixed rule.
-    neighborhood_radius_nm : float
-        Real-world radius (nautical miles) used to merge nearby smaller
-        hazard polygons into larger ones (see
-        pipeline.polygons.merge_nearby_polygons). 0 disables this.
-        Forecaster-adjustable.
-    min_area_sq_mi : float
-        Polygons smaller than this (true geodesic area, checked AFTER
-        merging) are dropped. Matches AIRMET/G-AIRMET's historical
-        3,000 sq mi "widespread" criterion by default.
-        Forecaster-adjustable.
-    target_resolution_deg : float
-        Resolution of the regridded lon/lat output, in degrees.
-
-    Returns
-    -------
-    dict (GeoJSON FeatureCollection)
+    Returns (combined_grid, grid_spec) -- pass straight into
+    polygonize_ifr_grid(), or cache it (see pipeline.polygons.
+    save_grid_cache) for later fast re-processing with different
+    forecaster-adjustable parameters.
     """
     ceil_values, ceil_lats, ceil_lons = fetch_probability_grid(date, fxx, CEILING_PROB_FILTER)
     vis_values, vis_lats, vis_lons = fetch_probability_grid(date, fxx, VISIBILITY_PROB_FILTER)
@@ -181,7 +154,58 @@ def generate_ifr_polygons(
     # surrounding area than the original gap.
     combined = np.maximum(np.nan_to_num(ceil_regridded), np.nan_to_num(vis_regridded))
     combined = gaussian_smooth(combined, sigma_cells=GAUSSIAN_SIGMA_CELLS)
+    return combined, grid_spec
 
+
+def polygonize_ifr_grid(
+    combined: np.ndarray,
+    grid_spec,
+    date: datetime,
+    fxx: int,
+    threshold_pct: float = 50.0,
+    neighborhood_radius_nm: float = 50.0,
+    min_area_sq_mi: float = 3000.0,
+) -> dict:
+    """
+    THE CHEAP, NBM-INDEPENDENT PHASE: given an already-prepared
+    probability grid (see prepare_ifr_grid()), applies the three
+    forecaster-adjustable parameters and returns a GeoJSON
+    FeatureCollection shaped to resemble a forecaster-drawn product.
+
+    Safe to call repeatedly against the SAME cached grid with different
+    parameter values -- no NBM access, no heavy geospatial parsing, just
+    numpy/shapely/scipy/pyproj math. This is what the web app's live
+    parameter-adjustment endpoint calls.
+
+    Parameters
+    ----------
+    combined : 2D array
+        Prepared probability grid from prepare_ifr_grid().
+    grid_spec : pipeline.polygons.GridSpec
+        Matching grid_spec from prepare_ifr_grid().
+    date : datetime
+        Model cycle initialization time (naive, UTC).
+    fxx : int
+        Forecast hour (used to compute valid_time and for the output's
+        "forecast_hour" property -- doesn't affect the math at all).
+    threshold_pct : float
+        Probability (0-100) above which a grid cell counts as "IFR
+        hazard present." Forecaster-adjustable -- 50% is the project's
+        starting default, not a fixed rule.
+    neighborhood_radius_nm : float
+        Real-world radius (nautical miles) used to merge nearby smaller
+        hazard polygons into larger ones. 0 disables this.
+        Forecaster-adjustable.
+    min_area_sq_mi : float
+        Polygons smaller than this (true geodesic area, checked AFTER
+        merging) are dropped. Matches AIRMET/G-AIRMET's historical
+        3,000 sq mi "widespread" criterion by default.
+        Forecaster-adjustable.
+
+    Returns
+    -------
+    dict (GeoJSON FeatureCollection)
+    """
     # Contour close to native resolution first -- preserves real sharp
     # features (e.g. a coastline) instead of blurring them away. Only a
     # tiny area filter here, just to drop single-pixel-scale noise; the
@@ -209,4 +233,28 @@ def generate_ifr_polygons(
             "model_cycle": date.isoformat() + "Z",
             "forecast_hour": fxx,
         },
+    )
+
+
+def generate_ifr_polygons(
+    date: datetime,
+    fxx: int,
+    threshold_pct: float = 50.0,
+    neighborhood_radius_nm: float = 50.0,
+    min_area_sq_mi: float = 3000.0,
+    target_resolution_deg: float = 0.025,
+) -> dict:
+    """
+    Full pipeline in one call: fetch + prepare + polygonize. Thin
+    wrapper around prepare_ifr_grid() + polygonize_ifr_grid(), kept for
+    existing callers (pipeline/generate_latest_ifr.py,
+    pipeline/test_live_ifr_fetch.py) that just want a one-shot result
+    without caring about the two-phase split.
+    """
+    combined, grid_spec = prepare_ifr_grid(date, fxx, target_resolution_deg=target_resolution_deg)
+    return polygonize_ifr_grid(
+        combined, grid_spec, date, fxx,
+        threshold_pct=threshold_pct,
+        neighborhood_radius_nm=neighborhood_radius_nm,
+        min_area_sq_mi=min_area_sq_mi,
     )
