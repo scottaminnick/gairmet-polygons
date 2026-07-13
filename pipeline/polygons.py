@@ -23,19 +23,40 @@ purpose. Reasons this separation matters:
    of copy-pasted into every hazard file.
 
 How it works, in plain English:
-1. We treat `values >= threshold` as a black/white mask ("in the hazard
-   area" vs "not").
-2. `rasterio.features.shapes()` walks that mask and traces the boundary
-   of every contiguous blob of "in" pixels, automatically handling
-   holes (e.g. a clear pocket surrounded by IFR conditions) for us.
-   This is the standard, robust way to do raster-to-vector conversion --
-   much less fiddly than hand-rolling a marching-squares contour tracer.
-3. We convert the resulting pixel-space polygons into real lon/lat
+1. `skimage.measure.find_contours()` traces the boundary where the grid
+   crosses `threshold`, using marching squares -- this gives smoothly
+   sub-pixel-interpolated boundary lines (an actual improvement over a
+   blocky raster-cell-edge trace), but doesn't tell us which contours
+   are OUTER shells vs. HOLES (e.g. a clear pocket surrounded by IFR
+   conditions) -- marching squares just returns every boundary line at
+   that level, mixed together.
+2. We figure out shells vs. holes ourselves via containment testing:
+   contours from a single scalar field at one threshold level never
+   partially overlap (they're always either fully disjoint or one fully
+   contains the other), so a single representative point per contour is
+   enough to test "is this contour inside that one" -- no need for
+   full, expensive polygon-vs-polygon comparison. See
+   _rings_to_nested_polygons() below.
+3. We convert the resulting pixel-space contours into real lon/lat
    polygons using the grid's affine transform.
-4. We drop tiny speckle polygons (small_area filter) and simplify the
+4. We drop tiny speckle polygons (small-area filter) and simplify the
    remaining ones (fewer vertices = smaller GeoJSON = faster web map),
    because a 2.5km-resolution CONUS grid can produce polygons with
    thousands of vertices if left untouched.
+
+WHY NOT rasterio (used here in an earlier version): rasterio.features.
+shapes() does this same job well, but rasterio bundles GDAL, which
+dynamically links against system libraries (libexpat, in our case) that
+aren't guaranteed to exist on every deployment target -- this broke the
+web app's live-recompute endpoint on Railway with
+"ImportError: libexpat.so.1: cannot open shared object file", which a
+nixpacks.toml system-library fix did NOT resolve. scikit-image's
+find_contours has no such system dependency (pure numpy/Cython, same
+wheel-portability story as numpy/scipy themselves), and benchmarked
+faster besides (~0.2s vs rasterio's comparable speed, and dramatically
+faster than a naive shapely-unary-union-of-grid-cells alternative that
+was also tried and measured at 11+ seconds on real CONUS-scale data --
+too slow for a live endpoint).
 """
 
 from __future__ import annotations
@@ -44,13 +65,13 @@ from dataclasses import dataclass
 
 import geojson
 import numpy as np
-import rasterio.features
 from affine import Affine
 from pyproj import CRS, Geod, Transformer
-from shapely.geometry import shape as shapely_shape
+from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry import mapping as shapely_mapping
 from shapely.ops import transform as shapely_transform
 from shapely.ops import unary_union
+from skimage import measure
 
 # WGS84 geodesic calculator -- gives TRUE area on the Earth's surface,
 # correctly accounting for the fact that a degree of longitude covers
@@ -195,7 +216,7 @@ class GridSpec:
         Pixel size in the x (longitude) and y (latitude) directions.
         dx should be positive (grid runs west->east).
         dy should be NEGATIVE if row 0 is the northernmost row (the
-        conventional "image" orientation, and what rasterio expects).
+        conventional "image" orientation).
     """
 
     west: float
@@ -204,7 +225,7 @@ class GridSpec:
     dy: float  # typically negative
 
     def to_affine(self) -> Affine:
-        """Build the affine transform rasterio needs: pixel (col,row) -> (lon,lat)."""
+        """Build the affine transform mapping pixel (col,row) -> (lon,lat)."""
         return Affine(self.dx, 0.0, self.west - self.dx / 2, 0.0, self.dy, self.north - self.dy / 2)
 
 
@@ -250,6 +271,68 @@ def load_grid_cache(path) -> tuple[np.ndarray, GridSpec]:
     return data["values"].astype(np.float32), grid_spec
 
 
+def _rings_to_nested_polygons(rings: list) -> list:
+    """
+    Takes a flat list of simple (no-hole) shapely polygons -- raw
+    marching-squares contour rings, which mix outer shells and hole
+    boundaries together with no indication of which is which -- and
+    returns a list of properly nested polygons (holes correctly
+    subtracted from their shells).
+
+    Works for arbitrary nesting depth (a hole containing an island
+    containing its own hole, etc.), though in practice real smoothed
+    probability data rarely nests more than one level deep.
+
+    Algorithm: contours from a single scalar field at one threshold
+    level never partially overlap -- each pair is either fully disjoint
+    or one fully contains the other. That means we can find each ring's
+    TIGHTEST enclosing ring using a cheap representative-point test
+    (rather than full polygon-vs-polygon comparison), build a
+    containment tree from that, and alternate shell/hole by depth
+    (even depth = filled region, odd depth = hole).
+    """
+    if not rings:
+        return []
+
+    # Process smallest-to-largest so each ring finds its tightest (not just any) parent.
+    order = sorted(range(len(rings)), key=lambda i: rings[i].area)
+    n = len(order)
+    rep_points = [rings[order[i]].representative_point() for i in range(n)]
+
+    parent = [None] * n  # index into `order`, or None
+    for i in range(n):
+        best_parent, best_area = None, None
+        for j in range(i + 1, n):
+            candidate = rings[order[j]]
+            if candidate.contains(rep_points[i]):
+                if best_area is None or candidate.area < best_area:
+                    best_parent, best_area = j, candidate.area
+        parent[i] = best_parent
+
+    depth = [0] * n
+    for i in range(n):
+        d, p = 0, parent[i]
+        while p is not None:
+            d += 1
+            p = parent[p]
+        depth[i] = d
+
+    children = [[] for _ in range(n)]
+    for i in range(n):
+        if parent[i] is not None:
+            children[parent[i]].append(i)
+
+    result = []
+    for i in range(n):
+        if depth[i] % 2 != 0:
+            continue  # odd depth = hole; folded into its parent's geometry below, not emitted on its own
+        shell = rings[order[i]]
+        holes = [list(rings[order[c]].exterior.coords) for c in children[i] if depth[c] % 2 == 1]
+        result.append(ShapelyPolygon(shell.exterior.coords, holes) if holes else shell)
+
+    return result
+
+
 def grid_to_polygons(
     values: np.ndarray,
     grid: GridSpec,
@@ -292,26 +375,48 @@ def grid_to_polygons(
 
     Returns
     -------
-    list[shapely.geometry.Polygon | MultiPolygon]
+    list[shapely.geometry.Polygon]
     """
     if values.ndim != 2:
         raise ValueError(f"Expected a 2D grid, got shape {values.shape}")
 
-    mask = (values >= threshold).astype(np.uint8)
-
-    if not mask.any():
+    if not (values >= threshold).any():
         return []
 
     transform = grid.to_affine()
 
-    polygons = []
-    # rasterio.features.shapes yields (geojson-like geometry dict, value)
-    # pairs for every contiguous region of equal value in the mask.
-    for geom, value in rasterio.features.shapes(mask, mask=mask.astype(bool), transform=transform):
-        if value != 1:
-            continue
-        poly = shapely_shape(geom)
+    raw_contours = measure.find_contours(values, level=threshold)
 
+    rings = []
+    for contour in raw_contours:
+        if len(contour) < 4:
+            continue  # not enough points for a valid ring
+        coords = [transform * (col, row) for row, col in contour]
+        try:
+            poly = ShapelyPolygon(coords)
+            if not poly.is_valid:
+                poly = poly.buffer(0)  # attempt to repair minor self-intersections
+            if poly.is_empty:
+                continue
+            # buffer(0)'s repair of a self-intersecting ring (e.g. a
+            # figure-eight shape) can produce a MultiPolygon instead of
+            # a single Polygon -- flatten that into individual simple
+            # rings rather than assuming every entry is always a plain
+            # Polygon (an AttributeError on `.exterior` further down
+            # caught exactly this case on real data during testing).
+            if poly.geom_type == "MultiPolygon":
+                for part in poly.geoms:
+                    if part.is_valid and not part.is_empty and part.area > 0:
+                        rings.append(part)
+            elif poly.geom_type == "Polygon" and poly.is_valid and poly.area > 0:
+                rings.append(poly)
+        except Exception:
+            continue
+
+    nested_polygons = _rings_to_nested_polygons(rings)
+
+    polygons = []
+    for poly in nested_polygons:
         if min_area_sq_mi is not None:
             if geodesic_area_sq_mi(poly) < min_area_sq_mi:
                 continue
