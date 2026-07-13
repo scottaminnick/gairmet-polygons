@@ -19,6 +19,16 @@ output/*.geojson
 !output/ifr_f09.geojson
 !output/ifr_f12.geojson
 
+# Cached prepared grids -- power the web app's live parameter-adjustment
+# endpoint (re-threshold/merge/filter without re-fetching from NBM).
+# Same negation-exception need as the .geojson outputs above.
+output/*.npz
+!output/ifr_f00_grid.npz
+!output/ifr_f03_grid.npz
+!output/ifr_f06_grid.npz
+!output/ifr_f09_grid.npz
+!output/ifr_f12_grid.npz
+
 # Large cached terrain/DEM files - regenerate locally, don't commit
 data/terrain/*.tif
 data/terrain/*.tiff
