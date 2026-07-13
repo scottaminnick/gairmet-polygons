@@ -268,6 +268,36 @@ def test_filter_polygons_by_area():
     assert result[0] is huge
 
 
+def test_grid_cache_round_trip_within_quantization_tolerance():
+    """
+    save_grid_cache/load_grid_cache quantize to uint8 for a massive size
+    reduction (~70x in real-world testing) -- confirms the round trip
+    preserves values within the expected +/-0.5 rounding tolerance, and
+    that the GridSpec survives exactly (it's not quantized, no reason
+    for it to lose precision).
+    """
+    import tempfile
+    from pipeline.polygons import load_grid_cache, save_grid_cache
+
+    rng = np.random.default_rng(0)
+    original_values = rng.uniform(0, 100, size=(50, 80)).astype(np.float32)
+    original_spec = GridSpec(west=-105.123, north=42.456, dx=0.025, dy=-0.025)
+
+    with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as f:
+        cache_path = f.name
+    save_grid_cache(cache_path, original_values, original_spec)
+    loaded_values, loaded_spec = load_grid_cache(cache_path)
+
+    max_error = np.abs(original_values - loaded_values).max()
+    print(f"\nMax quantization error: {max_error:.3f} (expected <= 0.5)")
+    assert max_error <= 0.5001
+
+    assert original_spec.west == loaded_spec.west
+    assert original_spec.north == loaded_spec.north
+    assert original_spec.dx == loaded_spec.dx
+    assert original_spec.dy == loaded_spec.dy
+
+
 def test_feature_collection_round_trip():
     """Confirm the GeoJSON wrapping works and carries properties through."""
     values = make_fake_ifr_probability_grid()
@@ -298,5 +328,6 @@ if __name__ == "__main__":
     test_merge_nearby_polygons_preserves_isolated_shape()
     test_merge_nearby_polygons_merges_close_ones()
     test_filter_polygons_by_area()
+    test_grid_cache_round_trip_within_quantization_tolerance()
     test_feature_collection_round_trip()
     print("\nAll manual checks passed.")
