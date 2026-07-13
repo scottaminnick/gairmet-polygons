@@ -50,10 +50,19 @@ Currently working:
       smoothing and a generous simplify pass — sharp corners, not rounded
 - [x] **Production driver** (`pipeline/generate_latest_ifr.py`) — finds the
       most recent NBM cycle aligned to G-AIRMET's REAL issuance schedule
-      (03/09/15/21Z), and generates all 5 real G-AIRMET valid-time
-      snapshots (00/03/06/09/12h) per run. F00 falls back to NBM's F001
-      when there's no true 0-hour file, recorded honestly in the manifest
-      rather than silently mislabeled. Also caches each snapshot's
+      (03/09/15/21Z), then SHIFTS FORWARD one 6-hour G-AIRMET interval to
+      produce the UPCOMING cycle from data that already exists, matching
+      real forecaster workflow (once 09Z's NBM run posts, you're
+      preparing the 15Z product from it, not another 09Z one — the tool
+      now advances the same way: after 09Z it serves 15Z, after 15Z it
+      serves 21Z). Concretely, requested hour F00 maps to NBM forecast
+      hour 6 from the cycle found, F03 to NBM hour 9, and so on — which
+      also incidentally eliminates the old F000-doesn't-exist-in-NBM
+      problem entirely, since the earliest NBM hour ever requested is
+      now 6. The manifest's `model_cycle` reflects the G-AIRMET label
+      (e.g. 15Z); a separate `nbm_source_cycle` field (also shown in the
+      UI as "NBM SRC") records which underlying NBM run actually fed it
+      (e.g. 09Z), for provenance. Also caches each snapshot's
       prepared probability grid (uint8-quantized, ~70x smaller than naive
       float32 storage) so parameters can be re-applied later without
       re-fetching from NBM.
