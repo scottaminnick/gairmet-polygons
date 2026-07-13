@@ -128,7 +128,7 @@ def recompute_ifr_snapshot(
     # Imported here rather than at module level to keep this file's own
     # top-level imports minimal and obviously safe on Railway -- these
     # are exactly the lightweight libraries in requirements.txt (numpy/
-    # shapely/scipy/rasterio/pyproj/geojson), never the heavy GRIB2 ones.
+    # shapely/scipy/scikit-image/pyproj/geojson), never the heavy GRIB2 ones.
     from pipeline.hazards.ifr import polygonize_ifr_grid
     from pipeline.polygons import load_grid_cache
 
