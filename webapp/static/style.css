@@ -76,6 +76,50 @@ html, body {
   left: 14px;
 }
 
+.panel-bottom-right {
+  bottom: 78px; /* stacks above .disclaimer, which also sits bottom-right */
+  right: 14px;
+  min-width: 220px;
+}
+
+.adjust-row {
+  display: grid;
+  grid-template-columns: 62px 1fr 56px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.adjust-label {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.adjust-value {
+  font-size: 11px;
+  color: var(--accent-ifr);
+  text-align: right;
+}
+
+.adjust-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent-ifr);
+  background: transparent;
+}
+
+#adjust-status {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.adjust-reset-btn {
+  width: 100%;
+  text-align: center;
+  margin-top: 2px;
+}
+
 .panel-title {
   font-family: var(--font-mono);
   font-size: 11px;
