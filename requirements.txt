@@ -12,11 +12,21 @@
 # grid (see pipeline.polygons.load_grid_cache) -- fast, no NBM access
 # needed, but it does need the same polygon-processing libraries the
 # pipeline uses for that specific piece.
+#
+# NOTE: rasterio was here originally (for raster-to-vector
+# polygonization) but got removed after it broke Railway deployment --
+# ImportError: libexpat.so.1: cannot open shared object file. rasterio
+# bundles GDAL, which dynamically links against system libraries that
+# aren't guaranteed to exist on every deployment target; a nixpacks.toml
+# fix targeting that specific missing library did NOT resolve it.
+# scikit-image's find_contours() does the same job (see polygons.py's
+# module docstring) with zero system-library dependencies, and
+# benchmarked faster besides.
 fastapi
 uvicorn[standard]
 numpy
 scipy
 shapely
-rasterio
+scikit-image
 pyproj
 geojson
