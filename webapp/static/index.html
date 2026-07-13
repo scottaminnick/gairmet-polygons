@@ -57,6 +57,26 @@
   <div class="panel-row"><span class="label">MIN AREA</span><span class="mono value"><span id="legend-min-area">--</span> sq mi</span></div>
 </div>
 
+<div class="panel panel-bottom-right" id="adjust-panel">
+  <div class="panel-title">ADJUST (LIVE) <span id="adjust-status" class="mono"></span></div>
+  <div class="adjust-row">
+    <span class="mono adjust-label">THRESH</span>
+    <input type="range" id="adjust-threshold" min="10" max="90" step="5" value="50" />
+    <span class="mono adjust-value"><span id="adjust-threshold-val">50</span>%</span>
+  </div>
+  <div class="adjust-row">
+    <span class="mono adjust-label">RADIUS</span>
+    <input type="range" id="adjust-radius" min="0" max="150" step="5" value="50" />
+    <span class="mono adjust-value"><span id="adjust-radius-val">50</span>nm</span>
+  </div>
+  <div class="adjust-row">
+    <span class="mono adjust-label">MIN AREA</span>
+    <input type="range" id="adjust-minarea" min="0" max="10000" step="250" value="3000" />
+    <span class="mono adjust-value"><span id="adjust-minarea-val">3000</span>mi&sup2;</span>
+  </div>
+  <button id="adjust-reset" class="fxx-btn adjust-reset-btn">RESET TO SCHEDULED</button>
+</div>
+
 <div class="disclaimer">
   EXPERIMENTAL &mdash; NOT AN OFFICIAL NWS PRODUCT<br>NOT FOR OPERATIONAL USE OR FLIGHT PLANNING
 </div>
