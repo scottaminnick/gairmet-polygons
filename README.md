@@ -74,9 +74,19 @@ Currently working:
       (`pipeline.hazards.ifr.polygonize_ifr_grid`) against the cached
       grid — no NBM access, no heavy GRIB2 parsing. This is also why
       Railway's `requirements.txt` grew a few lightweight libraries
-      (numpy/scipy/shapely/rasterio/pyproj/geojson) — still never the
-      heavy cfgrib/eccodes/xarray stack, which stays pipeline-only (see
-      `requirements-pipeline.txt`).
+      (numpy/scipy/shapely/scikit-image/pyproj/geojson) — still never
+      the heavy cfgrib/eccodes/xarray stack, which stays pipeline-only
+      (see `requirements-pipeline.txt`).
+- [x] **Raster-to-vector polygonization uses scikit-image, not rasterio** —
+      rasterio bundles GDAL, which broke Railway deployment
+      (`ImportError: libexpat.so.1`) since GDAL dynamically links
+      against system libraries not guaranteed to exist on every
+      deployment target. A `nixpacks.toml` fix targeting that specific
+      library did NOT resolve it. `skimage.measure.find_contours()` has
+      zero system dependencies and benchmarked faster besides — see
+      `pipeline/polygons.py`'s module docstring for the full story,
+      including how hole detection works without rasterio's built-in
+      handling for it.
 - [ ] Terrain/DEM sourcing for Mountain Obscuration
 - [ ] Mountain Obscuration hazard definition (`pipeline/hazards/mtn_obsc.py`)
 
@@ -133,11 +143,12 @@ which triggers Railway to redeploy with updated data automatically.
 
 - `requirements.txt` — `fastapi` + `uvicorn` plus a handful of
   lightweight geospatial libraries (`numpy`, `scipy`, `shapely`,
-  `rasterio`, `pyproj`, `geojson`) needed for live parameter adjustment
-  (re-processing an already-cached grid — see `polygonize_ifr_grid`).
-  What Railway installs to run the web app. Still deliberately excludes
-  the heavy GRIB2 stack below — the web app never fetches from NBM
-  directly, it only reads/reprocesses what's already on disk.
+  `scikit-image`, `pyproj`, `geojson`) needed for live parameter
+  adjustment (re-processing an already-cached grid — see
+  `polygonize_ifr_grid`). What Railway installs to run the web app.
+  Still deliberately excludes the heavy GRIB2 stack below — the web app
+  never fetches from NBM directly, it only reads/reprocesses what's
+  already on disk.
 - `requirements-pipeline.txt` — the heavy stuff (`cfgrib`, `eccodes`,
   `xarray`, `herbie-data`, `requests`, etc.) needed to actually fetch and
   parse NBM grib2 data from NOAA. Only installed by GitHub Actions
