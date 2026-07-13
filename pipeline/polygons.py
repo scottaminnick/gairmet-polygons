@@ -208,6 +208,48 @@ class GridSpec:
         return Affine(self.dx, 0.0, self.west - self.dx / 2, 0.0, self.dy, self.north - self.dy / 2)
 
 
+def save_grid_cache(path, values: np.ndarray, grid_spec: GridSpec) -> None:
+    """
+    Saves a prepared grid + its GridSpec to a compressed .npz file, so
+    it can be re-processed later (e.g. with different forecaster-
+    adjustable parameters) without re-fetching or re-preparing from
+    source data.
+
+    Quantizes values to uint8 (rounded to the nearest integer
+    percentage point, 0-100) rather than storing float32. This isn't
+    just smaller -- it's DRAMATICALLY smaller in practice (~70x in
+    testing, 14.7MB -> 0.2MB for a realistic CONUS-sized grid), because
+    repeated byte patterns in low-entropy integer data compress far
+    better than float32's effectively-random-looking mantissa bits.
+    Max error from this rounding is 0.5 percentage points -- negligible
+    for a threshold decision, and irrelevant compared to NBM's own
+    forecast uncertainty.
+    """
+    np.savez_compressed(
+        path,
+        values=np.round(values).astype(np.uint8),
+        west=grid_spec.west,
+        north=grid_spec.north,
+        dx=grid_spec.dx,
+        dy=grid_spec.dy,
+    )
+
+
+def load_grid_cache(path) -> tuple[np.ndarray, GridSpec]:
+    """
+    Loads a grid + GridSpec previously saved with save_grid_cache().
+    Returns values as float32 (upcast from the stored uint8) so
+    downstream code (thresholding, smoothing) works exactly as it does
+    with a freshly-prepared grid, without needing to know about the
+    on-disk quantization.
+    """
+    data = np.load(path)
+    grid_spec = GridSpec(
+        west=float(data["west"]), north=float(data["north"]), dx=float(data["dx"]), dy=float(data["dy"])
+    )
+    return data["values"].astype(np.float32), grid_spec
+
+
 def grid_to_polygons(
     values: np.ndarray,
     grid: GridSpec,
