@@ -86,6 +86,21 @@ Currently working:
       (numpy/scipy/shapely/scikit-image/pyproj/geojson) — still never
       the heavy cfgrib/eccodes/xarray stack, which stays pipeline-only
       (see `requirements-pipeline.txt`).
+- [x] **Simple XML export** (`pipeline/export_xml.py`, `?format=xml` on
+      both `/api/hazards/ifr/{fxx}` and its `/recompute` variant) — for
+      handing polygons off to N-AWIPS conversion tooling as a "first
+      guess" draft. Deliberately NOT the official NWS USWX/GML/AIXM
+      standard (a much heavier lift involving formal geometry/
+      observation encoding) — N-AWIPS' own existing software handles
+      that downstream from a simpler draft. One `<Polygon>` element per
+      hazard polygon (with `<Interior>` sub-elements for holes),
+      metadata as root attributes. Confirmed against real pipeline
+      output that some polygons genuinely come out as GeoJSON
+      `MultiPolygon`s (not just simple `Polygon`s) — most likely
+      `smooth_polygon_boundary()`'s buffer operations occasionally
+      pinching a thin-necked shape into two pieces — so the converter
+      splits those into separate `<Polygon>` elements rather than
+      assuming every feature is already simple.
 - [x] **Raster-to-vector polygonization uses scikit-image, not rasterio** —
       rasterio bundles GDAL, which broke Railway deployment
       (`ImportError: libexpat.so.1`) since GDAL dynamically links
