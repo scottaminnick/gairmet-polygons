@@ -50,17 +50,22 @@ def _format_ring(coords: list) -> str:
     return " ".join(f"{round(float(lon), COORD_DECIMAL_PLACES)},{round(float(lat), COORD_DECIMAL_PLACES)}" for lon, lat in coords)
 
 
-def _add_polygon_element(parent: ET.Element, polygon_id: int, geometry: dict, cause: str | None = None) -> None:
+def _add_polygon_element(
+    parent: ET.Element, polygon_id: int, geometry: dict, cause: str | None = None, weather_type: str | None = None
+) -> None:
     """
     Adds one <Polygon> element for a single GeoJSON Polygon geometry
     (exterior ring + any interior/hole rings). cause ("CIG", "VIS", or
-    "CIG/VIS" -- see pipeline.hazards.ifr._determine_cause) is a
-    PER-POLYGON attribute, unlike the shared root-level ones, since
-    different polygons in the same output can have different causes.
+    "CIG/VIS") and weather_type ("PCPN"/"BR"/"FG" combinations, present
+    only when cause includes VIS -- see pipeline.hazards.ifr) are both
+    PER-POLYGON attributes, unlike the shared root-level ones, since
+    different polygons in the same output can have different values.
     """
     attrs = {"id": str(polygon_id)}
     if cause:
         attrs["cause"] = cause
+    if weather_type:
+        attrs["weatherType"] = weather_type
     poly_el = ET.SubElement(parent, "Polygon", attrs)
     rings = geometry["coordinates"]
     if not rings:
@@ -120,19 +125,22 @@ def geojson_to_xml(feature_collection: dict) -> str:
     for feature in features:
         geometry = feature["geometry"]
         cause = feature.get("properties", {}).get("cause")
+        weather_type = feature.get("properties", {}).get("weather_type")
         if geometry["type"] == "Polygon":
-            _add_polygon_element(root, polygon_id, geometry, cause=cause)
+            _add_polygon_element(root, polygon_id, geometry, cause=cause, weather_type=weather_type)
             polygon_id += 1
         elif geometry["type"] == "MultiPolygon":
-            # A MultiPolygon's parts all share the ONE cause computed
-            # for the whole feature (cause attribution runs on the
+            # A MultiPolygon's parts all share the ONE cause/weather_type
+            # computed for the whole feature (attribution runs on the
             # final, already-possibly-split shape -- see
             # pipeline.hazards.ifr.polygonize_ifr_grid) -- reasonable,
             # since parts of a single MultiPolygon typically arose from
             # one contiguous hazard area getting pinched into pieces by
             # boundary smoothing, not from genuinely different causes.
             for part_coords in geometry["coordinates"]:
-                _add_polygon_element(root, polygon_id, {"coordinates": part_coords}, cause=cause)
+                _add_polygon_element(
+                    root, polygon_id, {"coordinates": part_coords}, cause=cause, weather_type=weather_type
+                )
                 polygon_id += 1
 
     raw = ET.tostring(root, encoding="unicode")
