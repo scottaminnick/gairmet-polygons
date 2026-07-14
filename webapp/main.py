@@ -137,12 +137,13 @@ def recompute_ifr_snapshot(
     from pipeline.polygons import load_grid_cache
 
     grids, grid_spec = load_grid_cache(cache_path)
-    if "ceiling" not in grids or "visibility" not in grids:
+    required_keys = {"ceiling", "visibility_3sm", "visibility_1sm", "precipitation"}
+    if not required_keys.issubset(grids.keys()):
         raise HTTPException(
             status_code=409,
             detail=(
                 f"Cached grid for F{fxx} is in an outdated format (found keys: {list(grids.keys())}, "
-                "expected 'ceiling'/'visibility'). This happens when new pipeline code deploys before "
+                f"expected {sorted(required_keys)}). This happens when new pipeline code deploys before "
                 "the next scheduled run regenerates the cache -- manually trigger the "
                 "'Generate Latest IFR Polygons' workflow to fix."
             ),
@@ -150,7 +151,8 @@ def recompute_ifr_snapshot(
     model_cycle = datetime.fromisoformat(manifest["model_cycle"].rstrip("Z"))
 
     fc = polygonize_ifr_grid(
-        grids["ceiling"], grids["visibility"], grid_spec, model_cycle, snapshot["actual_forecast_hour"],
+        grids["ceiling"], grids["visibility_3sm"], grids["visibility_1sm"], grids["precipitation"],
+        grid_spec, model_cycle, snapshot["actual_forecast_hour"],
         threshold_pct=threshold_pct,
         neighborhood_radius_nm=neighborhood_radius_nm,
         min_area_sq_mi=min_area_sq_mi,
