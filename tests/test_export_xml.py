@@ -120,6 +120,47 @@ def test_multipolygon_splits_into_separate_polygon_elements():
     assert [p.attrib["id"] for p in polygons] == ["1", "2"]
 
 
+def test_cause_attribute_appears_on_polygon_element():
+    fc = _make_fc([_polygon_feature(
+        [[[-104.5, 39.2], [-104.3, 39.5], [-104.1, 39.6], [-104.5, 39.2]]],
+        properties={"hazard": "IFR", "valid_time": "2026-07-13T15:00:00Z", "cause": "CIG"},
+    )])
+    xml_str = geojson_to_xml(fc)
+    root = ET.fromstring(xml_str)
+    assert root.find("Polygon").attrib["cause"] == "CIG"
+
+
+def test_different_polygons_get_different_cause_attributes():
+    """Cause is a PER-POLYGON attribute -- two features with different causes should each keep their own."""
+    fc = _make_fc([
+        _polygon_feature(
+            [[[-100, 40], [-99, 40], [-99, 41], [-100, 40]]],
+            properties={"hazard": "IFR", "valid_time": "2026-07-13T15:00:00Z", "cause": "CIG"},
+        ),
+        _polygon_feature(
+            [[[-90, 35], [-89, 35], [-89, 36], [-90, 35]]],
+            properties={"hazard": "IFR", "valid_time": "2026-07-13T15:00:00Z", "cause": "VIS"},
+        ),
+    ])
+    xml_str = geojson_to_xml(fc)
+    root = ET.fromstring(xml_str)
+    polygons = root.findall("Polygon")
+    assert polygons[0].attrib["cause"] == "CIG"
+    assert polygons[1].attrib["cause"] == "VIS"
+
+
+def test_missing_cause_omitted_gracefully():
+    """No 'cause' key at all (e.g. a hazard type that hasn't implemented attribution) shouldn't crash or write 'None'."""
+    fc = _make_fc([_polygon_feature(
+        [[[-100, 40], [-99, 40], [-99, 41], [-100, 40]]],
+        properties={"hazard": "IFR", "valid_time": "2026-07-13T15:00:00Z"},
+    )])
+    xml_str = geojson_to_xml(fc)
+    assert "cause" not in xml_str
+    root = ET.fromstring(xml_str)
+    assert "cause" not in root.find("Polygon").attrib
+
+
 def test_empty_feature_collection_produces_valid_xml_with_no_polygons():
     fc = _make_fc([])
     xml_str = geojson_to_xml(fc)
@@ -134,5 +175,8 @@ if __name__ == "__main__":
     test_multiple_polygons_get_sequential_ids()
     test_missing_properties_are_omitted_not_written_as_none()
     test_multipolygon_splits_into_separate_polygon_elements()
+    test_cause_attribute_appears_on_polygon_element()
+    test_different_polygons_get_different_cause_attributes()
+    test_missing_cause_omitted_gracefully()
     test_empty_feature_collection_produces_valid_xml_with_no_polygons()
     print("All manual checks passed.")
