@@ -137,6 +137,16 @@ def recompute_ifr_snapshot(
     from pipeline.polygons import load_grid_cache
 
     grids, grid_spec = load_grid_cache(cache_path)
+    if "ceiling" not in grids or "visibility" not in grids:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cached grid for F{fxx} is in an outdated format (found keys: {list(grids.keys())}, "
+                "expected 'ceiling'/'visibility'). This happens when new pipeline code deploys before "
+                "the next scheduled run regenerates the cache -- manually trigger the "
+                "'Generate Latest IFR Polygons' workflow to fix."
+            ),
+        )
     model_cycle = datetime.fromisoformat(manifest["model_cycle"].rstrip("Z"))
 
     fc = polygonize_ifr_grid(
