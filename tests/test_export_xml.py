@@ -161,6 +161,30 @@ def test_missing_cause_omitted_gracefully():
     assert "cause" not in root.find("Polygon").attrib
 
 
+def test_weather_type_attribute_appears_on_polygon_element():
+    fc = _make_fc([_polygon_feature(
+        [[[-104.5, 39.2], [-104.3, 39.5], [-104.1, 39.6], [-104.5, 39.2]]],
+        properties={"hazard": "IFR", "valid_time": "2026-07-13T15:00:00Z", "cause": "VIS", "weather_type": "PCPN/BR"},
+    )])
+    xml_str = geojson_to_xml(fc)
+    root = ET.fromstring(xml_str)
+    poly = root.find("Polygon")
+    assert poly.attrib["cause"] == "VIS"
+    assert poly.attrib["weatherType"] == "PCPN/BR"
+
+
+def test_missing_weather_type_omitted_gracefully():
+    """A pure-CIG polygon has no weather_type at all -- shouldn't crash or write anything for it."""
+    fc = _make_fc([_polygon_feature(
+        [[[-100, 40], [-99, 40], [-99, 41], [-100, 40]]],
+        properties={"hazard": "IFR", "valid_time": "2026-07-13T15:00:00Z", "cause": "CIG"},
+    )])
+    xml_str = geojson_to_xml(fc)
+    assert "weatherType" not in xml_str
+    root = ET.fromstring(xml_str)
+    assert "weatherType" not in root.find("Polygon").attrib
+
+
 def test_empty_feature_collection_produces_valid_xml_with_no_polygons():
     fc = _make_fc([])
     xml_str = geojson_to_xml(fc)
@@ -178,5 +202,7 @@ if __name__ == "__main__":
     test_cause_attribute_appears_on_polygon_element()
     test_different_polygons_get_different_cause_attributes()
     test_missing_cause_omitted_gracefully()
+    test_weather_type_attribute_appears_on_polygon_element()
+    test_missing_weather_type_omitted_gracefully()
     test_empty_feature_collection_produces_valid_xml_with_no_polygons()
     print("All manual checks passed.")
