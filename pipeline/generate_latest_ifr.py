@@ -117,24 +117,27 @@ def generate_one_snapshot(nbm_cycle_date: datetime, gairmet_cycle_date: datetime
     requested_fxx + NBM_LEAD_TIME_OFFSET_HOURS, from nbm_cycle_date
     (the previous G-AIRMET-aligned NBM cycle, which already exists).
 
-    Returns (feature_collection, combined_grid, grid_spec) -- the grid
-    is returned too so main() can cache it for the web app's live
-    parameter-adjustment endpoint (see pipeline.polygons.save_grid_cache).
+    Returns (feature_collection, ceil_grid, vis_grid, grid_spec) -- the
+    two grids are returned SEPARATELY (not combined) so main() can
+    cache both for the web app's live parameter-adjustment endpoint,
+    which needs them individually to attribute each polygon's cause
+    (ceiling, visibility, or both) at recompute time too, not just once
+    at generation time (see pipeline.polygons.save_grid_cache).
     """
     actual_nbm_fxx = requested_fxx + NBM_LEAD_TIME_OFFSET_HOURS
-    combined, grid_spec = prepare_ifr_grid(nbm_cycle_date, actual_nbm_fxx)
+    ceil_grid, vis_grid, grid_spec = prepare_ifr_grid(nbm_cycle_date, actual_nbm_fxx)
 
     # gairmet_cycle_date + requested_fxx correctly gives the real valid
     # time (e.g. 15Z cycle's F00 = 15Z) -- and equals nbm_cycle_date +
     # actual_nbm_fxx by construction, so this is just the more
     # meaningful of two equal ways to express the same instant.
     fc = polygonize_ifr_grid(
-        combined, grid_spec, gairmet_cycle_date, requested_fxx,
+        ceil_grid, vis_grid, grid_spec, gairmet_cycle_date, requested_fxx,
         threshold_pct=THRESHOLD_PCT,
         neighborhood_radius_nm=NEIGHBORHOOD_RADIUS_NM,
         min_area_sq_mi=MIN_AREA_SQ_MI,
     )
-    return fc, combined, grid_spec
+    return fc, ceil_grid, vis_grid, grid_spec
 
 
 def main():
@@ -170,7 +173,7 @@ def main():
         actual_nbm_fxx = requested_fxx + NBM_LEAD_TIME_OFFSET_HOURS
         print(f"\n--- F{requested_fxx:02d} (NBM {nbm_cycle_date:%H}Z F{actual_nbm_fxx:03d}) ---")
         try:
-            fc, combined, grid_spec = generate_one_snapshot(nbm_cycle_date, gairmet_cycle_date, requested_fxx)
+            fc, ceil_grid, vis_grid, grid_spec = generate_one_snapshot(nbm_cycle_date, gairmet_cycle_date, requested_fxx)
         except Exception:
             print(f"  FAILED for F{requested_fxx:02d}, skipping this snapshot. Traceback:")
             traceback.print_exc()
@@ -180,11 +183,12 @@ def main():
         with open(OUTPUT_DIR / filename, "w") as f:
             json.dump(fc, f, indent=2)
 
-        # Cache the prepared grid too -- lets the web app re-run just the
-        # threshold/merge/area-filter/smoothing steps with different
-        # forecaster-chosen parameters, without re-fetching from NBM.
+        # Cache BOTH grids (not just their combined max) -- lets the web
+        # app re-run just the threshold/merge/area-filter/smoothing/
+        # cause-attribution steps with different forecaster-chosen
+        # parameters, without re-fetching from NBM.
         cache_filename = f"ifr_f{requested_fxx:02d}_grid.npz"
-        save_grid_cache(OUTPUT_DIR / cache_filename, combined, grid_spec)
+        save_grid_cache(OUTPUT_DIR / cache_filename, {"ceiling": ceil_grid, "visibility": vis_grid}, grid_spec)
 
         valid_time = gairmet_cycle_date + timedelta(hours=requested_fxx)
         manifest["snapshots"].append({
