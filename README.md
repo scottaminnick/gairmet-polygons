@@ -101,6 +101,31 @@ Currently working:
       pinching a thin-necked shape into two pieces — so the converter
       splits those into separate `<Polygon>` elements rather than
       assuming every feature is already simple.
+- [x] **Ceiling vs. visibility cause attribution** — each polygon now
+      carries a `cause` property ("CIG", "VIS", or "CIG/VIS"), matching
+      how real forecaster-drawn G-AIRMET graphics annotate what's
+      actually driving an IFR area rather than drawing an unlabeled
+      blob. Required keeping ceiling and visibility probability grids
+      SEPARATE all the way through polygon generation (previously
+      combined via `max()` and discarded early) — see
+      `pipeline.hazards.ifr._determine_cause`, which rasterizes each
+      final polygon back onto the two original grids using
+      `skimage.draw.polygon()` to check which one(s) actually crossed
+      threshold within that polygon's footprint. `pipeline.polygons.
+      save_grid_cache`/`load_grid_cache` were generalized from a single
+      array to a dict of named grids to support this (both the
+      scheduled pipeline and the web app's live-recompute endpoint need
+      both grids, not just their combined max). Weather-TYPE
+      attribution (PCPN/BR/FG/HZ/FU/BLSN — what's specifically causing
+      low visibility) is a separate, larger future effort requiring a
+      different data source (NDFD's Predominant Weather grid, which
+      NBM's own weather grid doesn't fully cover — notably missing
+      smoke/FU).
+- [x] **"Generate" button** in the ADJUST panel — downloads both
+      GeoJSON and XML for whatever the sliders currently say, not just
+      the default scheduled version. Client-side only (fetches from the
+      same `/recompute` endpoint the sliders already use); nothing is
+      saved server-side.
 - [x] **Raster-to-vector polygonization uses scikit-image, not rasterio** —
       rasterio bundles GDAL, which broke Railway deployment
       (`ImportError: libexpat.so.1`) since GDAL dynamically links
