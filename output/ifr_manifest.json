@@ -1,54 +1,54 @@
 {
-  "model_cycle": "2026-07-14T09:00:00Z",
-  "nbm_source_cycle": "2026-07-14T03:00:00Z",
+  "model_cycle": "2026-07-14T15:00:00Z",
+  "nbm_source_cycle": "2026-07-14T09:00:00Z",
   "threshold_pct": 30.0,
-  "neighborhood_radius_nm": 90.0,
+  "neighborhood_radius_nm": 75.0,
   "min_area_sq_mi": 3000.0,
   "snapshots": [
     {
       "requested_forecast_hour": 0,
       "actual_forecast_hour": 0,
       "substituted": false,
-      "valid_time": "2026-07-14T09:00:00Z",
+      "valid_time": "2026-07-14T15:00:00Z",
       "filename": "ifr_f00.geojson",
       "cache_filename": "ifr_f00_grid.npz",
-      "feature_count": 17
+      "feature_count": 16
     },
     {
       "requested_forecast_hour": 3,
       "actual_forecast_hour": 3,
       "substituted": false,
-      "valid_time": "2026-07-14T12:00:00Z",
+      "valid_time": "2026-07-14T18:00:00Z",
       "filename": "ifr_f03.geojson",
       "cache_filename": "ifr_f03_grid.npz",
-      "feature_count": 16
+      "feature_count": 14
     },
     {
       "requested_forecast_hour": 6,
       "actual_forecast_hour": 6,
       "substituted": false,
-      "valid_time": "2026-07-14T15:00:00Z",
+      "valid_time": "2026-07-14T21:00:00Z",
       "filename": "ifr_f06.geojson",
       "cache_filename": "ifr_f06_grid.npz",
-      "feature_count": 15
+      "feature_count": 14
     },
     {
       "requested_forecast_hour": 9,
       "actual_forecast_hour": 9,
       "substituted": false,
-      "valid_time": "2026-07-14T18:00:00Z",
+      "valid_time": "2026-07-15T00:00:00Z",
       "filename": "ifr_f09.geojson",
       "cache_filename": "ifr_f09_grid.npz",
-      "feature_count": 15
+      "feature_count": 16
     },
     {
       "requested_forecast_hour": 12,
       "actual_forecast_hour": 12,
       "substituted": false,
-      "valid_time": "2026-07-14T21:00:00Z",
+      "valid_time": "2026-07-15T03:00:00Z",
       "filename": "ifr_f12.geojson",
       "cache_filename": "ifr_f12_grid.npz",
-      "feature_count": 10
+      "feature_count": 12
     }
   ]
 }
