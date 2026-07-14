@@ -12,6 +12,18 @@ from documentation alone:
   2. Does NBM's own file happen to include a terrain/land-mask field we
      could reuse for Mountain Obscuration (avoiding a separate DEM
      entirely)?
+  3. EXACTLY which ceiling probability thresholds does NBM publish?
+     (Mountain Obscuration needs to interpolate a probability at an
+     arbitrary terrain-driven height, e.g. "critical ceiling 2,750 ft
+     AGL" -- so we need the real, complete set of published threshold
+     heights, not an assumption that it's just the 500/1000/3000 ft
+     flight-category boundaries.)
+  4. Does NBM separately publish a "lowest cloud base, any coverage"
+     field distinct from ceiling? (Ceiling by definition requires
+     BKN/OVC coverage; a scattered layer sitting right at ridge height
+     can still intermittently obscure a peak without ever qualifying
+     as a "ceiling" at all -- this is the "OCNL OBSC" case in real
+     AIRMET text, as opposed to continuous obscuration.)
 
 This needs a real internet connection to NOAA's servers, so it can't be
 run or verified inside a sandboxed dev environment -- run it via the
@@ -40,6 +52,7 @@ not be posted yet) or too old (rolled off the archive) -- try adjusting
 RUN_DATE a few hours/days in either direction.
 """
 
+import re
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -133,6 +146,40 @@ def show(label, rows):
         print(f"  [{r['message_num']}] {r['variable']:<10} {r['level']:<20} {r['forecast_time']:<20} {r['extra']}")
 
 
+PROB_THRESHOLD_RE = re.compile(r"prob\s*([<>])\s*([\d.]+)", re.IGNORECASE)
+
+
+def show_thresholds(label, rows):
+    """
+    Pulls the exact probability threshold values out of a set of rows
+    (e.g. every CEILING row) and prints the sorted, de-duplicated set,
+    converted from meters to feet -- this is the direct answer to
+    "does NBM publish enough thresholds to interpolate a Mountain
+    Obscuration probability at an arbitrary terrain-driven height, or
+    just the three flight-category boundaries (500/1000/3000 ft)?"
+    Meters-to-feet conversion matches the one already confirmed for
+    IFR's real fields (e.g. "prob <304.8" = 1000 ft, see
+    pipeline/hazards/ifr.py's docstring).
+    """
+    print("\n" + "=" * 70)
+    print(label)
+    print("=" * 70)
+    found = set()
+    for r in rows:
+        m = PROB_THRESHOLD_RE.search(r["_raw_line"])
+        if m:
+            op, meters_str = m.groups()
+            meters = float(meters_str)
+            found.add((op, meters))
+    if not found:
+        print("  (no 'prob <NUM' / 'prob >NUM' pattern found in these rows -- check")
+        print("  nbm_idx_raw.txt by hand, the encoding may not match IFR's fields)")
+        return
+    for op, meters in sorted(found, key=lambda t: t[1]):
+        feet = meters / 0.3048
+        print(f"  prob {op} {meters:>8.2f} m   (~{round(feet):>5} ft)")
+
+
 def main():
     print(f"Looking for NBM CONUS 'core' .idx: {RUN_DATE:%Y-%m-%d %H}Z, F{FORECAST_HOUR:03d}\n")
 
@@ -162,11 +209,45 @@ def main():
     def matches(keywords):
         return [r for r in rows if any(k.lower() in r["_raw_line"].lower() for k in keywords)]
 
-    show("Anything related to CEILING:", matches(["ceil"]))
+    ceiling_rows = matches(["ceil"])
+    show("Anything related to CEILING:", ceiling_rows)
+    show_thresholds(
+        "Distinct CEILING probability thresholds published "
+        "(need this to know how finely we can interpolate a terrain-driven "
+        "critical-ceiling probability for Mountain Obscuration):",
+        ceiling_rows,
+    )
+
     show("Anything related to VISIBILITY:", matches(["vis"]))
     show("Anything related to PROBABILITY:", matches(["prob", "%", "ppi"]))
-    show("Anything related to TERRAIN/HEIGHT/LAND:", matches(["hgt", "land", "orog"]))
-    show("Anything related to SKY COVER / CLOUD:", matches(["cld", "sky", "tcdc"]))
+
+    # Still the biggest open unknown for Mountain Obscuration: does NBM's
+    # own file include a usable terrain/orography field, so we can skip
+    # sourcing + reprojecting a separate external DEM entirely?
+    show(
+        "Anything related to TERRAIN/HEIGHT/LAND/OROGRAPHY (Mtn Obsc DEM question):",
+        matches(["hgt", "land", "orog", "elev"]),
+    )
+
+    # Fractional sky cover (e.g. TCDC = total cloud cover, a 0-100%
+    # coverage amount) is a DIFFERENT question from cloud BASE HEIGHT
+    # (how high the lowest layer sits) -- kept as separate categories
+    # below rather than one lumped "cloud" bucket, since Mountain
+    # Obscuration cares about height, not coverage fraction.
+    show(
+        "Anything related to fractional SKY COVER (coverage %, not height):",
+        matches(["sky", "tcdc"]),
+    )
+    # NOTE: previously searched "cld" only, which does NOT match the literal
+    # word "cloud" as a substring (c-l-o-u-d has no contiguous "c-l-d") --
+    # so a level field spelled out as "cloud base" rather than abbreviated
+    # would have been silently missed. "cloud" added explicitly below.
+    show(
+        "Anything related to CLOUD BASE HEIGHT (lowest layer, any coverage -- "
+        "distinct from CEILING, which by definition requires BKN/OVC; a "
+        "scattered layer right at ridge height is the 'OCNL OBSC' case):",
+        matches(["cld", "cloud", "cldbas"]),
+    )
 
     print("\nDone. Please share back everything printed above, plus nbm_full_inventory.csv")
     print("and/or nbm_idx_raw.txt if possible (both are small plain text).")
