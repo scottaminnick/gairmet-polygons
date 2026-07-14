@@ -133,6 +133,47 @@ html, body {
   margin-top: 2px;
 }
 
+.adjust-generate-btn {
+  width: 100%;
+  text-align: center;
+  margin-top: 6px;
+  border-color: var(--accent-ifr);
+  color: var(--accent-ifr);
+}
+
+.adjust-generate-btn:hover {
+  background: rgba(245, 166, 35, 0.15);
+}
+
+.generate-status {
+  display: block;
+  text-align: center;
+  font-size: 9px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  min-height: 1.2em;
+}
+
+.adjust-generate-btn {
+  width: 100%;
+  text-align: center;
+  margin-top: 6px;
+  border-color: var(--accent-ifr);
+  color: var(--accent-ifr);
+}
+
+.adjust-generate-btn:hover {
+  background: rgba(245, 166, 35, 0.12);
+}
+
+.generate-status {
+  display: block;
+  text-align: center;
+  margin-top: 4px;
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
 .panel-title {
   font-family: var(--font-mono);
   font-size: 11px;
