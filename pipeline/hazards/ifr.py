@@ -21,6 +21,17 @@ an OR condition (not mathematically exact unless the two fields'
 correlation happens to work out that way, but this was a deliberate,
 discussed simplification, not an oversight).
 
+CAUSE ATTRIBUTION: the two fields are kept SEPARATE all the way through
+to the final polygons (not just combined and discarded) specifically so
+each polygon can carry a "cause" property -- "CIG", "VIS", or "CIG/VIS"
+-- indicating whether ceiling, visibility, or both crossed threshold
+somewhere within that polygon's footprint. This matches how real
+forecaster-drawn G-AIRMET graphics annotate what's actually driving an
+IFR area (as opposed to just drawing an unlabeled blob). Weather-TYPE
+attribution (PCPN/BR/FG/HZ/FU/BLSN -- what's causing low visibility
+specifically) is a separate, larger effort requiring a different data
+source (NDFD's Predominant Weather grid) and is not yet implemented.
+
 RAW NBM RESOLUTION vs. FORECASTER-DRAWN LOOK: NBM's ~2.5km resolution
 produces far more small-scale detail than a real G-AIRMET forecaster
 draws by hand in N-AWIPS -- lots of tiny, separate polygons and jagged
@@ -32,14 +43,16 @@ that distinction matters.
 
 TWO-PHASE DESIGN (important for the web app's live parameter
 adjustment): this module is deliberately split into an EXPENSIVE,
-NBM-dependent phase (prepare_ifr_grid -- fetch + regrid + combine +
-Gaussian smooth) and a CHEAP, NBM-independent phase (polygonize_ifr_grid
--- threshold + merge + area filter + boundary smoothing, using the
-three forecaster-adjustable parameters). The pipeline (GitHub Actions)
-calls both via generate_ifr_polygons(); the web app calls ONLY
-polygonize_ifr_grid() against a cached copy of an already-prepared grid,
-so a forecaster can adjust threshold/radius/min-area and see results in
-about a second, without re-fetching from NBM each time.
+NBM-dependent phase (prepare_ifr_grid -- fetch + regrid + Gaussian
+smooth, kept as two SEPARATE grids) and a CHEAP, NBM-independent phase
+(polygonize_ifr_grid -- combine + threshold + merge + area filter +
+boundary smoothing + cause attribution, using the three forecaster-
+adjustable parameters). The pipeline (GitHub Actions) calls both via
+generate_ifr_polygons(); the web app calls ONLY polygonize_ifr_grid()
+against a cached copy of the two already-prepared grids, so a
+forecaster can adjust threshold/radius/min-area and see results (with
+correct cause attribution for whatever polygons result) in about a
+second, without re-fetching from NBM each time.
 
 This is also why fetch_probability_grid()'s imports of xarray and
 pipeline.fetch_nbm are deferred to INSIDE the function rather than at
@@ -56,6 +69,7 @@ from datetime import datetime, timedelta
 import numpy as np
 
 from pipeline.polygons import (
+    GridSpec,
     filter_polygons_by_area,
     grid_to_polygons,
     merge_nearby_polygons,
@@ -124,16 +138,21 @@ def fetch_probability_grid(date: datetime, fxx: int, filters: dict) -> tuple[np.
 def prepare_ifr_grid(date: datetime, fxx: int, target_resolution_deg: float = 0.025):
     """
     THE EXPENSIVE, NBM-DEPENDENT PHASE: fetches real NBM ceiling +
-    visibility probability data, regrids to a common regular lon/lat
-    grid, combines via max(), and applies the fixed (non-adjustable)
-    Gaussian smoothing pass. Needs real internet access to NOAA's
-    servers and the heavy cfgrib/xarray/eccodes stack -- this is what
-    runs in GitHub Actions, never in the web app.
+    visibility probability data, regrids each to a common regular
+    lon/lat grid, and applies the fixed (non-adjustable) Gaussian
+    smoothing pass to each INDIVIDUALLY. Needs real internet access to
+    NOAA's servers and the heavy cfgrib/xarray/eccodes stack -- this is
+    what runs in GitHub Actions, never in the web app.
 
-    Returns (combined_grid, grid_spec) -- pass straight into
-    polygonize_ifr_grid(), or cache it (see pipeline.polygons.
-    save_grid_cache) for later fast re-processing with different
-    forecaster-adjustable parameters.
+    Deliberately keeps ceiling and visibility SEPARATE (does not
+    combine via max() here) -- polygonize_ifr_grid() needs both
+    individually to attribute each final polygon's cause (ceiling,
+    visibility, or both).
+
+    Returns (ceiling_grid, visibility_grid, grid_spec) -- pass straight
+    into polygonize_ifr_grid(), or cache both (see
+    pipeline.polygons.save_grid_cache) for later fast re-processing
+    with different forecaster-adjustable parameters.
     """
     ceil_values, ceil_lats, ceil_lons = fetch_probability_grid(date, fxx, CEILING_PROB_FILTER)
     vis_values, vis_lats, vis_lons = fetch_probability_grid(date, fxx, VISIBILITY_PROB_FILTER)
@@ -148,17 +167,78 @@ def prepare_ifr_grid(date: datetime, fxx: int, target_resolution_deg: float = 0.
         vis_values, vis_lats, vis_lons, target_resolution_deg=target_resolution_deg
     )
 
-    # nan_to_num BEFORE combining/smoothing: regridding can leave NaN
-    # just outside the native grid's convex hull, and Gaussian
-    # smoothing would otherwise spread that NaN into a larger
-    # surrounding area than the original gap.
-    combined = np.maximum(np.nan_to_num(ceil_regridded), np.nan_to_num(vis_regridded))
-    combined = gaussian_smooth(combined, sigma_cells=GAUSSIAN_SIGMA_CELLS)
-    return combined, grid_spec
+    # nan_to_num BEFORE smoothing: regridding can leave NaN just
+    # outside the native grid's convex hull, and Gaussian smoothing
+    # would otherwise spread that NaN into a larger surrounding area
+    # than the original gap. Smoothed INDIVIDUALLY (not after
+    # combining) so cause attribution reflects the same smoothed data
+    # that actually gets thresholded.
+    ceil_regridded = gaussian_smooth(np.nan_to_num(ceil_regridded), sigma_cells=GAUSSIAN_SIGMA_CELLS)
+    vis_regridded = gaussian_smooth(np.nan_to_num(vis_regridded), sigma_cells=GAUSSIAN_SIGMA_CELLS)
+
+    return ceil_regridded, vis_regridded, grid_spec
+
+
+def _lonlat_ring_to_pixel_rowcol(ring_coords, grid_spec: GridSpec):
+    """
+    Converts a ring's (lon, lat) coordinates to fractional (row, col)
+    pixel coordinates -- the inverse of GridSpec.to_affine(). Used to
+    rasterize a final polygon back onto the grid it came from, to check
+    which underlying (ceiling/visibility) field actually drove it.
+    """
+    rows, cols = [], []
+    for lon, lat in ring_coords:
+        col = (lon - (grid_spec.west - grid_spec.dx / 2)) / grid_spec.dx
+        row = (lat - (grid_spec.north - grid_spec.dy / 2)) / grid_spec.dy
+        rows.append(row)
+        cols.append(col)
+    return rows, cols
+
+
+def _determine_cause(polygon, grid_spec: GridSpec, ceil_grid: np.ndarray, vis_grid: np.ndarray, threshold_pct: float) -> str:
+    """
+    Determines whether ceiling, visibility, or both crossed threshold
+    somewhere within a final polygon's footprint, using the ORIGINAL
+    (pre-combine) ceiling/visibility grids -- returns "CIG", "VIS",
+    "CIG/VIS", or "UNKNOWN" (the last only in a degenerate edge case,
+    e.g. a polygon smaller than a single grid cell after simplification).
+
+    Uses skimage.draw.polygon() to rasterize the polygon's EXTERIOR ring
+    back onto the grid (deliberately not subtracting holes -- for a
+    "does this condition occur anywhere in here" check, treating a
+    small hole's cells as part of the checked area is a harmless,
+    negligible over-inclusion, not worth the extra complexity). Handles
+    MultiPolygon (confirmed to occur in practice -- see
+    pipeline/export_xml.py's docstring) by checking across all parts.
+    """
+    from skimage.draw import polygon as sk_polygon
+
+    parts = list(polygon.geoms) if polygon.geom_type == "MultiPolygon" else [polygon]
+
+    ceil_hit = False
+    vis_hit = False
+    for part in parts:
+        rows, cols = _lonlat_ring_to_pixel_rowcol(part.exterior.coords, grid_spec)
+        rr, cc = sk_polygon(rows, cols, shape=ceil_grid.shape)
+        if len(rr) == 0:
+            continue
+        if (ceil_grid[rr, cc] >= threshold_pct).any():
+            ceil_hit = True
+        if (vis_grid[rr, cc] >= threshold_pct).any():
+            vis_hit = True
+
+    if ceil_hit and vis_hit:
+        return "CIG/VIS"
+    if ceil_hit:
+        return "CIG"
+    if vis_hit:
+        return "VIS"
+    return "UNKNOWN"
 
 
 def polygonize_ifr_grid(
-    combined: np.ndarray,
+    ceil_grid: np.ndarray,
+    vis_grid: np.ndarray,
     grid_spec,
     date: datetime,
     fxx: int,
@@ -167,20 +247,22 @@ def polygonize_ifr_grid(
     min_area_sq_mi: float = 3000.0,
 ) -> dict:
     """
-    THE CHEAP, NBM-INDEPENDENT PHASE: given an already-prepared
-    probability grid (see prepare_ifr_grid()), applies the three
-    forecaster-adjustable parameters and returns a GeoJSON
-    FeatureCollection shaped to resemble a forecaster-drawn product.
+    THE CHEAP, NBM-INDEPENDENT PHASE: given already-prepared ceiling and
+    visibility probability grids (see prepare_ifr_grid()), combines them,
+    applies the three forecaster-adjustable parameters, and returns a
+    GeoJSON FeatureCollection shaped to resemble a forecaster-drawn
+    product -- with each polygon's "cause" ("CIG", "VIS", or "CIG/VIS")
+    attributed against the ORIGINAL separate grids.
 
-    Safe to call repeatedly against the SAME cached grid with different
+    Safe to call repeatedly against the SAME cached grids with different
     parameter values -- no NBM access, no heavy geospatial parsing, just
     numpy/shapely/scipy/pyproj math. This is what the web app's live
     parameter-adjustment endpoint calls.
 
     Parameters
     ----------
-    combined : 2D array
-        Prepared probability grid from prepare_ifr_grid().
+    ceil_grid, vis_grid : 2D arrays
+        Prepared probability grids from prepare_ifr_grid().
     grid_spec : pipeline.polygons.GridSpec
         Matching grid_spec from prepare_ifr_grid().
     date : datetime
@@ -204,8 +286,11 @@ def polygonize_ifr_grid(
 
     Returns
     -------
-    dict (GeoJSON FeatureCollection)
+    dict (GeoJSON FeatureCollection) -- each feature's properties
+    include a per-polygon "cause" alongside the shared metadata.
     """
+    combined = np.maximum(ceil_grid, vis_grid)
+
     # Contour close to native resolution first -- preserves real sharp
     # features (e.g. a coastline) instead of blurring them away. Only a
     # tiny area filter here, just to drop single-pixel-scale noise; the
@@ -221,6 +306,14 @@ def polygonize_ifr_grid(
     polygons = [p.simplify(FINAL_SIMPLIFY_TOLERANCE_DEG, preserve_topology=True) for p in polygons]
     polygons = [p for p in polygons if not p.is_empty]
 
+    # Cause attribution computed on the FINAL polygon shapes (after all
+    # smoothing/simplification), so it matches exactly what's being
+    # displayed/exported rather than a slightly different pre-smoothing
+    # shape.
+    per_polygon_properties = [
+        {"cause": _determine_cause(p, grid_spec, ceil_grid, vis_grid, threshold_pct)} for p in polygons
+    ]
+
     valid_time = date + timedelta(hours=fxx)
     return polygons_to_feature_collection(
         polygons,
@@ -233,6 +326,7 @@ def polygonize_ifr_grid(
             "model_cycle": date.isoformat() + "Z",
             "forecast_hour": fxx,
         },
+        per_polygon_properties=per_polygon_properties,
     )
 
 
@@ -251,9 +345,9 @@ def generate_ifr_polygons(
     pipeline/test_live_ifr_fetch.py) that just want a one-shot result
     without caring about the two-phase split.
     """
-    combined, grid_spec = prepare_ifr_grid(date, fxx, target_resolution_deg=target_resolution_deg)
+    ceil_grid, vis_grid, grid_spec = prepare_ifr_grid(date, fxx, target_resolution_deg=target_resolution_deg)
     return polygonize_ifr_grid(
-        combined, grid_spec, date, fxx,
+        ceil_grid, vis_grid, grid_spec, date, fxx,
         threshold_pct=threshold_pct,
         neighborhood_radius_nm=neighborhood_radius_nm,
         min_area_sq_mi=min_area_sq_mi,
