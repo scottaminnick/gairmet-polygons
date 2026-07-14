@@ -274,23 +274,35 @@ def test_grid_cache_round_trip_within_quantization_tolerance():
     reduction (~70x in real-world testing) -- confirms the round trip
     preserves values within the expected +/-0.5 rounding tolerance, and
     that the GridSpec survives exactly (it's not quantized, no reason
-    for it to lose precision).
+    for it to lose precision). Also confirms multiple NAMED grids can
+    be cached together (needed for IFR's per-polygon cause attribution,
+    which requires keeping ceiling and visibility grids separate rather
+    than only their combined max).
     """
     import tempfile
     from pipeline.polygons import load_grid_cache, save_grid_cache
 
     rng = np.random.default_rng(0)
-    original_values = rng.uniform(0, 100, size=(50, 80)).astype(np.float32)
+    original_ceiling = rng.uniform(0, 100, size=(50, 80)).astype(np.float32)
+    original_visibility = rng.uniform(0, 100, size=(50, 80)).astype(np.float32)
     original_spec = GridSpec(west=-105.123, north=42.456, dx=0.025, dy=-0.025)
 
     with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as f:
         cache_path = f.name
-    save_grid_cache(cache_path, original_values, original_spec)
-    loaded_values, loaded_spec = load_grid_cache(cache_path)
+    save_grid_cache(cache_path, {"ceiling": original_ceiling, "visibility": original_visibility}, original_spec)
+    loaded_grids, loaded_spec = load_grid_cache(cache_path)
+
+    assert set(loaded_grids.keys()) == {"ceiling", "visibility"}
+    loaded_values = loaded_grids["ceiling"]
+    original_values = original_ceiling
 
     max_error = np.abs(original_values - loaded_values).max()
     print(f"\nMax quantization error: {max_error:.3f} (expected <= 0.5)")
     assert max_error <= 0.5001
+
+    # Confirm the SECOND grid round-trips correctly too, not just the first
+    vis_error = np.abs(original_visibility - loaded_grids["visibility"]).max()
+    assert vis_error <= 0.5001
 
     assert original_spec.west == loaded_spec.west
     assert original_spec.north == loaded_spec.north
@@ -339,6 +351,43 @@ def test_grid_to_polygons_correctly_handles_holes():
     assert donut.contains(ring_point), "A point in the ring itself should be included"
 
     print("[OK] Exactly one polygon with exactly one correctly-placed hole.")
+
+
+def test_per_polygon_properties_override_shared_ones():
+    """
+    per_polygon_properties lets different polygons in the same output
+    carry different values for a given key (e.g. IFR's "cause") on top
+    of properties shared by all (e.g. "hazard": "IFR") -- confirms both
+    the merging and the "per-polygon wins on conflict" behavior.
+    """
+    from shapely.geometry import box
+    from pipeline.polygons import polygons_to_feature_collection
+
+    polygons = [box(0, 0, 1, 1), box(5, 5, 6, 6)]
+    fc = polygons_to_feature_collection(
+        polygons,
+        properties={"hazard": "IFR", "threshold_pct": 50.0},
+        per_polygon_properties=[{"cause": "CIG"}, {"cause": "VIS"}],
+    )
+
+    assert len(fc["features"]) == 2
+    assert fc["features"][0]["properties"]["hazard"] == "IFR"
+    assert fc["features"][0]["properties"]["cause"] == "CIG"
+    assert fc["features"][1]["properties"]["cause"] == "VIS"
+    # shared property still present on both
+    assert fc["features"][1]["properties"]["threshold_pct"] == 50.0
+
+
+def test_per_polygon_properties_length_mismatch_raises():
+    from shapely.geometry import box
+    from pipeline.polygons import polygons_to_feature_collection
+
+    polygons = [box(0, 0, 1, 1), box(5, 5, 6, 6)]
+    try:
+        polygons_to_feature_collection(polygons, per_polygon_properties=[{"cause": "CIG"}])
+        assert False, "Should have raised on length mismatch"
+    except ValueError:
+        pass
 
 
 def test_feature_collection_round_trip():
