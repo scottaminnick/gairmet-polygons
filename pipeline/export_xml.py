@@ -50,12 +50,18 @@ def _format_ring(coords: list) -> str:
     return " ".join(f"{round(float(lon), COORD_DECIMAL_PLACES)},{round(float(lat), COORD_DECIMAL_PLACES)}" for lon, lat in coords)
 
 
-def _add_polygon_element(parent: ET.Element, polygon_id: int, geometry: dict) -> None:
+def _add_polygon_element(parent: ET.Element, polygon_id: int, geometry: dict, cause: str | None = None) -> None:
     """
     Adds one <Polygon> element for a single GeoJSON Polygon geometry
-    (exterior ring + any interior/hole rings).
+    (exterior ring + any interior/hole rings). cause ("CIG", "VIS", or
+    "CIG/VIS" -- see pipeline.hazards.ifr._determine_cause) is a
+    PER-POLYGON attribute, unlike the shared root-level ones, since
+    different polygons in the same output can have different causes.
     """
-    poly_el = ET.SubElement(parent, "Polygon", {"id": str(polygon_id)})
+    attrs = {"id": str(polygon_id)}
+    if cause:
+        attrs["cause"] = cause
+    poly_el = ET.SubElement(parent, "Polygon", attrs)
     rings = geometry["coordinates"]
     if not rings:
         return
@@ -78,12 +84,16 @@ def geojson_to_xml(feature_collection: dict) -> str:
     merge_nearby_polygons() earlier in the pipeline already flattens
     ITS OWN MultiPolygon results back into simple Polygons).
 
-    Root-level attributes come from the FIRST feature's properties
-    (all features in one of our FeatureCollections currently share
-    identical properties) -- any expected attribute that's simply
-    missing (e.g. older data generated before a field like
-    nbm_source_cycle existed) is silently omitted rather than written
-    as a literal "None".
+    Root-level attributes come from the FIRST feature's SHARED
+    properties (things like hazard/threshold/valid_time are currently
+    identical across every feature in one of our FeatureCollections).
+    PER-POLYGON properties -- currently just "cause" ("CIG", "VIS", or
+    "CIG/VIS", see pipeline.hazards.ifr._determine_cause) -- are read
+    from each feature individually instead, since different polygons in
+    the same output can have different causes. Either way, any expected
+    attribute that's simply missing (e.g. older data generated before a
+    field existed) is silently omitted rather than written as a literal
+    "None".
 
     Returns a pretty-printed XML string (UTF-8, with declaration).
     """
@@ -109,12 +119,20 @@ def geojson_to_xml(feature_collection: dict) -> str:
     polygon_id = 1
     for feature in features:
         geometry = feature["geometry"]
+        cause = feature.get("properties", {}).get("cause")
         if geometry["type"] == "Polygon":
-            _add_polygon_element(root, polygon_id, geometry)
+            _add_polygon_element(root, polygon_id, geometry, cause=cause)
             polygon_id += 1
         elif geometry["type"] == "MultiPolygon":
+            # A MultiPolygon's parts all share the ONE cause computed
+            # for the whole feature (cause attribution runs on the
+            # final, already-possibly-split shape -- see
+            # pipeline.hazards.ifr.polygonize_ifr_grid) -- reasonable,
+            # since parts of a single MultiPolygon typically arose from
+            # one contiguous hazard area getting pinched into pieces by
+            # boundary smoothing, not from genuinely different causes.
             for part_coords in geometry["coordinates"]:
-                _add_polygon_element(root, polygon_id, {"coordinates": part_coords})
+                _add_polygon_element(root, polygon_id, {"coordinates": part_coords}, cause=cause)
                 polygon_id += 1
 
     raw = ET.tostring(root, encoding="unicode")
