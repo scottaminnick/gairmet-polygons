@@ -101,7 +101,7 @@ Currently working:
       pinching a thin-necked shape into two pieces — so the converter
       splits those into separate `<Polygon>` elements rather than
       assuming every feature is already simple.
-- [x] **Ceiling vs. visibility cause attribution** — each polygon now
+- [x] **Ceiling vs. visibility cause attribution** — each polygon
       carries a `cause` property ("CIG", "VIS", or "CIG/VIS"), matching
       how real forecaster-drawn G-AIRMET graphics annotate what's
       actually driving an IFR area rather than drawing an unlabeled
@@ -109,18 +109,63 @@ Currently working:
       SEPARATE all the way through polygon generation (previously
       combined via `max()` and discarded early) — see
       `pipeline.hazards.ifr._determine_cause`, which rasterizes each
-      final polygon back onto the two original grids using
+      final polygon back onto the original grids using
       `skimage.draw.polygon()` to check which one(s) actually crossed
-      threshold within that polygon's footprint. `pipeline.polygons.
+      threshold within that polygon's footprint.
+- [x] **Weather-type attribution (PCPN/BR/FG)** — polygons whose cause
+      includes VIS additionally carry a `weather_type` property. This is
+      a deliberately custom heuristic, NOT NDFD's or NBM's own
+      categorical "Predominant Weather" grid — both use an identical,
+      genuinely complex GRIB2 "Local Use Section" encoding (confirmed
+      directly: NBM's own docs use the same wording as NDFD's) that
+      would have required a fragile new dependency chain (`grib2io` →
+      `libg2c` → `gfortran` → `iplib`, confirmed to fail to build
+      cleanly without real effort — see git history for the full
+      investigation). Instead, built from three simple NBM probability
+      fields already accessible through the existing fetch pipeline:
+      measurable precipitation (`APCP:...:prob >0.254`, using the
+      RECENT 1-hour accumulation window specifically, not the
+      cumulative one, so it reflects "is it precipitating right now"
+      rather than "did it rain at some point since the model run
+      started"), visibility < 3SM (already fetched for cause
+      attribution), and a new visibility < 1SM field for fog. HZ/FU/
+      BLSN are deliberately not covered — per confirmed AWC practice,
+      rare enough to add manually within NMAP when finalizing a
+      first-guess draft.
+      Two AWC labeling conventions confirmed directly (not assumed)
+      before building this: BR is a catch-all, always included
+      alongside more specific descriptors when visibility crosses the
+      3SM threshold at all (never replaced by FG — a foggy area shows
+      "BR/FG", not just "FG"); and where PCPN and FG conditions
+      genuinely overlap in the same location, PCPN wins (precipitation
+      is the more likely actual cause of reduced visibility when it's
+      genuinely occurring there).
+      **Geographic splitting by cause**: rather than one merged "is
+      this IFR" polygon set with a multi-tag label bolted on afterward,
+      polygons are generated from THREE INDEPENDENT layers (CIG, PCPN,
+      and visibility-non-precip), each fed real (not boolean-flattened)
+      probability values so marching squares still produces genuine
+      sub-pixel-accurate contours. This means precip-driven and
+      fog-driven visibility restriction areas come out as genuinely
+      separate polygon shapes when they're geographically distinct —
+      confirmed directly with a test asserting exactly 2 separate
+      polygons (not one merged blob) for two far-apart regions. One real
+      bug caught during testing: ceiling and visibility restrictions
+      coinciding (e.g. a stratus deck) is common, not rare, and an
+      earlier version of the layer logic generated a redundant,
+      perfectly-overlapping duplicate polygon in that case (one from the
+      CIG layer, one from the visibility layer) — fixed by excluding
+      visibility-affected cells from the CIG layer specifically (cause
+      attribution still correctly shows "CIG/VIS" there regardless of
+      which layer produced the polygon's shape). `pipeline.polygons.
       save_grid_cache`/`load_grid_cache` were generalized from a single
-      array to a dict of named grids to support this (both the
+      array to a dict of named grids to support all of this — both the
       scheduled pipeline and the web app's live-recompute endpoint need
-      both grids, not just their combined max). Weather-TYPE
-      attribution (PCPN/BR/FG/HZ/FU/BLSN — what's specifically causing
-      low visibility) is a separate, larger future effort requiring a
-      different data source (NDFD's Predominant Weather grid, which
-      NBM's own weather grid doesn't fully cover — notably missing
-      smoke/FU).
+      all four grids (ceiling, visibility×2 thresholds, precipitation),
+      not just a combined max. Benchmarked at under 1 second on
+      realistic full-CONUS-scale data despite running the full merge/
+      filter/smooth pipeline three times instead of once — still within
+      the "feels live" range for the slider-adjustment UI.
 - [x] **"Generate" button** in the ADJUST panel — downloads both
       GeoJSON and XML for whatever the sliders currently say, not just
       the default scheduled version. Client-side only (fetches from the
