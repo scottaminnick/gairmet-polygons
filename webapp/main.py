@@ -136,11 +136,11 @@ def recompute_ifr_snapshot(
     from pipeline.hazards.ifr import polygonize_ifr_grid
     from pipeline.polygons import load_grid_cache
 
-    values, grid_spec = load_grid_cache(cache_path)
+    grids, grid_spec = load_grid_cache(cache_path)
     model_cycle = datetime.fromisoformat(manifest["model_cycle"].rstrip("Z"))
 
     fc = polygonize_ifr_grid(
-        values, grid_spec, model_cycle, snapshot["actual_forecast_hour"],
+        grids["ceiling"], grids["visibility"], grid_spec, model_cycle, snapshot["actual_forecast_hour"],
         threshold_pct=threshold_pct,
         neighborhood_radius_nm=neighborhood_radius_nm,
         min_area_sq_mi=min_area_sq_mi,
