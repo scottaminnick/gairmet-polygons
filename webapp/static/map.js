@@ -28,9 +28,11 @@ const layers = {
     onEachFeature: (feature, layer) => {
       const p = feature.properties || {};
       const causeRow = p.cause ? `<div>cause: ${p.cause}</div>` : '';
+      const weatherTypeRow = p.weather_type ? `<div>weather: ${p.weather_type}</div>` : '';
       layer.bindPopup(
         `<div><strong>${p.hazard || 'IFR'}</strong></div>` +
         causeRow +
+        weatherTypeRow +
         `<div>threshold: &ge;${p.threshold_pct ?? '?'}%</div>` +
         `<div>valid: ${formatValidTime(p.valid_time)}</div>`
       );
