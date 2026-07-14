@@ -27,8 +27,10 @@ const layers = {
     },
     onEachFeature: (feature, layer) => {
       const p = feature.properties || {};
+      const causeRow = p.cause ? `<div>cause: ${p.cause}</div>` : '';
       layer.bindPopup(
         `<div><strong>${p.hazard || 'IFR'}</strong></div>` +
+        causeRow +
         `<div>threshold: &ge;${p.threshold_pct ?? '?'}%</div>` +
         `<div>valid: ${formatValidTime(p.valid_time)}</div>`
       );
@@ -206,6 +208,57 @@ document.getElementById('adjust-reset').addEventListener('click', async () => {
     await loadIfrSnapshot(currentFxx, { refit: false });
   } catch (err) {
     console.error('Failed to reset to scheduled snapshot:', err);
+  }
+});
+
+// --- Triggers a client-side file download from in-memory text content
+//     (no server round-trip needed beyond the fetch already done) ---
+function downloadTextFile(content, filename, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// --- Generate button: downloads BOTH GeoJSON and XML for whatever the
+//     sliders currently say -- lets a forecaster dial in thresholds,
+//     review the result, then hand off exactly that draft rather than
+//     only ever being able to export the default scheduled version. ---
+document.getElementById('adjust-generate').addEventListener('click', async () => {
+  if (currentFxx == null || !liveAdjustAvailable) return;
+
+  const threshold = document.getElementById('adjust-threshold').value;
+  const radius = document.getElementById('adjust-radius').value;
+  const minArea = document.getElementById('adjust-minarea').value;
+  const fxxStr = String(currentFxx).padStart(2, '0');
+  const statusEl = document.getElementById('generate-status');
+  const baseName = `ifr_f${fxxStr}_t${threshold}_r${radius}_a${minArea}`;
+
+  statusEl.textContent = 'generating...';
+  try {
+    const baseUrl = `/api/hazards/ifr/${fxxStr}/recompute?threshold_pct=${threshold}&neighborhood_radius_nm=${radius}&min_area_sq_mi=${minArea}`;
+
+    const geojsonResp = await fetch(baseUrl);
+    if (!geojsonResp.ok) throw new Error(`GeoJSON fetch failed (${geojsonResp.status})`);
+    const geojsonText = await geojsonResp.text();
+
+    const xmlResp = await fetch(`${baseUrl}&format=xml`);
+    if (!xmlResp.ok) throw new Error(`XML fetch failed (${xmlResp.status})`);
+    const xmlText = await xmlResp.text();
+
+    downloadTextFile(geojsonText, `${baseName}.geojson`, 'application/geo+json');
+    downloadTextFile(xmlText, `${baseName}.xml`, 'application/xml');
+
+    statusEl.textContent = 'downloaded';
+    setTimeout(() => { statusEl.textContent = ''; }, 3000);
+  } catch (err) {
+    console.error('Generate failed:', err);
+    statusEl.textContent = 'error (see console)';
   }
 });
 
