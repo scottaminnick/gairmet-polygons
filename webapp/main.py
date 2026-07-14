@@ -32,7 +32,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -98,6 +98,7 @@ def recompute_ifr_snapshot(
     threshold_pct: float = 50.0,
     neighborhood_radius_nm: float = 50.0,
     min_area_sq_mi: float = 3000.0,
+    format: str = "geojson",
 ):
     """
     Live parameter adjustment: re-runs ONLY the cheap, NBM-independent
@@ -111,7 +112,10 @@ def recompute_ifr_snapshot(
 
     Query params: threshold_pct, neighborhood_radius_nm, min_area_sq_mi
     (all optional, matching the same forecaster-adjustable parameters
-    used by the scheduled pipeline).
+    used by the scheduled pipeline); format=xml returns a simple XML
+    representation instead of GeoJSON (see pipeline/export_xml.py) --
+    e.g. for handing a live-adjusted draft off to N-AWIPS conversion
+    tooling, not just the as-scheduled version from /{fxx}?format=xml.
     """
     manifest, snapshot = _load_manifest_and_snapshot(fxx)
 
@@ -141,21 +145,39 @@ def recompute_ifr_snapshot(
         neighborhood_radius_nm=neighborhood_radius_nm,
         min_area_sq_mi=min_area_sq_mi,
     )
+
+    if format == "xml":
+        from pipeline.export_xml import geojson_to_xml
+        return Response(content=geojson_to_xml(fc), media_type="application/xml")
     return fc
 
 
 @app.get("/api/hazards/ifr/{fxx}")
-def get_ifr_snapshot(fxx: str):
+def get_ifr_snapshot(fxx: str, format: str = "geojson"):
     """
     A specific forecast-hour snapshot, e.g. /api/hazards/ifr/06 for the
     6-hour snapshot. fxx is the REQUESTED forecast hour as it appears
     in the filename (ifr_f06.geojson) -- this may differ from the hour
     actually used internally for F00 specifically, since NBM has no
     true 0-hour file (see the manifest's "substituted" field).
+
+    format=xml returns a simple XML representation instead of GeoJSON
+    (see pipeline/export_xml.py) -- for handing off to N-AWIPS
+    conversion tooling. Deliberately NOT the official NWS USWX/GML
+    standard (a much heavier lift); N-AWIPS' own existing software
+    handles that conversion downstream from this simpler draft form.
     """
     path = OUTPUT_DIR / f"ifr_f{fxx}.geojson"
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"No snapshot for F{fxx}")
+
+    if format == "xml":
+        from pipeline.export_xml import geojson_to_xml
+
+        with open(path) as f:
+            fc = json.load(f)
+        return Response(content=geojson_to_xml(fc), media_type="application/xml")
+
     return FileResponse(path, media_type="application/geo+json")
 
 
