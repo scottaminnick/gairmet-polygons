@@ -229,12 +229,22 @@ class GridSpec:
         return Affine(self.dx, 0.0, self.west - self.dx / 2, 0.0, self.dy, self.north - self.dy / 2)
 
 
-def save_grid_cache(path, values: np.ndarray, grid_spec: GridSpec) -> None:
+def save_grid_cache(path, grids: dict[str, np.ndarray], grid_spec: GridSpec) -> None:
     """
-    Saves a prepared grid + its GridSpec to a compressed .npz file, so
-    it can be re-processed later (e.g. with different forecaster-
-    adjustable parameters) without re-fetching or re-preparing from
-    source data.
+    Saves one or more NAMED grids + a shared GridSpec to a compressed
+    .npz file, so they can be re-processed later (e.g. with different
+    forecaster-adjustable parameters) without re-fetching or
+    re-preparing from source data.
+
+    Takes a dict rather than a single array so a hazard can cache
+    multiple related grids that need to stay separate (e.g. IFR keeps
+    ceiling and visibility probability separate, rather than only
+    their combined max, so cause attribution -- "is this polygon a
+    ceiling problem, a visibility problem, or both" -- can be computed
+    per-polygon at recompute time too, not just once at generation
+    time). Deliberately still hazard-agnostic: this module doesn't
+    know or care what the grids represent, just that there are one or
+    more of them sharing one grid_spec.
 
     Quantizes values to uint8 (rounded to the nearest integer
     percentage point, 0-100) rather than storing float32. This isn't
@@ -246,29 +256,32 @@ def save_grid_cache(path, values: np.ndarray, grid_spec: GridSpec) -> None:
     for a threshold decision, and irrelevant compared to NBM's own
     forecast uncertainty.
     """
+    quantized = {name: np.round(g).astype(np.uint8) for name, g in grids.items()}
     np.savez_compressed(
         path,
-        values=np.round(values).astype(np.uint8),
         west=grid_spec.west,
         north=grid_spec.north,
         dx=grid_spec.dx,
         dy=grid_spec.dy,
+        **quantized,
     )
 
 
-def load_grid_cache(path) -> tuple[np.ndarray, GridSpec]:
+def load_grid_cache(path) -> tuple[dict[str, np.ndarray], GridSpec]:
     """
-    Loads a grid + GridSpec previously saved with save_grid_cache().
-    Returns values as float32 (upcast from the stored uint8) so
-    downstream code (thresholding, smoothing) works exactly as it does
-    with a freshly-prepared grid, without needing to know about the
-    on-disk quantization.
+    Loads the named grids + GridSpec previously saved with
+    save_grid_cache(). Returns grids as float32 (upcast from the stored
+    uint8) so downstream code (thresholding, smoothing) works exactly
+    as it does with a freshly-prepared grid, without needing to know
+    about the on-disk quantization.
     """
     data = np.load(path)
     grid_spec = GridSpec(
         west=float(data["west"]), north=float(data["north"]), dx=float(data["dx"]), dy=float(data["dy"])
     )
-    return data["values"].astype(np.float32), grid_spec
+    reserved_keys = {"west", "north", "dx", "dy"}
+    grids = {name: data[name].astype(np.float32) for name in data.files if name not in reserved_keys}
+    return grids, grid_spec
 
 
 def _rings_to_nested_polygons(rings: list) -> list:
@@ -436,16 +449,33 @@ def grid_to_polygons(
 def polygons_to_feature_collection(
     polygons: list,
     properties: dict | None = None,
+    per_polygon_properties: list[dict] | None = None,
 ) -> geojson.FeatureCollection:
     """
-    Wrap a list of shapely polygons into a GeoJSON FeatureCollection,
-    attaching the same `properties` dict to every feature (e.g.
-    hazard type, threshold used, valid time).
+    Wrap a list of shapely polygons into a GeoJSON FeatureCollection.
+
+    `properties` is attached to EVERY feature (e.g. hazard type,
+    threshold used, valid time) -- unchanged from before.
+
+    `per_polygon_properties`, if given, is a list the same length as
+    `polygons`, letting each polygon carry its OWN extra properties on
+    top of the shared ones (e.g. IFR's per-polygon "cause": "CIG",
+    "VIS", or "CIG/VIS" -- different polygons in the same output can
+    have different causes, so this can't just be part of the one
+    shared `properties` dict). Per-polygon values win if a key appears
+    in both dicts.
     """
     properties = properties or {}
+    if per_polygon_properties is None:
+        per_polygon_properties = [{}] * len(polygons)
+    if len(per_polygon_properties) != len(polygons):
+        raise ValueError(
+            f"per_polygon_properties length ({len(per_polygon_properties)}) must match "
+            f"polygons length ({len(polygons)})"
+        )
     features = [
-        geojson.Feature(geometry=shapely_mapping(poly), properties=dict(properties))
-        for poly in polygons
+        geojson.Feature(geometry=shapely_mapping(poly), properties={**properties, **extra})
+        for poly, extra in zip(polygons, per_polygon_properties)
     ]
     return geojson.FeatureCollection(features)
 
