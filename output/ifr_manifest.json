@@ -1,8 +1,8 @@
 {
   "model_cycle": "2026-07-15T15:00:00Z",
   "nbm_source_cycle": "2026-07-15T09:00:00Z",
-  "threshold_pct": 30.0,
-  "neighborhood_radius_nm": 100.0,
+  "threshold_pct": 50.0,
+  "neighborhood_radius_nm": 50.0,
   "min_area_sq_mi": 3000.0,
   "snapshots": [
     {
@@ -12,7 +12,7 @@
       "valid_time": "2026-07-15T15:00:00Z",
       "filename": "ifr_f00.geojson",
       "cache_filename": "ifr_f00_grid.npz",
-      "feature_count": 14
+      "feature_count": 4
     },
     {
       "requested_forecast_hour": 3,
@@ -21,7 +21,7 @@
       "valid_time": "2026-07-15T18:00:00Z",
       "filename": "ifr_f03.geojson",
       "cache_filename": "ifr_f03_grid.npz",
-      "feature_count": 7
+      "feature_count": 11
     },
     {
       "requested_forecast_hour": 6,
@@ -30,7 +30,7 @@
       "valid_time": "2026-07-15T21:00:00Z",
       "filename": "ifr_f06.geojson",
       "cache_filename": "ifr_f06_grid.npz",
-      "feature_count": 12
+      "feature_count": 8
     },
     {
       "requested_forecast_hour": 9,
@@ -39,7 +39,7 @@
       "valid_time": "2026-07-16T00:00:00Z",
       "filename": "ifr_f09.geojson",
       "cache_filename": "ifr_f09_grid.npz",
-      "feature_count": 13
+      "feature_count": 11
     },
     {
       "requested_forecast_hour": 12,
@@ -48,7 +48,7 @@
       "valid_time": "2026-07-16T03:00:00Z",
       "filename": "ifr_f12.geojson",
       "cache_filename": "ifr_f12_grid.npz",
-      "feature_count": 8
+      "feature_count": 5
     }
   ]
 }
