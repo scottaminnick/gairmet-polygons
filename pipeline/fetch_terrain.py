@@ -48,7 +48,7 @@ contiguous array, with no tile-boundary-halo bookkeeping needed.
 WHAT THIS PRODUCES
 -------------------
 Two grids, both on the SAME regular lon/lat grid convention as
-pipeline.regrid's NBM output (pipeline.polygons.GridSpec), cached
+pipeline.regrid's NBM output (pipeline.grid_spec.GridSpec), cached
 together in one compressed .npz:
 
   baseline_elevation_ft : "local" terrain elevation, lightly smoothed
@@ -106,7 +106,7 @@ from scipy.ndimage import maximum_filter, uniform_filter
 # pipeline/generate_latest_ifr.py already uses, for the same reason.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pipeline.polygons import GridSpec
+from pipeline.grid_spec import GridSpec
 
 # ---------------------------------------------------------------------------
 # Configuration
