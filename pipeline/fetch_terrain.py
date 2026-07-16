@@ -92,10 +92,19 @@ from __future__ import annotations
 import gzip
 import math
 import os
+import sys
+from pathlib import Path
 
 import numpy as np
 import requests
 from scipy.ndimage import maximum_filter, uniform_filter
+
+# Needed because this script is meant to be run directly
+# (`python3 pipeline/fetch_terrain.py`), which only puts this file's own
+# folder on Python's import path, not the repo root -- so `pipeline` the
+# package is otherwise invisible to itself. Same fix
+# pipeline/generate_latest_ifr.py already uses, for the same reason.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.polygons import GridSpec
 
