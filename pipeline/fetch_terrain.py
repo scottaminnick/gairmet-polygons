@@ -476,6 +476,38 @@ def compute_output_grids(
 # CLI entry point
 # ---------------------------------------------------------------------------
 
+def load_terrain_grid(path: str = "data/terrain/terrain_grid.npz") -> tuple[dict[str, np.ndarray], GridSpec, float]:
+    """
+    Loads the terrain grid this module's main() saves. Deliberately NOT
+    pipeline.polygons.load_grid_cache() / save_grid_cache() -- those
+    quantize to uint8 assuming 0-100 percentage values (see
+    save_grid_cache's docstring), which would be catastrophically wrong
+    for elevation data in feet (silently clipping everything above 255
+    ft!). This module's main() always used a plain np.savez_compressed()
+    with int16 grids specifically to avoid that, so this loader matches
+    that format exactly rather than reusing a loader built for a
+    different (and here, actively harmful) convention.
+
+    Returns (grids, grid_spec, terrain_radius_nm) -- grids is a dict
+    with "baseline_elevation_ft" and "ridge_elevation_ft" (as float32,
+    upcast from the stored int16, so downstream math works the same way
+    it would with any other prepared grid). terrain_radius_nm is
+    returned SEPARATELY, not lumped into grids -- it's a single scalar
+    baked in at fetch time (see TERRAIN_RADIUS_NM's docstring), not a
+    spatial grid.
+    """
+    data = np.load(path)
+    grid_spec = GridSpec(
+        west=float(data["west"]), north=float(data["north"]), dx=float(data["dx"]), dy=float(data["dy"])
+    )
+    grids = {
+        "baseline_elevation_ft": data["baseline_elevation_ft"].astype(np.float32),
+        "ridge_elevation_ft": data["ridge_elevation_ft"].astype(np.float32),
+    }
+    terrain_radius_nm = float(data["terrain_radius_nm"])
+    return grids, grid_spec, terrain_radius_nm
+
+
 def main(output_path: str = "data/terrain/terrain_grid.npz") -> None:
     print(f"Fetching {len(list_conus_tiles())} Skadi tiles covering {CONUS_BOUNDS}...")
     mosaic, mosaic_grid_spec = assemble_intermediate_mosaic()
