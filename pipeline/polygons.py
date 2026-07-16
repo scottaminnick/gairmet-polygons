@@ -417,6 +417,55 @@ def grid_to_polygons(
     return polygons
 
 
+def lonlat_ring_to_pixel_rowcol(ring_coords, grid_spec: GridSpec):
+    """
+    Converts a ring's (lon, lat) coordinates to fractional (row, col)
+    pixel coordinates -- the inverse of GridSpec.to_affine(). Used to
+    rasterize a final polygon back onto the grid(s) it came from, to
+    check which underlying conditions actually drove it.
+
+    Promoted here from pipeline/hazards/ifr.py (originally private,
+    `_lonlat_ring_to_pixel_rowcol`) once a second hazard
+    (pipeline/hazards/mtn_obsc.py) needed the exact same "rasterize a
+    polygon back onto its source grid for attribution" capability --
+    genuinely hazard-agnostic geometry, not IFR-specific, so it belongs
+    here rather than being duplicated per hazard module.
+    """
+    rows, cols = [], []
+    for lon, lat in ring_coords:
+        col = (lon - (grid_spec.west - grid_spec.dx / 2)) / grid_spec.dx
+        row = (lat - (grid_spec.north - grid_spec.dy / 2)) / grid_spec.dy
+        rows.append(row)
+        cols.append(col)
+    return rows, cols
+
+
+def rasterize_polygon_cells(polygon, grid_spec: GridSpec, shape: tuple):
+    """
+    Returns (rr, cc) pixel indices for all grid cells inside a polygon
+    (handles MultiPolygon by pooling cells across all parts). Shared by
+    every hazard module's cause/weather-type attribution logic -- each
+    needs "which cells does this final polygon's footprint cover" for
+    its own threshold checks against different underlying grids.
+
+    Promoted here from pipeline/hazards/ifr.py -- see
+    lonlat_ring_to_pixel_rowcol()'s docstring for why.
+    """
+    from skimage.draw import polygon as sk_polygon
+
+    parts = list(polygon.geoms) if polygon.geom_type == "MultiPolygon" else [polygon]
+    all_rr, all_cc = [], []
+    for part in parts:
+        rows, cols = lonlat_ring_to_pixel_rowcol(part.exterior.coords, grid_spec)
+        rr, cc = sk_polygon(rows, cols, shape=shape)
+        if len(rr):
+            all_rr.append(rr)
+            all_cc.append(cc)
+    if not all_rr:
+        return np.array([], dtype=int), np.array([], dtype=int)
+    return np.concatenate(all_rr), np.concatenate(all_cc)
+
+
 def polygons_to_feature_collection(
     polygons: list,
     properties: dict | None = None,
