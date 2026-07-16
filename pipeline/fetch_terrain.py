@@ -91,6 +91,7 @@ from __future__ import annotations
 
 import gzip
 import math
+import os
 
 import numpy as np
 import requests
@@ -131,10 +132,16 @@ RAW_TILE_SIZE = 3601  # Skadi/SRTM1: 3601x3601, 1 arcsecond, tiles overlap
                        # their neighbor's edge pixel by design.
 TILE_DOWNSAMPLE_FACTOR = INTERMEDIATE_ARCSEC  # 1 arcsec -> 30 arcsec
 
-TERRAIN_RADIUS_NM = 12.0  # PLACEHOLDER -- see module docstring; easy to
-                           # change here and re-run once a real value is
-                           # chosen (e.g. after comparing against the
-                           # legacy NMAP mountain-obscuration shapefile).
+TERRAIN_RADIUS_NM = float(os.environ.get("MTN_OBSC_TERRAIN_RADIUS_NM", "12.0"))
+# PLACEHOLDER default -- see module docstring. Overridable via the
+# MTN_OBSC_TERRAIN_RADIUS_NM env var (wired to a workflow_dispatch input
+# in .github/workflows/fetch_terrain.yml) so changing it doesn't require
+# editing code -- but note this is fundamentally different from IFR's
+# threshold_pct/neighborhood_radius_nm sliders: those are applied at
+# HAZARD-GENERATION time, on the fly, against an already-fixed input
+# grid. This radius is baked into ridge_elevation_ft at FETCH time --
+# changing it means re-running this whole script, not adjusting a
+# runtime slider in the eventual mtn_obsc.py.
 
 SRTM_VOID = -32768  # SRTM/Skadi sentinel for "no data" -- treated as sea
                      # level (0) rather than a real elevation.
