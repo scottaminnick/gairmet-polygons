@@ -50,7 +50,7 @@ jobs:
       # this specific script actually touches" reasoning already used
       # for inspect_nbm.yml.
       - name: Install dependencies
-        run: pip install requests numpy scipy
+        run: pip install requests numpy scipy affine
 
       - name: Fetch + process terrain grid
         env:
