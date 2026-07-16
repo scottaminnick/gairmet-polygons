@@ -115,8 +115,10 @@ from pipeline.polygons import (
     GridSpec,
     filter_polygons_by_area,
     grid_to_polygons,
+    lonlat_ring_to_pixel_rowcol,
     merge_nearby_polygons,
     polygons_to_feature_collection,
+    rasterize_polygon_cells,
     smooth_polygon_boundary,
 )
 from pipeline.regrid import regrid_to_regular_latlon
@@ -179,11 +181,23 @@ FINAL_SIMPLIFY_TOLERANCE_DEG = 0.05
 LAYER_OFF = -1.0
 
 
-def fetch_probability_grid(date: datetime, fxx: int, filters: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def fetch_probability_grid(
+    date: datetime, fxx: int, filters: dict, finder=None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Fetches one probability field's message from NBM and returns
     (values, native_lats, native_lons) as decoded by cfgrib/eccodes
     from that message's own grid definition.
+
+    finder : callable(rows, **filters) -> dict, optional
+        Defaults to pipeline.fetch_nbm.find_message (substring-inclusion
+        matching). Overridable so callers needing exclusion logic (e.g.
+        pipeline/hazards/mtn_obsc.py isolating NBM's deterministic
+        ceiling field from its probability siblings, which share the
+        same variable+level and differ only by the ABSENCE of "prob"
+        text -- something plain substring-inclusion can't express) can
+        plug in their own finder without duplicating this function's
+        fetch/parse/xarray-open boilerplate.
 
     NOTE: imports xarray and pipeline.fetch_nbm locally (not at module
     level) -- see this module's docstring for why that matters for the
@@ -195,7 +209,7 @@ def fetch_probability_grid(date: datetime, fxx: int, filters: dict) -> tuple[np.
 
     raw_idx, grib_url = fetch_idx(date, fxx)
     rows = parse_idx(raw_idx)
-    message = find_message(rows, **filters)
+    message = (finder or find_message)(rows, **filters)
     raw_bytes = fetch_message_bytes(grib_url, rows, message)
     path = save_message_to_tempfile(raw_bytes)
 
@@ -273,43 +287,8 @@ def prepare_ifr_grid(date: datetime, fxx: int, target_resolution_deg: float = 0.
     return ceil_regridded, vis3_regridded, vis1_regridded, precip_regridded, grid_spec
 
 
-def _lonlat_ring_to_pixel_rowcol(ring_coords, grid_spec: GridSpec):
-    """
-    Converts a ring's (lon, lat) coordinates to fractional (row, col)
-    pixel coordinates -- the inverse of GridSpec.to_affine(). Used to
-    rasterize a final polygon back onto the grids it came from, to
-    check which underlying conditions actually drove it.
-    """
-    rows, cols = [], []
-    for lon, lat in ring_coords:
-        col = (lon - (grid_spec.west - grid_spec.dx / 2)) / grid_spec.dx
-        row = (lat - (grid_spec.north - grid_spec.dy / 2)) / grid_spec.dy
-        rows.append(row)
-        cols.append(col)
-    return rows, cols
-
-
-def _rasterize_polygon_cells(polygon, grid_spec: GridSpec, shape: tuple):
-    """
-    Returns (rr, cc) pixel indices for all grid cells inside a polygon
-    (handles MultiPolygon by pooling cells across all parts). Shared by
-    _determine_cause() and _determine_weather_type() -- both need "which
-    cells does this final polygon's footprint cover" for their own
-    threshold checks against different underlying grids.
-    """
-    from skimage.draw import polygon as sk_polygon
-
-    parts = list(polygon.geoms) if polygon.geom_type == "MultiPolygon" else [polygon]
-    all_rr, all_cc = [], []
-    for part in parts:
-        rows, cols = _lonlat_ring_to_pixel_rowcol(part.exterior.coords, grid_spec)
-        rr, cc = sk_polygon(rows, cols, shape=shape)
-        if len(rr):
-            all_rr.append(rr)
-            all_cc.append(cc)
-    if not all_rr:
-        return np.array([], dtype=int), np.array([], dtype=int)
-    return np.concatenate(all_rr), np.concatenate(all_cc)
+# lonlat_ring_to_pixel_rowcol() and rasterize_polygon_cells() have moved
+# to pipeline/polygons.py (imported above) -- see that module for why.
 
 
 def _determine_cause(polygon, grid_spec: GridSpec, ceil_grid: np.ndarray, vis_grid: np.ndarray, threshold_pct: float) -> str:
@@ -328,7 +307,7 @@ def _determine_cause(polygon, grid_spec: GridSpec, ceil_grid: np.ndarray, vis_gr
     MultiPolygon (confirmed to occur in practice -- see
     pipeline/export_xml.py's docstring) by checking across all parts.
     """
-    rr, cc = _rasterize_polygon_cells(polygon, grid_spec, ceil_grid.shape)
+    rr, cc = rasterize_polygon_cells(polygon, grid_spec, ceil_grid.shape)
     if len(rr) == 0:
         return "UNKNOWN"
 
@@ -364,7 +343,7 @@ def _determine_weather_type(
     normally happen for a polygon whose cause included VIS, but handled
     gracefully rather than assumed).
     """
-    rr, cc = _rasterize_polygon_cells(polygon, grid_spec, vis3_grid.shape)
+    rr, cc = rasterize_polygon_cells(polygon, grid_spec, vis3_grid.shape)
     if len(rr) == 0:
         return None
 
