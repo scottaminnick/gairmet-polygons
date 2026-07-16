@@ -54,17 +54,44 @@ def test_list_conus_tiles_covers_known_point():
     assert len(tiles) == 61 * 28
 
 
-def test_parse_hgt_bytes_void_becomes_sea_level():
+def test_parse_hgt_bytes_void_becomes_sea_level_and_converts_to_feet():
     tile_size = 4  # small synthetic tile, not a real 3601
+    # Using clean meter values that convert to clean feet values, so the
+    # expected numbers below aren't messy fractions:
+    # 152.4 m = 500 ft, 304.8 m = 1000 ft, -32768 = void sentinel
     raw = np.array(
-        [[100, 200, -32768, 300], [400, 500, 600, 700], [0, 0, 0, 0], [1, 2, 3, 4]],
+        [[152, 200, -32768, 305], [304, 500, 600, 700], [0, 0, 0, 0], [1, 2, 3, 4]],
         dtype=">i2",
     )
     parsed = _parse_hgt_bytes(raw.tobytes(), tile_size=tile_size)
     assert parsed.shape == (tile_size, tile_size)
-    assert parsed[0, 2] == 0.0  # void sentinel -> sea level
-    assert parsed[0, 0] == 100.0
-    assert parsed[1, 3] == 700.0
+    assert parsed[0, 2] == 0.0  # void sentinel -> sea level (not 0 feet of -32768!)
+    # 152 m -> feet, confirms the conversion actually happened (this would
+    # have been 152.0 -- i.e. still in meters -- before the fix)
+    assert abs(parsed[0, 0] - 152 / 0.3048) < 0.01
+    assert parsed[0, 0] > 400  # sanity: 152 m is ~499 ft, nowhere near 152
+
+
+def test_parse_hgt_bytes_rejects_implausible_values():
+    """
+    Guards against the exact failure mode found in a real corrupted run:
+    a bad source pixel (not the -32768 void sentinel, something else
+    entirely -- e.g. a coastal SRTM/ETOPO1 blending artifact) that is
+    wildly outside any real elevation on Earth must be caught and zeroed
+    here, at the earliest point, rather than silently surviving into
+    later aggregation and potentially wrapping around when eventually
+    cast to int16.
+    """
+    tile_size = 4
+    raw = np.array(
+        [[100, 200, 30000, 300], [400, 500, 600, 700], [0, 0, 0, 0], [1, 2, 3, 4]],
+        dtype=">i2",
+    )
+    # 30000 m -> ~98,425 ft, wildly implausible (well above Everest)
+    parsed = _parse_hgt_bytes(raw.tobytes(), tile_size=tile_size)
+    assert parsed[0, 2] == 0.0  # implausible value zeroed, not left to propagate
+    # Neighboring legitimate values should be completely unaffected
+    assert parsed[0, 0] > 0
 
 
 def test_radius_deg_equator_is_symmetric():
@@ -166,6 +193,47 @@ def test_compute_output_grids_finds_synthetic_peak():
     # Baseline should NOT have jumped to peak height anywhere -- it's a
     # local smoothing, not a nearby-ridge search
     assert baseline_ft.max() < 3000
+
+
+def test_compute_output_grids_clamps_implausible_values_instead_of_wrapping():
+    """
+    Guards against the exact silent-corruption failure mode found in a
+    real run: simulates a bad value that somehow slipped past
+    _parse_hgt_bytes' per-tile check (e.g. a future bug, or a value
+    introduced by the max/mean filtering itself) and confirms the
+    defensive final clamp catches it -- rather than numpy silently
+    wrapping it into a nonsense int16 value (which is what actually
+    happened before this fix: exactly 32767 and implausible large
+    negatives, with no exception or visible error at all).
+    """
+    intermediate_deg = 30 / 3600.0
+    n_rows, n_cols = 60, 60
+    mosaic = np.full((n_rows, n_cols), 2000.0, dtype=np.float32)
+    # A value nowhere near real elevation -- if this reached the int16
+    # cast unclamped, it would wrap around into a nonsense value rather
+    # than raising any error at all.
+    mosaic[30, 30] = 500_000.0
+
+    west, north = -110.0, 40.0
+    mosaic_grid_spec = GridSpec(west=west, north=north, dx=intermediate_deg, dy=-intermediate_deg)
+    output_bounds = (west, north - n_rows * intermediate_deg, west + n_cols * intermediate_deg, north)
+
+    baseline_ft, ridge_ft, _ = compute_output_grids(
+        mosaic,
+        mosaic_grid_spec,
+        terrain_radius_nm=12.0,
+        output_resolution_deg=90 / 3600.0,
+        output_bounds=output_bounds,
+    )
+
+    # The critical assertion: nothing in the output should be sitting at
+    # int16's exact boundary values (32767 / -32768), which is the
+    # unambiguous fingerprint of a value that wrapped rather than being
+    # caught and clamped.
+    assert not np.any(ridge_ft == 32767)
+    assert not np.any(ridge_ft == -32768)
+    assert not np.any(baseline_ft == 32767)
+    assert not np.any(baseline_ft == -32768)
 
 
 if __name__ == "__main__":
