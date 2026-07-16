@@ -1,0 +1,70 @@
+name: Generate Latest Mountain Obscuration Polygons
+
+on:
+  # Fires 35 minutes after each real G-AIRMET cycle hour (03/09/15/21Z)
+  # -- deliberately staggered LATER than generate_ifr.yml's 20-minute
+  # mark (not just cosmetically different): this hazard fetches NINE
+  # real NBM fields per forecast hour vs. IFR's four (see
+  # pipeline/hazards/mtn_obsc.py's docstring), so it takes noticeably
+  # longer to run. Running both workflows at the same offset risked
+  # both trying to commit/push to the repo around the same time; this
+  # gap gives IFR's run room to finish and push first.
+  schedule:
+    - cron: "35 3,9,15,21 * * *"
+  # Manual trigger, with optional overrides so a forecaster can
+  # regenerate with different settings without editing code.
+  workflow_dispatch:
+    inputs:
+      threshold_pct:
+        description: "Probability threshold (%) for hazard polygons"
+        required: false
+        default: "50"
+      clearance_margin_ft:
+        description: "Terrain clearance margin (ft) added to real terrain rise before interpolating probability -- 0/500/1000/2000 are the standard options"
+        required: false
+        default: "500"
+      neighborhood_radius_nm:
+        description: "Neighborhood-max smoothing radius (nautical miles) -- pulls nearby smaller areas into larger ones"
+        required: false
+        default: "50"
+      min_area_sq_mi:
+        description: "Minimum polygon area (sq mi) -- matches AIRMET/G-AIRMET's historical 'widespread' criterion by default"
+        required: false
+        default: "3000"
+
+# Needed to commit the regenerated forecast-hour snapshots back to
+# the repo -- the default GITHUB_TOKEN is read-only unless granted this.
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements-pipeline.txt
+
+      - name: Generate latest Mountain Obscuration polygons
+        env:
+          MTN_OBSC_THRESHOLD_PCT: ${{ github.event.inputs.threshold_pct || '50' }}
+          MTN_OBSC_CLEARANCE_MARGIN_FT: ${{ github.event.inputs.clearance_margin_ft || '500' }}
+          MTN_OBSC_NEIGHBORHOOD_RADIUS_NM: ${{ github.event.inputs.neighborhood_radius_nm || '50' }}
+          MTN_OBSC_MIN_AREA_SQ_MI: ${{ github.event.inputs.min_area_sq_mi || '3000' }}
+        run: python3 pipeline/generate_latest_mtn_obsc.py
+
+      - name: Commit and push updated output
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add output/
+          git diff --staged --quiet && echo "No changes to commit" && exit 0
+          git commit -m "Auto-update Mountain Obscuration polygons [skip ci]"
+          git push
