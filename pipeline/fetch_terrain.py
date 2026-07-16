@@ -155,6 +155,25 @@ TERRAIN_RADIUS_NM = float(os.environ.get("MTN_OBSC_TERRAIN_RADIUS_NM", "12.0"))
 SRTM_VOID = -32768  # SRTM/Skadi sentinel for "no data" -- treated as sea
                      # level (0) rather than a real elevation.
 
+METERS_TO_FEET = 1.0 / 0.3048
+
+# Generous real-world bounds, in FEET -- Death Valley (-282 ft, lowest
+# point in North America) and Denali (20,310 ft, highest), both with
+# wide margin. Anything outside this after unit conversion is treated
+# as bad data (a source artifact, not a real elevation) and zeroed out
+# at the earliest possible point, rather than being allowed to
+# propagate into later aggregation steps and potentially silently wrap
+# around when finally cast to int16. This check exists because of a
+# real corrupted run: coastal tiles (where this dataset blends SRTM
+# land data with ETOPO1 bathymetry to fill in oceans -- see
+# https://github.com/tilezen/joerd/blob/master/docs/formats.md)
+# produced values that survived the entire pipeline and wrapped around
+# into int16 garbage (exactly 32767, and implausible large-magnitude
+# negatives) completely silently -- no exception, no warning, just a
+# corrupted .npz. This turns that into a loud, visible, safe clamp.
+PLAUSIBLE_ELEVATION_FT_MIN = -1500.0
+PLAUSIBLE_ELEVATION_FT_MAX = 20500.0
+
 SKADI_BASE_URL = "https://s3.amazonaws.com/elevation-tiles-prod/skadi"
 
 
@@ -199,7 +218,7 @@ def list_conus_tiles(
 def _parse_hgt_bytes(raw_bytes: bytes, tile_size: int = RAW_TILE_SIZE) -> np.ndarray:
     """
     Decode raw (already gunzipped) .hgt bytes into a (tile_size, tile_size)
-    float32 array of elevation in meters.
+    float32 array of elevation in FEET.
 
     .hgt files store 16-bit signed big-endian integers, row-major,
     starting from the NORTHWEST corner (row 0 = northernmost, matching
@@ -207,10 +226,26 @@ def _parse_hgt_bytes(raw_bytes: bytes, tile_size: int = RAW_TILE_SIZE) -> np.nda
     Worth double-checking against one real downloaded tile once we have
     network access to confirm; this is standard SRTM convention but
     hasn't been confirmed against Skadi's actual bytes yet.
+
+    Values are stored in METERS in the source file -- converted to feet
+    here so every function downstream of this one can assume feet
+    without needing to know or care about the source encoding.
     """
     arr = np.frombuffer(raw_bytes, dtype=">i2").reshape(tile_size, tile_size)
     arr = arr.astype(np.float32)
     arr[arr == SRTM_VOID] = 0.0
+    arr *= METERS_TO_FEET
+
+    implausible = (arr < PLAUSIBLE_ELEVATION_FT_MIN) | (arr > PLAUSIBLE_ELEVATION_FT_MAX)
+    n_bad = int(implausible.sum())
+    if n_bad:
+        print(
+            f"  WARNING: {n_bad} pixel(s) outside plausible elevation range "
+            f"({PLAUSIBLE_ELEVATION_FT_MIN}, {PLAUSIBLE_ELEVATION_FT_MAX}) ft "
+            f"in this tile -- zeroing them out. Sample bad value: {arr[implausible].flat[0]:.1f} ft."
+        )
+        arr[implausible] = 0.0
+
     return arr
 
 
@@ -405,6 +440,28 @@ def compute_output_grids(
     # "the ground here," not get dragged back toward ridge height by a
     # second max operation.
     baseline_out = _block_mean_pool(baseline_full, ratio)
+
+    # Defensive final check, in addition to the per-tile validation in
+    # _parse_hgt_bytes -- belt-and-suspenders. If ANY float32 value here
+    # is still outside int16's representable range (or NaN/Inf) when we
+    # cast below, numpy does NOT raise an error by default -- it silently
+    # wraps/corrupts (exactly what happened on a real run: coastal tiles
+    # produced values that reached this point uncaught and wrapped into
+    # exactly 32767 and implausible negatives, with no exception at all).
+    # Clamping explicitly here, with a loud print if it ever actually
+    # triggers, converts "silent data corruption" into "impossible."
+    for name, grid in (("baseline", baseline_out), ("ridge", ridge_out)):
+        bad = ~np.isfinite(grid) | (grid < -32768) | (grid > 32767)
+        n_bad = int(np.sum(bad))
+        if n_bad:
+            print(
+                f"  WARNING: {n_bad} pixel(s) in the FINAL {name} grid were still "
+                f"outside int16 range (or NaN/Inf) after per-tile validation -- "
+                f"clamping to 0 rather than letting numpy silently wrap them. "
+                f"This means a bad value slipped past _parse_hgt_bytes' check; "
+                f"worth investigating which tile it came from."
+            )
+            grid[bad] = 0.0
 
     west, south, east, north = output_bounds
     out_grid_spec = GridSpec(west=west, north=north, dx=output_resolution_deg, dy=-output_resolution_deg)
