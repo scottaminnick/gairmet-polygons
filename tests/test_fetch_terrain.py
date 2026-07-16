@@ -25,7 +25,7 @@ from pipeline.fetch_terrain import (
     skadi_tile_name,
     skadi_url,
 )
-from pipeline.polygons import GridSpec
+from pipeline.grid_spec import GridSpec
 
 
 def test_skadi_tile_name_examples():
