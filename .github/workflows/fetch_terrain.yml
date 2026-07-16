@@ -1,0 +1,79 @@
+name: Fetch Terrain Grid (Mountain Obscuration)
+
+# Manual trigger only -- deliberately NOT on a schedule. Unlike
+# generate_ifr.yml, terrain doesn't change forecast to forecast, so
+# this only needs to run once (or rarely -- e.g. if coverage is ever
+# widened, or terrain_radius_nm is changed, see the input below).
+#
+# IMPORTANT DISTINCTION from generate_ifr.yml's threshold_pct /
+# neighborhood_radius_nm / min_area_sq_mi inputs: those are applied at
+# HAZARD-GENERATION time, on the fly, against an already-fixed grid --
+# a forecaster can change them and immediately see different polygons
+# from the same underlying data. terrain_radius_nm below is different:
+# it gets BAKED INTO ridge_elevation_ft at fetch time. Changing it
+# means re-running this whole workflow, not flipping a runtime slider.
+on:
+  workflow_dispatch:
+    inputs:
+      terrain_radius_nm:
+        description: "Radius (nm) to search for the highest nearby ridge/peak -- baked into the cached grid at fetch time, not a runtime slider"
+        required: false
+        default: "12.0"
+
+# Needed to commit the fetched/processed terrain grid back to the repo
+# -- the default GITHUB_TOKEN is read-only unless granted this (same
+# reason generate_ifr.yml needs it).
+permissions:
+  contents: write
+
+jobs:
+  fetch_terrain:
+    runs-on: ubuntu-latest
+    # This fetches on the order of 1,700 individual tiles from a
+    # public S3 bucket with no official SLA (see pipeline/fetch_terrain.py's
+    # module docstring) -- generous timeout so a slow run doesn't get
+    # killed partway, without letting a genuinely stuck job run forever.
+    timeout-minutes: 90
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Deliberately just these three, not the full
+      # requirements-pipeline.txt -- this script talks to a plain S3
+      # bucket over HTTPS, not GRIB2/NBM, so it doesn't need
+      # cfgrib/xarray/herbie-data/pyproj/etc. Same "only install what
+      # this specific script actually touches" reasoning already used
+      # for inspect_nbm.yml.
+      - name: Install dependencies
+        run: pip install requests numpy scipy
+
+      - name: Fetch + process terrain grid
+        env:
+          MTN_OBSC_TERRAIN_RADIUS_NM: ${{ github.event.inputs.terrain_radius_nm || '12.0' }}
+        run: python3 pipeline/fetch_terrain.py
+
+      # Backup/inspection copy independent of the git commit below --
+      # useful if the commit step ever fails (e.g. branch protection)
+      # or if you just want to eyeball the output without pulling the
+      # branch locally.
+      - name: Upload terrain grid artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terrain-grid
+          path: data/terrain/terrain_grid.npz
+          if-no-files-found: warn
+
+      - name: Commit and push terrain grid
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/terrain/
+          git diff --staged --quiet && echo "No changes to commit" && exit 0
+          git commit -m "Update cached terrain grid (terrain_radius_nm=${{ github.event.inputs.terrain_radius_nm || '12.0' }}) [skip ci]"
+          git push
