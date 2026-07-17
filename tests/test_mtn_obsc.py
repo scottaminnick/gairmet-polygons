@@ -11,7 +11,6 @@ synthetic data, don't try to mock the full NBM/cfgrib fetch chain.
 """
 
 import sys
-import time
 from pathlib import Path
 
 import numpy as np
@@ -266,7 +265,9 @@ def test_polygonize_generates_polygon_over_real_relief():
 
 
 # ---------------------------------------------------------------------------
-# prepare_mtn_obsc_grid -- concurrent fetch orchestration
+# prepare_mtn_obsc_grid -- sequential fetch orchestration
+# (previously concurrent -- see prepare_mtn_obsc_grid's docstring for the
+# full diagnostic story of why that was tried, then reverted)
 # ---------------------------------------------------------------------------
 
 def _fake_native_grid(fill_value: float):
@@ -274,51 +275,41 @@ def _fake_native_grid(fill_value: float):
     need to be realistic, just enough for regrid_to_regular_latlon to
     run without crashing. The actual values are irrelevant to what
     these tests check (the ORCHESTRATION logic -- correct result
-    mapping regardless of completion order -- not the numeric content)."""
+    mapping to the right key -- not the numeric content)."""
     lons, lats = np.meshgrid(np.linspace(-110, -100, 8), np.linspace(35, 45, 8))
     values = np.full((8, 8), fill_value)
     return values, lats, lons
 
 
-def test_prepare_mtn_obsc_grid_maps_results_correctly_regardless_of_completion_order(monkeypatch, tmp_path):
+def test_prepare_mtn_obsc_grid_maps_each_field_to_the_correct_key(monkeypatch, tmp_path):
     """
-    The concurrent fetch in prepare_mtn_obsc_grid submits all ten
-    fields' fetches at once and reassembles results by KEY as each
-    completes -- NOT by submission order (as_completed() explicitly does
-    not preserve it). This is exactly the kind of thing that's easy to
-    get subtly wrong (an off-by-one or shared-mutable-state bug would
-    silently mix up which grid ends up under which name). Confirmed here
-    by giving every one of the ten fields a DISTINCT fill value and an
-    ARTIFICIAL, DELIBERATELY VARIED sleep delay (so real completion
-    order is scrambled relative to submission order), then checking
-    every result landed under the correct key.
+    Confirms every one of the ten fields' results lands under the
+    correct dict key -- straightforward for a sequential loop, but still
+    worth confirming directly rather than assuming, especially since
+    this was a genuinely easy place to introduce a subtle bug when this
+    was a concurrent design (see prepare_mtn_obsc_grid's docstring).
+    Giving every field a DISTINCT fill value makes any accidental
+    cross-wiring between fields immediately obvious.
     """
-    import random
-
     fake_values = {
         500: 10.0, 1000: 20.0, 2000: 30.0, 3000: 40.0, 6600: 50.0,
     }
 
     def fake_fetch_ceiling_prob_grid(date, fxx, threshold_ft):
-        time.sleep(random.uniform(0, 0.05))
         return _fake_native_grid(fake_values[threshold_ft])
 
     def fake_fetch_deterministic_ceiling_grid(date, fxx):
-        time.sleep(random.uniform(0, 0.05))
         return _fake_native_grid(60.0)
 
     def fake_fetch_cloud_base_grid(date, fxx):
-        time.sleep(random.uniform(0, 0.05))
         return _fake_native_grid(70.0)
 
     def fake_fetch_precip_probability_grid(date, fxx):
-        time.sleep(random.uniform(0, 0.05))
         return _fake_native_grid(80.0)
 
     def fake_fetch_probability_grid(date, fxx, filters):
         # Used directly for BOTH vis3 and vis1 -- distinguish by filter
         # content the same way the real filters do.
-        time.sleep(random.uniform(0, 0.05))
         if filters is mtn_obsc.VISIBILITY_PROB_FILTER:
             return _fake_native_grid(90.0)
         return _fake_native_grid(100.0)
@@ -407,97 +398,3 @@ if __name__ == "__main__":
     import pytest
 
     pytest.main([__file__, "-v"])
-
-
-# ---------------------------------------------------------------------------
-# prepare_mtn_obsc_grid concurrency -- proves genuine wall-clock speedup,
-# not just that the parallelized code runs without error. Fixes the real
-# ~30+ minute production runtime that had to be manually cancelled (see
-# prepare_mtn_obsc_grid's docstring for the full diagnosis).
-# ---------------------------------------------------------------------------
-
-def _measure_fake_sequential_baseline(fake_fetch, values, lats, lons):
-    """
-    Honestly measures what the OLD sequential prepare_mtn_obsc_grid would
-    have taken for 10 fields, using the SAME fake fetch + REAL regrid +
-    REAL smooth (not just the fetch delay alone) -- the regrid/smooth
-    step turned out to be real, non-negligible cost in practice (the
-    output grid is always the full CONUS size regardless of how small
-    the input is), so a fair comparison has to include it on both sides.
-    """
-    import time
-
-    from pipeline.regrid import regrid_to_regular_latlon
-    from pipeline.smoothing import gaussian_smooth
-
-    t0 = time.monotonic()
-    for _ in range(10):
-        fake_fetch()
-        regridded, _ = regrid_to_regular_latlon(
-            values, lats, lons, target_bounds=(-126.0, 22.0, -65.0, 50.0), target_resolution_deg=0.025
-        )
-        gaussian_smooth(np.nan_to_num(regridded), sigma_cells=0.6)
-    return time.monotonic() - t0
-
-
-def test_prepare_mtn_obsc_grid_fetches_concurrently_not_sequentially():
-    """
-    Patches all ten field-fetch functions with fakes that each sleep for
-    a fixed delay before returning a small synthetic grid, then measures
-    real wall-clock time for the whole prepare_mtn_obsc_grid() call
-    against an honestly-measured sequential-equivalent baseline (see
-    _measure_fake_sequential_baseline -- NOT just 10*DELAY, since
-    regrid+smooth turned out to be real, non-negligible cost too, not
-    something safe to ignore in the comparison).
-    """
-    import time
-    from unittest.mock import patch
-
-    import numpy as np
-
-    from pipeline.hazards import mtn_obsc
-
-    DELAY = 0.3  # seconds per fake fetch -- small enough for a fast test suite
-
-    # A small synthetic lon/lat grid -- regrid+smooth cost here is
-    # dominated by the OUTPUT grid size (always the full CONUS box
-    # regardless of input size), not by how big this input is.
-    lons, lats = np.meshgrid(np.linspace(-110, -100, 6), np.linspace(30, 40, 6))
-    values = np.full_like(lons, 50.0)
-
-    def fake_fetch(*_args, **_kwargs):
-        time.sleep(DELAY)
-        return values, lats, lons
-
-    with patch.object(mtn_obsc, "fetch_ceiling_prob_grid", side_effect=fake_fetch), patch.object(
-        mtn_obsc, "fetch_deterministic_ceiling_grid", side_effect=fake_fetch
-    ), patch.object(mtn_obsc, "fetch_cloud_base_grid", side_effect=fake_fetch), patch.object(
-        mtn_obsc, "fetch_precip_probability_grid", side_effect=fake_fetch
-    ), patch.object(mtn_obsc, "fetch_probability_grid", side_effect=fake_fetch):
-        start = time.monotonic()
-        result = mtn_obsc.prepare_mtn_obsc_grid(
-            __import__("datetime").datetime(2026, 7, 16, 12), 6, terrain_grid_path="data/terrain/terrain_grid.npz"
-        )
-        elapsed = time.monotonic() - start
-
-    elapsed_sequential_equivalent = _measure_fake_sequential_baseline(fake_fetch, values, lats, lons)
-    # Empirically measured on a 1-CPU sandbox (see prepare_mtn_obsc_grid's
-    # docstring): concurrent gives ~2.3x speedup here, NOT a naive ~5x
-    # (MAX_CONCURRENT_FETCHES) -- the CPU-bound regrid+smooth portion
-    # genuinely doesn't parallelize much under Python's GIL with limited
-    # cores, only the I/O-bound fetch wait does. A real GitHub Actions
-    # runner (2 vCPUs) should do at least as well, likely better. Bound
-    # set conservatively below the measured ratio to avoid flakiness on
-    # a loaded CI runner, while still catching a real regression back to
-    # fully sequential behavior.
-    assert elapsed < elapsed_sequential_equivalent / 1.5, (
-        f"Expected concurrent fetching to be at least 1.5x faster than the "
-        f"{elapsed_sequential_equivalent:.1f}s sequential-equivalent baseline, "
-        f"took {elapsed:.1f}s instead -- looks like this regressed back to sequential fetching."
-    )
-
-    # Confirm results were assembled correctly despite concurrent,
-    # non-deterministic completion order -- not just "it was fast."
-    assert set(result["ceiling_prob"].keys()) == set(mtn_obsc.CEILING_PROB_THRESHOLDS_FT)
-    assert result["deterministic_ceiling"] is not None
-    assert result["cloud_base"] is not None
