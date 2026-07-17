@@ -5,19 +5,31 @@ __pycache__/
 venv/
 
 # Generated outputs - ignored by default so ad-hoc local/test runs
-# don't clutter the repo, EXCEPT the files generate_ifr.yml deliberately
-# commits and overwrites on schedule -- those are what the web app
-# actually serves. Without these negation lines, 'git add' would
-# silently refuse to stage them (matches .gitignore), the workflow's
-# commit step would never have anything staged, and the site would
-# never update. (ifr_manifest.json isn't a .geojson file, so it isn't
-# caught by the pattern below at all -- no exception needed for it.)
+# don't clutter the repo, EXCEPT the files generate_ifr.yml / 
+# generate_mtn_obsc.yml deliberately commit and overwrite on schedule --
+# those are what the web app actually serves. Without these negation
+# lines, 'git add' would silently refuse to stage them (matches
+# .gitignore), the workflow's commit step would never have anything
+# staged, and the site would never update. Confirmed directly: this is
+# exactly what happened when generate_mtn_obsc.yml first ran for real --
+# mtn_obsc_manifest.json committed fine (plain .json, not caught by
+# either pattern below), but every mtn_obsc_f*.geojson and
+# mtn_obsc_f*_grid.npz was silently dropped, because the exception lines
+# below only ever existed for IFR's five filenames, not Mountain
+# Obscuration's. (ifr_manifest.json / mtn_obsc_manifest.json aren't
+# .geojson files, so neither is caught by the pattern at all -- no
+# exception needed for either.)
 output/*.geojson
 !output/ifr_f00.geojson
 !output/ifr_f03.geojson
 !output/ifr_f06.geojson
 !output/ifr_f09.geojson
 !output/ifr_f12.geojson
+!output/mtn_obsc_f00.geojson
+!output/mtn_obsc_f03.geojson
+!output/mtn_obsc_f06.geojson
+!output/mtn_obsc_f09.geojson
+!output/mtn_obsc_f12.geojson
 
 # Cached prepared grids -- power the web app's live parameter-adjustment
 # endpoint (re-threshold/merge/filter without re-fetching from NBM).
@@ -28,6 +40,11 @@ output/*.npz
 !output/ifr_f06_grid.npz
 !output/ifr_f09_grid.npz
 !output/ifr_f12_grid.npz
+!output/mtn_obsc_f00_grid.npz
+!output/mtn_obsc_f03_grid.npz
+!output/mtn_obsc_f06_grid.npz
+!output/mtn_obsc_f09_grid.npz
+!output/mtn_obsc_f12_grid.npz
 
 # Large cached terrain/DEM files - regenerate locally, don't commit
 data/terrain/*.tif
