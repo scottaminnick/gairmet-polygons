@@ -131,7 +131,7 @@ deterministic value with no probability distribution to interpolate the
 way ceiling has. Flagged explicitly rather than half-modeled.
 
 TWO-PHASE DESIGN, identical split to IFR: prepare_mtn_obsc_grid() is the
-expensive, NBM-dependent phase (fetch NINE real NBM fields -- five
+expensive, NBM-dependent phase (fetch TEN real NBM fields -- five
 ceiling-probability thresholds, deterministic ceiling, cloud base,
 precip, and two visibility thresholds -- regrid every one of them onto
 the EXACT SAME fixed grid as the cached terrain data, smooth). This is a
@@ -153,6 +153,8 @@ asserts this alignment explicitly rather than trusting it silently.
 
 from __future__ import annotations
 
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from functools import partial
 
@@ -362,6 +364,13 @@ def interpolate_terrain_relative_probability(
     return derived, is_extrapolated
 
 
+MAX_CONCURRENT_FETCHES = 5
+# PLACEHOLDER, same spirit as MOUNTAINOUS_RELIEF_THRESHOLD_FT -- a
+# deliberately conservative starting point (half of the 10 fields at
+# once), not a documented NOAA rate limit calibrated against anything.
+# See prepare_mtn_obsc_grid()'s docstring for why this exists at all.
+
+
 def prepare_mtn_obsc_grid(
     date: datetime,
     fxx: int,
@@ -369,7 +378,7 @@ def prepare_mtn_obsc_grid(
     target_resolution_deg: float = OUTPUT_RESOLUTION_DEG,
 ):
     """
-    THE EXPENSIVE, NBM-DEPENDENT PHASE: fetches all nine real NBM fields
+    THE EXPENSIVE, NBM-DEPENDENT PHASE: fetches all TEN real NBM fields
     (five ceiling-probability thresholds, deterministic ceiling, cloud
     base, precip, and two visibility thresholds), regrids every one onto
     the EXACT SAME fixed grid as the cached terrain data (see module
@@ -377,7 +386,43 @@ def prepare_mtn_obsc_grid(
     loads the cached terrain grid -- asserting its GridSpec matches
     rather than trusting it silently.
 
-    Returns a dict (deliberately not a long positional tuple -- nine
+    PARALLELIZED across fields (bounded by MAX_CONCURRENT_FETCHES): a
+    real production run of the original SEQUENTIAL version took over 30
+    minutes and had to be manually cancelled. The arithmetic explains
+    why cleanly, without needing to suspect anything Mountain-
+    Obscuration-specific in the actual math (which is fast, pure numpy):
+    10 fields x 5 forecast hours = 50 total sequential fetch+cfgrib-open
+    round trips, vs. IFR's 4 fields x 5 hours = 20 -- 2.5x more round
+    trips, proportionally explaining a run 2.5x IFR's own runtime.
+    Every one of these 10 fields is fully independent (no data
+    dependency between them), and this work is I/O-bound (network wait
+    via `requests`, plus cfgrib's own file I/O -- both release the
+    GIL), so concurrent fetching lets that wait time overlap across
+    multiple fields at once instead of serializing all of it.
+
+    THREADS, NOT PROCESSES -- worth knowing if this ever needs revisiting:
+    each fetch writes to and reads from its own independent tempfile (see
+    pipeline.hazards.ifr.fetch_probability_grid), so there's no shared
+    mutable state between concurrent calls, which is the good case for
+    thread-safety. What's genuinely NOT confirmed (no way to test this
+    without live network + cfgrib access) is whether cfgrib/eccodes' own
+    C bindings are fully thread-safe under concurrent calls. If a real
+    run ever shows cfgrib-related crashes, hangs, or corrupted-looking
+    output specifically under this concurrent path (and not the old
+    sequential one), that would be the signal -- the fix is a one-line
+    swap from ThreadPoolExecutor to ProcessPoolExecutor (the function
+    being parallelized has no shared state to worry about either way),
+    at the cost of higher per-worker memory from separate processes.
+    Worth testing via a manual workflow_dispatch run first, watched
+    directly, before relying on it for the unattended scheduled runs.
+
+    Prints numbered progress (e.g. "[3/10] ceiling <2000ft") with timing
+    for each field's fetch and regrid separately -- in COMPLETION order,
+    not a fixed 1-10 sequence, since concurrent tasks finish whenever
+    they actually finish. That's expected and fine; this is diagnostic
+    output, not a guarantee about ordering.
+
+    Returns a dict (deliberately not a long positional tuple -- ten
     NBM fields plus two terrain fields is too many positions to keep
     straight by memory, unlike IFR's four) with keys: "ceiling_prob"
     (dict keyed by threshold_ft -> grid), "deterministic_ceiling",
@@ -387,25 +432,70 @@ def prepare_mtn_obsc_grid(
     time, NOT a parameter of this function).
     """
     target_bounds = CONUS_BOUNDS  # see module docstring -- must match fetch_terrain.py exactly
+    TOTAL_FIELDS = 10
+    prep_start = time.monotonic()
 
-    def _fetch_and_regrid(values_lats_lons):
-        values, lats, lons = values_lats_lons
+    def _fetch_and_regrid(fetch_fn):
+        t0 = time.monotonic()
+        values, lats, lons = fetch_fn()
+        t1 = time.monotonic()
         regridded, gs = regrid_to_regular_latlon(
             values, lats, lons, target_bounds=target_bounds, target_resolution_deg=target_resolution_deg
         )
-        return gaussian_smooth(np.nan_to_num(regridded), sigma_cells=GAUSSIAN_SIGMA_CELLS), gs
+        smoothed = gaussian_smooth(np.nan_to_num(regridded), sigma_cells=GAUSSIAN_SIGMA_CELLS)
+        t2 = time.monotonic()
+        return smoothed, gs, t1 - t0, t2 - t1
 
-    ceiling_prob_grids = {}
+    # (result_key, label, fetch_fn) for all ten fields -- result_key is
+    # used to sort results back into the right place regardless of
+    # completion order (concurrent tasks do NOT finish in submission order).
+    tasks = [
+        ((("ceiling", t)), f"ceiling <{t}ft", (lambda tf=t: fetch_ceiling_prob_grid(date, fxx, tf)))
+        for t in CEILING_PROB_THRESHOLDS_FT
+    ]
+    tasks += [
+        (("deterministic_ceiling",), "deterministic ceiling", (lambda: fetch_deterministic_ceiling_grid(date, fxx))),
+        (("cloud_base",), "cloud base", (lambda: fetch_cloud_base_grid(date, fxx))),
+        (("precip",), "precipitation", (lambda: fetch_precip_probability_grid(date, fxx))),
+        (("vis3",), "visibility <3SM", (lambda: fetch_probability_grid(date, fxx, VISIBILITY_PROB_FILTER))),
+        (("vis1",), "visibility <1SM", (lambda: fetch_probability_grid(date, fxx, VISIBILITY_1SM_PROB_FILTER))),
+    ]
+    assert len(tasks) == TOTAL_FIELDS
+
+    results = {}
     grid_spec = None
-    for threshold_ft in CEILING_PROB_THRESHOLDS_FT:
-        grid, grid_spec = _fetch_and_regrid(fetch_ceiling_prob_grid(date, fxx, threshold_ft))
-        ceiling_prob_grids[threshold_ft] = grid
+    completed = 0
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_FETCHES) as executor:
+        future_to_meta = {executor.submit(_fetch_and_regrid, fn): (key, label) for key, label, fn in tasks}
+        for future in as_completed(future_to_meta):
+            key, label = future_to_meta[future]
+            smoothed, gs, fetch_s, regrid_s = future.result()
+            completed += 1
+            print(
+                f"  [{completed}/{TOTAL_FIELDS}] {label}: done "
+                f"(fetch {fetch_s:.1f}s, regrid+smooth {regrid_s:.1f}s)",
+                flush=True,
+            )
+            results[key] = smoothed
+            if grid_spec is None:
+                # See module docstring's "CRITICAL GRID-ALIGNMENT
+                # REQUIREMENT" -- assumes all fields share one native
+                # grid (true for NBM's CONUS core file), so whichever
+                # field happens to complete first is equally authoritative.
+                grid_spec = gs
 
-    deterministic_ceiling_grid, _ = _fetch_and_regrid(fetch_deterministic_ceiling_grid(date, fxx))
-    cloud_base_grid, _ = _fetch_and_regrid(fetch_cloud_base_grid(date, fxx))
-    precip_grid, _ = _fetch_and_regrid(fetch_precip_probability_grid(date, fxx))
-    vis3_grid, _ = _fetch_and_regrid(fetch_probability_grid(date, fxx, VISIBILITY_PROB_FILTER))
-    vis1_grid, _ = _fetch_and_regrid(fetch_probability_grid(date, fxx, VISIBILITY_1SM_PROB_FILTER))
+    print(
+        f"  all {TOTAL_FIELDS} NBM fields fetched+regridded in {time.monotonic() - prep_start:.1f}s total "
+        f"(concurrent, up to {MAX_CONCURRENT_FETCHES} at once), loading terrain grid...",
+        flush=True,
+    )
+
+    ceiling_prob_grids = {t: results[("ceiling", t)] for t in CEILING_PROB_THRESHOLDS_FT}
+    deterministic_ceiling_grid = results[("deterministic_ceiling",)]
+    cloud_base_grid = results[("cloud_base",)]
+    precip_grid = results[("precip",)]
+    vis3_grid = results[("vis3",)]
+    vis1_grid = results[("vis1",)]
 
     terrain_grids, terrain_grid_spec, terrain_radius_nm = load_terrain_grid(terrain_grid_path)
 
