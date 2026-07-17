@@ -11,7 +11,7 @@
       "valid_time": "2026-07-17T15:00:00Z",
       "filename": "mtn_obsc_f00.geojson",
       "cache_filename": "mtn_obsc_f00_grid.npz",
-      "feature_count": 4,
+      "feature_count": 3,
       "terrain_radius_nm": 12.0
     },
     {
@@ -27,7 +27,7 @@
       "valid_time": "2026-07-17T21:00:00Z",
       "filename": "mtn_obsc_f06.geojson",
       "cache_filename": "mtn_obsc_f06_grid.npz",
-      "feature_count": 3,
+      "feature_count": 2,
       "terrain_radius_nm": 12.0
     },
     {
@@ -35,7 +35,7 @@
       "valid_time": "2026-07-18T00:00:00Z",
       "filename": "mtn_obsc_f09.geojson",
       "cache_filename": "mtn_obsc_f09_grid.npz",
-      "feature_count": 4,
+      "feature_count": 1,
       "terrain_radius_nm": 12.0
     },
     {
@@ -43,7 +43,7 @@
       "valid_time": "2026-07-18T03:00:00Z",
       "filename": "mtn_obsc_f12.geojson",
       "cache_filename": "mtn_obsc_f12_grid.npz",
-      "feature_count": 3,
+      "feature_count": 1,
       "terrain_radius_nm": 12.0
     }
   ]
