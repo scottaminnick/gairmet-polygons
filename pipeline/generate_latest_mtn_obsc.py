@@ -8,7 +8,7 @@ exact same cycle-finding/scheduling logic (now shared via
 pipeline/gairmet_cycle.py, since none of that was ever IFR-specific).
 Differs from IFR in three real ways, not just cosmetic ones:
 
-  1. NINE real NBM fields fetched per snapshot instead of four (five
+  1. TEN real NBM fields fetched per snapshot instead of four (five
      ceiling-probability thresholds, deterministic ceiling, cloud base,
      precip, two visibility thresholds) -- see
      pipeline/hazards/mtn_obsc.py's docstring. A real, expected cost
