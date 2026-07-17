@@ -40,17 +40,30 @@ permissions:
 jobs:
   generate:
     runs-on: ubuntu-latest
-    # Was completely unset before -- a real production run took over 30
-    # minutes and had to be manually cancelled, with no automatic
-    # timeout at all (GitHub's own default cap is 360 minutes/6 hours
-    # for a job with no explicit limit). The parallelized fetching in
-    # pipeline/hazards/mtn_obsc.py's prepare_mtn_obsc_grid() should bring
-    # real runtime down substantially (measured ~2.3x speedup even on a
-    # constrained single-core test environment -- see that function's
-    # docstring), but this cap exists so a genuinely stuck run fails
-    # cleanly and visibly rather than silently occupying a runner
-    # indefinitely.
-    timeout-minutes: 20
+    # Was completely unset originally -- a real production run took over
+    # 30 minutes and had to be manually cancelled, with no automatic
+    # timeout at all (GitHub's own default cap is 360 minutes/6 hours for
+    # a job with no explicit limit).
+    #
+    # First attempt at a fix was concurrent fetching, set to 20 min based
+    # on that approach's measured speedup -- but a real run then revealed
+    # the ORIGINAL diagnosis was wrong about the mechanism: fetch+cfgrib
+    # was always fast (under 6s/field); the real cost was
+    # regrid_to_regular_latlon()'s default "linear" interpolation method
+    # (140-198s/field, confirmed directly from that run's own timing
+    # output). Fixed at the source with method="nearest" for this
+    # hazard's regrid calls specifically (~20x faster, measured directly
+    # -- see prepare_mtn_obsc_grid's docstring for the full story), which
+    # in turn made the concurrency itself counterproductive (CPU
+    # contention under threads once the real bottleneck was gone), so
+    # this reverted to plain sequential fetching.
+    #
+    # 30 min gives real margin above a rough estimate (~10-15 min) for
+    # this fix, since -- unlike the concurrency attempt -- it hasn't yet
+    # been confirmed against a real production run. Tighten this once a
+    # real run confirms actual numbers, same as MOUNTAINOUS_RELIEF_THRESHOLD_FT
+    # and terrain_radius_nm are provisional pending real confirmation.
+    timeout-minutes: 30
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
