@@ -19,9 +19,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.hazards.mtn_obsc import (
     CEILING_PROB_THRESHOLDS_FT,
+    MIN_BASELINE_ELEVATION_FT,
     MOUNTAINOUS_RELIEF_THRESHOLD_FT,
     THRESHOLD_ANCHORS_FT,
     _determine_weather_type,
+    _get_conus_mask,
     find_message_excluding,
     interpolate_terrain_relative_probability,
     polygonize_mtn_obsc_grid,
@@ -262,6 +264,145 @@ def test_polygonize_generates_polygon_over_real_relief():
     )
     assert len(result["features"]) > 0
     assert result["features"][0]["properties"]["weather_type"] == "CLDS"  # no precip/vis in this synthetic scenario
+
+
+# ---------------------------------------------------------------------------
+# Bathymetry / ocean-depth exclusion (MIN_BASELINE_ELEVATION_FT) and the
+# CONUS/ARTCC boundary mask (_get_conus_mask) -- both added directly in
+# response to a real production run painting real relief in Mexico,
+# Quebec, and open Pacific water. See the constants' own docstrings in
+# mtn_obsc.py for the full real-data diagnosis behind each.
+# ---------------------------------------------------------------------------
+
+def test_polygonize_excludes_deep_ocean_bathymetry():
+    """
+    Direct regression test for the confirmed real case: a cell with
+    deep-negative baseline_elevation_ft (real ETOPO1 ocean depth, not a
+    void) and a ridge_elevation_ft at/near sea level -- meaning ALL of
+    the "relief" comes from ocean DEPTH, not from any real nearby peak
+    -- must not generate a polygon, even though relief alone would
+    exceed MOUNTAINOUS_RELIEF_THRESHOLD_FT.
+    """
+    shape = (30, 30)
+    grid_spec = GridSpec(west=-106.0, north=41.0, dx=0.05, dy=-0.05)
+
+    baseline = np.full(shape, 4000.0)  # flat surroundings, won't pass the relief gate anyway
+    ridge = np.full(shape, 4000.0 + MOUNTAINOUS_RELIEF_THRESHOLD_FT / 2)
+    # A "deep ocean" island: real bathymetry-style negative baseline,
+    # ridge at sea level -- relief exceeds the threshold, but purely
+    # from depth, not from any real terrain.
+    baseline[10:20, 10:20] = -1060.0  # matches the real confirmed Santa Cruz-area value
+    ridge[10:20, 10:20] = 0.0
+
+    ceiling_prob_grids = {t: np.full(shape, 90.0) for t in CEILING_PROB_THRESHOLDS_FT}
+    precip_grid = np.zeros(shape)
+    vis3_grid = np.zeros(shape)
+    vis1_grid = np.zeros(shape)
+
+    from datetime import datetime
+
+    result = polygonize_mtn_obsc_grid(
+        ceiling_prob_grids, precip_grid, vis3_grid, vis1_grid, baseline, ridge, grid_spec,
+        datetime(2026, 7, 16, 12), 6,
+        min_area_sq_mi=0,
+    )
+    assert len(result["features"]) == 0  # pure bathymetric relief, no real terrain -- must not generate a polygon
+
+
+def test_polygonize_still_generates_polygon_when_baseline_is_positive():
+    """
+    Confirms MIN_BASELINE_ELEVATION_FT doesn't accidentally exclude real
+    onshore relief -- same setup as the deep-ocean test above, but with
+    a plausible ON-LAND baseline instead of ocean depth.
+    """
+    shape = (30, 30)
+    grid_spec = GridSpec(west=-106.0, north=41.0, dx=0.05, dy=-0.05)
+
+    baseline = np.full(shape, 4000.0)
+    ridge = np.full(shape, 4000.0 + MOUNTAINOUS_RELIEF_THRESHOLD_FT / 2)
+    baseline[10:20, 10:20] = 4000.0  # on land, real relief
+    ridge[10:20, 10:20] = 4000.0 + MOUNTAINOUS_RELIEF_THRESHOLD_FT * 3
+
+    ceiling_prob_grids = {t: np.full(shape, 90.0) for t in CEILING_PROB_THRESHOLDS_FT}
+    precip_grid = np.zeros(shape)
+    vis3_grid = np.zeros(shape)
+    vis1_grid = np.zeros(shape)
+
+    from datetime import datetime
+
+    result = polygonize_mtn_obsc_grid(
+        ceiling_prob_grids, precip_grid, vis3_grid, vis1_grid, baseline, ridge, grid_spec,
+        datetime(2026, 7, 16, 12), 6,
+        min_area_sq_mi=0,
+    )
+    assert len(result["features"]) > 0
+
+
+def test_get_conus_mask_excludes_quebec_and_mexico_includes_conus():
+    """
+    Direct check against the REAL data/boundaries/artcc.json file (not a
+    synthetic boundary) -- confirms the specific real coordinates from
+    the actual problem run: Quebec (St. Lawrence/Laurentians) and
+    Mexico (Sierra Madre) are OUTSIDE the real ARTCC boundary, while
+    known real CONUS mountain locations are inside it.
+    """
+    grid_spec = GridSpec(west=-126.0, north=50.0, dx=0.025, dy=-0.025)
+    shape = (1120, 2440)
+    mask = _get_conus_mask(grid_spec, shape)
+
+    def idx(lat, lon):
+        row = round((grid_spec.north - lat) / grid_spec.dx)
+        col = round((lon - grid_spec.west) / grid_spec.dx)
+        return row, col
+
+    outside_points = {
+        "Quebec, St. Lawrence area": (47.65, -70.4),
+        "Mexico, Sierra Madre": (24.5, -103.0),
+    }
+    for name, (lat, lon) in outside_points.items():
+        r, c = idx(lat, lon)
+        assert not mask[r, c], f"{name} should be OUTSIDE the CONUS/ARTCC boundary"
+
+    inside_points = {
+        "Denver, CO": (39.7392, -104.9903),
+        "Boston Mountains, AR": (35.7, -93.5),
+        "Mt. Whitney, CA": (36.5785, -118.2923),
+    }
+    for name, (lat, lon) in inside_points.items():
+        r, c = idx(lat, lon)
+        assert mask[r, c], f"{name} should be INSIDE the CONUS/ARTCC boundary"
+
+
+def test_get_conus_mask_is_memoized():
+    """
+    Confirms the expensive union+rasterize step (several real seconds --
+    see load_boundary_mask's docstring) only actually runs once across
+    repeated calls with the same grid, not once per call -- the whole
+    reason this memoization exists, since a real run calls this once per
+    snapshot (5x) and shouldn't pay that cost 5 times over.
+    """
+    import pipeline.polygons as polygons_module
+
+    call_count = {"n": 0}
+    real_load_boundary_mask = polygons_module.load_boundary_mask
+
+    def counting_load_boundary_mask(*args, **kwargs):
+        call_count["n"] += 1
+        return real_load_boundary_mask(*args, **kwargs)
+
+    # Patch where mtn_obsc looks it up (it was imported by name into that
+    # module's namespace), and use a distinct grid_spec/shape so this
+    # test can't accidentally reuse another test's cache entry.
+    import unittest.mock
+
+    with unittest.mock.patch.object(mtn_obsc, "load_boundary_mask", side_effect=counting_load_boundary_mask):
+        grid_spec = GridSpec(west=-999.0, north=999.0, dx=1.0, dy=-1.0)  # distinct, won't collide with other tests
+        shape = (5, 5)
+        _get_conus_mask(grid_spec, shape)
+        _get_conus_mask(grid_spec, shape)
+        _get_conus_mask(grid_spec, shape)
+
+    assert call_count["n"] == 1, f"Expected exactly 1 real computation, got {call_count['n']}"
 
 
 # ---------------------------------------------------------------------------
