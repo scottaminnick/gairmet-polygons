@@ -40,6 +40,17 @@ permissions:
 jobs:
   generate:
     runs-on: ubuntu-latest
+    # Was completely unset before -- a real production run took over 30
+    # minutes and had to be manually cancelled, with no automatic
+    # timeout at all (GitHub's own default cap is 360 minutes/6 hours
+    # for a job with no explicit limit). The parallelized fetching in
+    # pipeline/hazards/mtn_obsc.py's prepare_mtn_obsc_grid() should bring
+    # real runtime down substantially (measured ~2.3x speedup even on a
+    # constrained single-core test environment -- see that function's
+    # docstring), but this cap exists so a genuinely stuck run fails
+    # cleanly and visibly rather than silently occupying a runner
+    # indefinitely.
+    timeout-minutes: 20
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
