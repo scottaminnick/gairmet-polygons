@@ -466,6 +466,45 @@ def rasterize_polygon_cells(polygon, grid_spec: GridSpec, shape: tuple):
     return np.concatenate(all_rr), np.concatenate(all_cc)
 
 
+def load_boundary_mask(boundaries_path: str, grid_spec: GridSpec, shape: tuple) -> np.ndarray:
+    """
+    Loads a GeoJSON FeatureCollection of polygons (e.g.
+    data/boundaries/artcc.json), unions every feature into one combined
+    shape, and rasterizes it onto the given grid -- returns a boolean
+    array (True = inside the boundary) matching `shape`.
+
+    Generic and hazard-agnostic: any hazard module that needs to
+    restrict itself to a real geographic area of responsibility (rather
+    than an arbitrary bounding box, which can't cleanly exclude a
+    neighboring country that happens to share similar latitudes) can use
+    this against whatever boundary file fits -- e.g.
+    pipeline.hazards.mtn_obsc uses data/boundaries/artcc.json (AWC's own
+    20-ARTCC CONUS area of responsibility per NWSI 10-811) to keep
+    Mountain Obscuration from painting real terrain in Mexico or Canada
+    just because it happens to be within the generously-sized terrain
+    grid's bounding box.
+
+    Not cheap (unioning + rasterizing onto a full CONUS-sized grid takes
+    several seconds) but also not NBM-dependent -- callers generating
+    multiple snapshots in one run should compute this once and reuse it,
+    not call this fresh per snapshot.
+    """
+    import json
+
+    from shapely.geometry import shape as shapely_shape
+    from shapely.ops import unary_union
+
+    with open(boundaries_path) as f:
+        data = json.load(f)
+    geoms = [shapely_shape(feature["geometry"]) for feature in data["features"]]
+    combined = unary_union(geoms)
+
+    rr, cc = rasterize_polygon_cells(combined, grid_spec, shape)
+    mask = np.zeros(shape, dtype=bool)
+    mask[rr, cc] = True
+    return mask
+
+
 def polygons_to_feature_collection(
     polygons: list,
     properties: dict | None = None,
