@@ -154,7 +154,6 @@ asserts this alignment explicitly rather than trusting it silently.
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from functools import partial
 
@@ -364,13 +363,6 @@ def interpolate_terrain_relative_probability(
     return derived, is_extrapolated
 
 
-MAX_CONCURRENT_FETCHES = 5
-# PLACEHOLDER, same spirit as MOUNTAINOUS_RELIEF_THRESHOLD_FT -- a
-# deliberately conservative starting point (half of the 10 fields at
-# once), not a documented NOAA rate limit calibrated against anything.
-# See prepare_mtn_obsc_grid()'s docstring for why this exists at all.
-
-
 def prepare_mtn_obsc_grid(
     date: datetime,
     fxx: int,
@@ -386,41 +378,51 @@ def prepare_mtn_obsc_grid(
     loads the cached terrain grid -- asserting its GridSpec matches
     rather than trusting it silently.
 
-    PARALLELIZED across fields (bounded by MAX_CONCURRENT_FETCHES): a
-    real production run of the original SEQUENTIAL version took over 30
-    minutes and had to be manually cancelled. The arithmetic explains
-    why cleanly, without needing to suspect anything Mountain-
-    Obscuration-specific in the actual math (which is fast, pure numpy):
-    10 fields x 5 forecast hours = 50 total sequential fetch+cfgrib-open
-    round trips, vs. IFR's 4 fields x 5 hours = 20 -- 2.5x more round
-    trips, proportionally explaining a run 2.5x IFR's own runtime.
-    Every one of these 10 fields is fully independent (no data
-    dependency between them), and this work is I/O-bound (network wait
-    via `requests`, plus cfgrib's own file I/O -- both release the
-    GIL), so concurrent fetching lets that wait time overlap across
-    multiple fields at once instead of serializing all of it.
+    THE REAL DIAGNOSTIC STORY (worth keeping, not just the tidy final
+    answer): a real production run took over 30 minutes and had to be
+    manually cancelled. First hypothesis was that 10 fields x 5
+    forecast hours = 50 sequential fetch+cfgrib-open round trips (vs.
+    IFR's 4 fields x 5 hours = 20) was the bottleneck, and concurrent
+    fetching (ThreadPoolExecutor) was added on that assumption, since
+    network+cfgrib I/O releases the GIL. A real timed run then showed
+    that hypothesis was WRONG about the mechanism, even though "more
+    fields = slower" was directionally right: per-field fetch+cfgrib
+    time was consistently under 6 seconds, but regrid+smooth was taking
+    140-198 SECONDS per field -- the true bottleneck was
+    pipeline.regrid.regrid_to_regular_latlon()'s default
+    method="linear", which builds a full Delaunay triangulation of
+    NBM's ~1-2 million native grid points before interpolating. Fixed
+    by passing method="nearest" instead for this hazard's own regrid
+    calls specifically (see the "nearest" comment below) -- a ~20x
+    speedup measured directly at realistic scale, safe here because
+    every field already gets gaussian_smooth() applied right after
+    anyway, making "linear"'s extra smoothness mostly redundant work.
 
-    THREADS, NOT PROCESSES -- worth knowing if this ever needs revisiting:
-    each fetch writes to and reads from its own independent tempfile (see
-    pipeline.hazards.ifr.fetch_probability_grid), so there's no shared
-    mutable state between concurrent calls, which is the good case for
-    thread-safety. What's genuinely NOT confirmed (no way to test this
-    without live network + cfgrib access) is whether cfgrib/eccodes' own
-    C bindings are fully thread-safe under concurrent calls. If a real
-    run ever shows cfgrib-related crashes, hangs, or corrupted-looking
-    output specifically under this concurrent path (and not the old
-    sequential one), that would be the signal -- the fix is a one-line
-    swap from ThreadPoolExecutor to ProcessPoolExecutor (the function
-    being parallelized has no shared state to worry about either way),
-    at the cost of higher per-worker memory from separate processes.
-    Worth testing via a manual workflow_dispatch run first, watched
-    directly, before relying on it for the unattended scheduled runs.
+    That fix was then found to make the ORIGINAL concurrency
+    counterproductive, not just unnecessary: with the triangulation
+    bottleneck gone, the dominant remaining per-field cost became a
+    still-real (if much smaller) CPU-bound cost -- and running several
+    of those simultaneously via THREADS on a runner with few real CPU
+    cores causes contention that can make each one slower than running
+    alone (confirmed directly: a real test measured concurrent
+    execution taking LONGER than a fair sequential-equivalent baseline
+    once "nearest" was in place). Threading helps I/O-bound waiting
+    overlap; it doesn't help CPU-bound work compete for the same cores,
+    and can actively hurt it. So this function is back to plain
+    SEQUENTIAL fetching -- once the real bottleneck (interpolation
+    method) was fixed at the source, the per-field cost dropped enough
+    that concurrency's complexity and real risks (this contention
+    effect, PLUS an never-fully-confirmed question about whether
+    cfgrib/eccodes' C bindings are thread-safe under concurrent calls)
+    were no longer worth carrying.
 
-    Prints numbered progress (e.g. "[3/10] ceiling <2000ft") with timing
-    for each field's fetch and regrid separately -- in COMPLETION order,
-    not a fixed 1-10 sequence, since concurrent tasks finish whenever
-    they actually finish. That's expected and fine; this is diagnostic
-    output, not a guarantee about ordering.
+    Prints numbered progress (e.g. "[3/10] ceiling <2000ft") with
+    timing for each field's fetch and regrid separately, in the actual
+    fetch order (a fixed, predictable sequence now that this is
+    sequential again) -- useful for telling "making steady progress"
+    from "stuck" in a real run's log, which was the original motivation
+    for this diagnostic output and remains true regardless of how the
+    fetching itself is structured.
 
     Returns a dict (deliberately not a long positional tuple -- ten
     NBM fields plus two terrain fields is too many positions to keep
@@ -439,18 +441,30 @@ def prepare_mtn_obsc_grid(
         t0 = time.monotonic()
         values, lats, lons = fetch_fn()
         t1 = time.monotonic()
+        # method="nearest" (NOT this function's default "linear") --
+        # measured directly (see module docstring's diagnostic story) at
+        # ~20x faster than "linear" at this grid's real scale, since
+        # "nearest" is a cheap cKDTree lookup rather than a full Delaunay
+        # triangulation + barycentric interpolation over ~1-2 million
+        # native points. Safe here specifically because every field gets
+        # gaussian_smooth() applied immediately after anyway (see below)
+        # -- "linear"'s extra smoothness before that pass is mostly
+        # redundant work, not extra quality that survives to the final
+        # result. This is a per-call override, NOT a change to this
+        # function's own default -- IFR's calls elsewhere are completely
+        # unaffected, since changing the shared default would silently
+        # alter IFR's own already-working, already-reviewed output too.
         regridded, gs = regrid_to_regular_latlon(
-            values, lats, lons, target_bounds=target_bounds, target_resolution_deg=target_resolution_deg
+            values, lats, lons, target_bounds=target_bounds, target_resolution_deg=target_resolution_deg,
+            method="nearest",
         )
         smoothed = gaussian_smooth(np.nan_to_num(regridded), sigma_cells=GAUSSIAN_SIGMA_CELLS)
         t2 = time.monotonic()
         return smoothed, gs, t1 - t0, t2 - t1
 
-    # (result_key, label, fetch_fn) for all ten fields -- result_key is
-    # used to sort results back into the right place regardless of
-    # completion order (concurrent tasks do NOT finish in submission order).
+    # (result_key, label, fetch_fn) for all ten fields.
     tasks = [
-        ((("ceiling", t)), f"ceiling <{t}ft", (lambda tf=t: fetch_ceiling_prob_grid(date, fxx, tf)))
+        (("ceiling", t), f"ceiling <{t}ft", (lambda tf=t: fetch_ceiling_prob_grid(date, fxx, tf)))
         for t in CEILING_PROB_THRESHOLDS_FT
     ]
     tasks += [
@@ -464,29 +478,23 @@ def prepare_mtn_obsc_grid(
 
     results = {}
     grid_spec = None
-    completed = 0
-    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_FETCHES) as executor:
-        future_to_meta = {executor.submit(_fetch_and_regrid, fn): (key, label) for key, label, fn in tasks}
-        for future in as_completed(future_to_meta):
-            key, label = future_to_meta[future]
-            smoothed, gs, fetch_s, regrid_s = future.result()
-            completed += 1
-            print(
-                f"  [{completed}/{TOTAL_FIELDS}] {label}: done "
-                f"(fetch {fetch_s:.1f}s, regrid+smooth {regrid_s:.1f}s)",
-                flush=True,
-            )
-            results[key] = smoothed
-            if grid_spec is None:
-                # See module docstring's "CRITICAL GRID-ALIGNMENT
-                # REQUIREMENT" -- assumes all fields share one native
-                # grid (true for NBM's CONUS core file), so whichever
-                # field happens to complete first is equally authoritative.
-                grid_spec = gs
+    for i, (key, label, fetch_fn) in enumerate(tasks, start=1):
+        smoothed, gs, fetch_s, regrid_s = _fetch_and_regrid(fetch_fn)
+        print(
+            f"  [{i}/{TOTAL_FIELDS}] {label}: done (fetch {fetch_s:.1f}s, regrid+smooth {regrid_s:.1f}s)",
+            flush=True,
+        )
+        results[key] = smoothed
+        if grid_spec is None:
+            # See module docstring's "CRITICAL GRID-ALIGNMENT
+            # REQUIREMENT" -- assumes all fields share one native grid
+            # (true for NBM's CONUS core file), so the first field's
+            # grid_spec is equally authoritative as any other's.
+            grid_spec = gs
 
     print(
-        f"  all {TOTAL_FIELDS} NBM fields fetched+regridded in {time.monotonic() - prep_start:.1f}s total "
-        f"(concurrent, up to {MAX_CONCURRENT_FETCHES} at once), loading terrain grid...",
+        f"  all {TOTAL_FIELDS} NBM fields fetched+regridded in {time.monotonic() - prep_start:.1f}s total, "
+        f"loading terrain grid...",
         flush=True,
     )
 
