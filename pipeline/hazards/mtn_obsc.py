@@ -108,6 +108,38 @@ TERRAIN_RADIUS_NM, changing this does NOT require re-running
 fetch_terrain.py, since it's applied at HAZARD-GENERATION time against
 the already-cached ridge/baseline grids, not baked in at fetch time).
 
+TWO ADDITIONAL GATES, both added after a real production run revealed
+real relief exists in places this product has no business painting:
+
+  1. MIN_BASELINE_ELEVATION_FT -- relief alone can't tell "real nearby
+     peak" apart from "this cell is itself underwater": a point ~30mi
+     off the California coast showed baseline_elevation_ft=-1060 (real
+     ETOPO1 ocean depth) and ridge_elevation_ft=0 (sea level was the
+     highest thing within the search radius), for "relief" that's
+     entirely ocean depth, not terrain. Requires the cell's own
+     baseline to be at/near sea level or above. See that constant's own
+     docstring for why -50 ft, not exactly 0.
+
+  2. _get_conus_mask() / CONUS_BOUNDARY_PATH -- real relief exists well
+     outside CONUS too (confirmed directly: Mexico's Sierra Madre,
+     Quebec's Laurentians both generated real polygons from a real run,
+     since pipeline.fetch_terrain's terrain grid is deliberately
+     generously-sized and covers those areas too). Restricts generation
+     to AWC's own defined area of responsibility (the 20-ARTCC boundary
+     already used elsewhere in this project, data/boundaries/artcc.json)
+     rather than an arbitrary bounding box -- a rectangle can't cleanly
+     exclude a neighboring country sharing similar latitudes the way the
+     real ARTCC boundary (which follows the actual border) can.
+
+These two are NOT redundant with each other, or with the relief check:
+confirmed directly that a real onshore mountain's elevation can blend
+into a nearby ocean cell's baseline via smoothing/the search radius
+(producing a POSITIVE baseline offshore, e.g. baseline=1251 ft ~30mi
+off San Luis Obispo, CA) -- neither the depth check nor relief alone
+catches that case, and it's still within CONUS/ARTCC, so neither of
+these two gates catches it either. Known, real, and NOT fixed by either
+of these -- flagged here rather than silently claimed as solved.
+
 CLEARANCE_MARGIN_FT is a genuinely NEW kind of forecaster-adjustable
 parameter -- one of five total for this hazard (vs. IFR's three):
 threshold_pct and neighborhood_radius_nm/min_area_sq_mi are reused
@@ -171,6 +203,7 @@ from pipeline.polygons import (
     GridSpec,
     filter_polygons_by_area,
     grid_to_polygons,
+    load_boundary_mask,
     merge_nearby_polygons,
     polygons_to_feature_collection,
     rasterize_polygon_cells,
@@ -216,6 +249,68 @@ DEFAULT_CLEARANCE_MARGIN_FT = 500.0
 
 # PLACEHOLDER -- see module docstring's "mountainous area gate" section.
 MOUNTAINOUS_RELIEF_THRESHOLD_FT = 500.0
+
+# Confirmed directly against a real run: open ocean can show HIGH relief
+# despite having no real terrain nearby at all -- e.g. a point ~30mi off
+# Santa Cruz, CA showed baseline_elevation_ft=-1060 (real ETOPO1
+# bathymetry, since this dataset fills oceans with actual ocean depth --
+# see pipeline/fetch_terrain.py's module docstring) and ridge_elevation_ft
+# =0 (the highest point within the search radius was literally sea
+# level), for a "relief" of 1060 ft that comes entirely from ocean DEPTH,
+# not from any nearby peak. MOUNTAINOUS_RELIEF_THRESHOLD_FT alone can't
+# catch this, since it only looks at the DIFFERENCE between ridge and
+# baseline, not whether baseline itself represents real land.
+#
+# This requires the cell's OWN baseline elevation to be at or near sea
+# level or above -- real land, not ocean depth -- as an ADDITIONAL
+# condition alongside the relief check. -50 ft (not exactly 0) is a
+# deliberate small allowance for grid-resolution/interpolation noise
+# right at the immediate coastline, not a claim that any real land sits
+# below sea level; deep bathymetry (-1060 ft in the confirmed case, and
+# ocean depths generally run far deeper than a modest noise margin) is
+# nowhere close to this cutoff either way.
+#
+# NOTE: this does NOT address a DIFFERENT case -- real onshore mountains
+# within the search radius blending into a nearby ocean cell's baseline
+# via smoothing (e.g. a cell just offshore with baseline=1251 ft because
+# a real coastal peak's elevation bled into it) -- that requires the
+# CONUS/ARTCC boundary check below, not this one; the two fixes are
+# complementary, not redundant.
+MIN_BASELINE_ELEVATION_FT = -50.0
+
+# AWC's own defined area of responsibility per NWSI 10-811 section 3 --
+# "Twenty (20) domestic Air Route Traffic Control Center (ARTCC) Flight
+# Information Regions (FIRs) covering the conterminous U.S. and adjacent
+# coastal waters." Used to restrict Mountain Obscuration to real CONUS,
+# rather than an arbitrary bounding box -- confirmed directly (see a real
+# run's output) that the terrain grid's generously-sized bounding box
+# (see pipeline.fetch_terrain.CONUS_BOUNDS -- deliberately wide margin,
+# by design) was producing real polygons over Quebec, Mexico, and open
+# Pacific water, since a rectangle can't cleanly exclude a neighboring
+# country that happens to share similar latitudes. The real ARTCC
+# boundary follows the actual US border, which a bounding box cannot.
+CONUS_BOUNDARY_PATH = "data/boundaries/artcc.json"
+
+_conus_mask_cache: dict = {}
+
+
+def _get_conus_mask(grid_spec: GridSpec, shape: tuple, boundaries_path: str = CONUS_BOUNDARY_PATH) -> np.ndarray:
+    """
+    Memoized wrapper around pipeline.polygons.load_boundary_mask() --
+    the ARTCC boundary is static (doesn't depend on NBM data, the
+    forecast cycle, or the forecast hour), but unioning + rasterizing it
+    takes several real seconds (see load_boundary_mask's docstring), so
+    computing it fresh for each of a run's 5 snapshots would add ~5x
+    that cost for zero benefit. Cached here by (grid_spec fields, shape,
+    path) rather than via functools.lru_cache directly on GridSpec,
+    since GridSpec is a plain (non-frozen) dataclass and so isn't
+    hashable by default.
+    """
+    cache_key = (grid_spec.west, grid_spec.north, grid_spec.dx, grid_spec.dy, shape, boundaries_path)
+    if cache_key not in _conus_mask_cache:
+        _conus_mask_cache[cache_key] = load_boundary_mask(boundaries_path, grid_spec, shape)
+    return _conus_mask_cache[cache_key]
+
 
 # Same fixed cosmetic parameters as IFR, reused for visual consistency
 # across both SIERRA-category hazards -- see pipeline/hazards/ifr.py's
@@ -630,13 +725,31 @@ def polygonize_mtn_obsc_grid(
     terrain_relief_ft = ridge_elevation_ft - baseline_elevation_ft
     mountainous_mask = terrain_relief_ft >= MOUNTAINOUS_RELIEF_THRESHOLD_FT
 
+    # Confirmed directly against a real run: deep open ocean can show
+    # HIGH "relief" despite having no real terrain nearby at all -- the
+    # relief check alone can't tell "real mountain nearby" apart from
+    # "this cell is itself underwater." See MIN_BASELINE_ELEVATION_FT's
+    # docstring above for the full real example this fixes.
+    on_land_mask = baseline_elevation_ft >= MIN_BASELINE_ELEVATION_FT
+    mountainous_mask = mountainous_mask & on_land_mask
+
+    # Confirmed directly against a real run: real relief exists well
+    # outside CONUS too (Mexico's Sierra Madre, Quebec's Laurentians,
+    # even the steep bathymetry just off the California coast) -- all of
+    # which are outside AWC's actual area of responsibility for this
+    # product. See CONUS_BOUNDARY_PATH's docstring above for why the
+    # real ARTCC boundary is used here rather than a bounding box.
+    within_conus_mask = _get_conus_mask(grid_spec, mountainous_mask.shape)
+    mountainous_mask = mountainous_mask & within_conus_mask
+
     critical_ceiling_agl = terrain_relief_ft + clearance_margin_ft
     derived_probability, _is_extrapolated = interpolate_terrain_relative_probability(
         critical_ceiling_agl, ceiling_prob_grids
     )
 
     # Same sentinel-pinning trick as IFR's layer exclusion -- cells
-    # outside the mountainous gate can never cross any real threshold_pct.
+    # outside the mountainous gate (which now also requires being within
+    # CONUS) can never cross any real threshold_pct.
     layer_grid = np.where(mountainous_mask, derived_probability, LAYER_OFF)
 
     polygons = grid_to_polygons(layer_grid, grid_spec, threshold=threshold_pct, min_area_deg2=0.001)
