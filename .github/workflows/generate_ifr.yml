@@ -25,6 +25,20 @@ on:
         required: false
         default: "3000"
 
+# Ensures only ONE run of this workflow is ever actually executing
+# (including its git push) at a time. Without this, a manual trigger
+# landing close to a scheduled run -- or two manual triggers close
+# together -- both check out main, both generate fresh output/ files,
+# and whichever one pushes SECOND gets rejected with "failed to push
+# some refs... Updates were rejected because the remote contains work
+# that you do not have locally." cancel-in-progress is deliberately
+# false: a new trigger QUEUES and waits its turn rather than silently
+# cancelling a run already in progress (which could throw away a
+# legitimate manual trigger someone was specifically waiting on).
+concurrency:
+  group: generate-ifr-polygons
+  cancel-in-progress: false
+
 # Needed to commit the regenerated forecast-hour snapshots back to
 # the repo -- the default GITHUB_TOKEN is read-only unless granted this.
 permissions:
@@ -59,4 +73,29 @@ jobs:
           git add output/
           git diff --staged --quiet && echo "No changes to commit" && exit 0
           git commit -m "Auto-update IFR polygons [skip ci]"
-          git push
+
+          # concurrency: above should prevent same-workflow races
+          # entirely, but retry with rebase as a defensive fallback for
+          # a DIFFERENT scenario: some unrelated commit (e.g. a merged
+          # PR touching a different file) landing on main in the narrow
+          # window before this push. NOTE: this will NOT help if the
+          # race is actually two runs of THIS SAME workflow (which
+          # concurrency: is what prevents) -- both would have generated
+          # different content for the exact same output/ files, so a
+          # rebase would hit real conflicts, not resolve cleanly.
+          for attempt in 1 2 3 4 5; do
+            if git push; then
+              echo "Pushed successfully on attempt $attempt"
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt/5) -- fetching and rebasing..."
+            git fetch origin main
+            if ! git rebase origin/main; then
+              echo "Rebase hit a real conflict (likely two runs racing on the same output files -- concurrency: should prevent this going forward). Aborting."
+              git rebase --abort
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
+          echo "Failed to push after 5 attempts"
+          exit 1
