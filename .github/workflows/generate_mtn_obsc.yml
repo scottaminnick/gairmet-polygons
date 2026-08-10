@@ -3,7 +3,7 @@ name: Generate Latest Mountain Obscuration Polygons
 on:
   # Fires 35 minutes after each real G-AIRMET cycle hour (03/09/15/21Z)
   # -- deliberately staggered LATER than generate_ifr.yml's 20-minute
-  # mark (not just cosmetically different): this hazard fetches NINE
+  # mark (not just cosmetically different): this hazard fetches TEN
   # real NBM fields per forecast hour vs. IFR's four (see
   # pipeline/hazards/mtn_obsc.py's docstring), so it takes noticeably
   # longer to run. Running both workflows at the same offset risked
@@ -31,6 +31,23 @@ on:
         description: "Minimum polygon area (sq mi) -- matches AIRMET/G-AIRMET's historical 'widespread' criterion by default"
         required: false
         default: "3000"
+
+# Ensures only ONE run of this workflow is ever actually executing
+# (including its git push) at a time -- same reasoning as
+# generate_ifr.yml's own concurrency block. Without this, a manual
+# trigger landing close to a scheduled run -- or two manual triggers
+# close together -- both check out main, both generate fresh output/
+# files, and whichever pushes SECOND gets rejected with "failed to push
+# some refs... Updates were rejected because the remote contains work
+# that you do not have locally." Distinct group name from
+# generate_ifr.yml's ("generate-ifr-polygons") -- this should NOT block
+# on or be blocked by IFR's own runs, only prevent double-runs of
+# ITSELF. cancel-in-progress is deliberately false: a new trigger QUEUES
+# and waits its turn rather than silently cancelling a run already in
+# progress.
+concurrency:
+  group: generate-mtn-obsc-polygons
+  cancel-in-progress: false
 
 # Needed to commit the regenerated forecast-hour snapshots back to
 # the repo -- the default GITHUB_TOKEN is read-only unless granted this.
@@ -91,4 +108,32 @@ jobs:
           git add output/
           git diff --staged --quiet && echo "No changes to commit" && exit 0
           git commit -m "Auto-update Mountain Obscuration polygons [skip ci]"
-          git push
+
+          # concurrency: above should prevent same-workflow races
+          # entirely, but retry with rebase as a defensive fallback for
+          # a DIFFERENT scenario: some unrelated commit (e.g.
+          # generate_ifr.yml's own push, or a manual commit like a
+          # .gitignore fix) landing on main in the narrow window before
+          # this push -- confirmed directly: a real run hit exactly this
+          # "failed to push some refs... rejected" error. NOTE: this
+          # will NOT help if the race is actually two runs of THIS SAME
+          # workflow (which concurrency: is what prevents) -- both would
+          # have generated different content for the exact same output/
+          # files, so a rebase would hit real conflicts, not resolve
+          # cleanly. Mirrors generate_ifr.yml's identical fix.
+          for attempt in 1 2 3 4 5; do
+            if git push; then
+              echo "Pushed successfully on attempt $attempt"
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt/5) -- fetching and rebasing..."
+            git fetch origin main
+            if ! git rebase origin/main; then
+              echo "Rebase hit a real conflict (likely two runs racing on the same output files -- concurrency: should prevent this going forward). Aborting."
+              git rebase --abort
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
+          echo "Failed to push after 5 attempts"
+          exit 1
