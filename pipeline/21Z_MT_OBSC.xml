@@ -1,0 +1,401 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+  <Products xmlns:ns2="http://www.example.org/productType">
+    <Product name="Default" type="Default" forecaster="Default" center="OAX" status="UNKNOWN" onOff="true" useFile="true" filePath="" fileName="">
+      <Layer name="Default" onOff="true" monoColor="false" filled="false">
+        <Color red="255" green="255" blue="0" alpha="255"/>
+        <DrawableElement>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  44.54"  lonText="-127.34" hazard="MT_OBSC" fcstHr="0" tag="1"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY FU/HZ" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 48.510349" Lon="-119.970589"/>
+            <Point Lat=" 48.170380" Lon="-118.149414"/>
+            <Point Lat=" 47.264015" Lon="-117.685371"/>
+            <Point Lat=" 47.917980" Lon="-115.972809"/>
+            <Point Lat=" 47.375103" Lon="-112.839806"/>
+            <Point Lat=" 46.800373" Lon="-111.115173"/>
+            <Point Lat=" 46.850388" Lon="-110.225792"/>
+            <Point Lat=" 45.641308" Lon="-109.037575"/>
+            <Point Lat=" 44.980019" Lon="-110.929039"/>
+            <Point Lat=" 44.334679" Lon="-112.643936"/>
+            <Point Lat=" 44.448978" Lon="-114.697258"/>
+            <Point Lat=" 43.914612" Lon="-117.013321"/>
+            <Point Lat=" 44.327049" Lon="-118.436378"/>
+            <Point Lat=" 44.069466" Lon="-120.876434"/>
+            <Point Lat=" 44.586617" Lon="-122.942390"/>
+            <Point Lat=" 45.216511" Lon="-124.227776"/>
+            <Point Lat=" 46.175671" Lon="-124.019402"/>
+            <Point Lat=" 46.641117" Lon="-122.868324"/>
+            <Point Lat=" 47.779724" Lon="-121.848030"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  41.60"  lonText="-121.98" hazard="MT_OBSC" fcstHr="3" tag="1"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY FU/HZ" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 49.101749" Lon="-119.979919"/>
+            <Point Lat=" 48.234859" Lon="-118.032181"/>
+            <Point Lat=" 47.215660" Lon="-117.608421"/>
+            <Point Lat=" 47.554577" Lon="-115.937866"/>
+            <Point Lat=" 47.433716" Lon="-114.043678"/>
+            <Point Lat=" 47.002640" Lon="-112.539970"/>
+            <Point Lat=" 46.461994" Lon="-111.181427"/>
+            <Point Lat=" 46.299458" Lon="-109.804016"/>
+            <Point Lat=" 45.591568" Lon="-109.574783"/>
+            <Point Lat=" 44.697521" Lon="-110.513733"/>
+            <Point Lat=" 44.334679" Lon="-112.643967"/>
+            <Point Lat=" 44.294266" Lon="-115.223427"/>
+            <Point Lat=" 43.408073" Lon="-116.805344"/>
+            <Point Lat=" 44.186871" Lon="-118.219833"/>
+            <Point Lat=" 43.841400" Lon="-119.192642"/>
+            <Point Lat=" 43.975014" Lon="-123.879379"/>
+            <Point Lat=" 44.922550" Lon="-124.163704"/>
+            <Point Lat=" 46.784729" Lon="-124.005768"/>
+            <Point Lat=" 46.921757" Lon="-122.551346"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  45.07"  lonText="-127.46" hazard="MT_OBSC" fcstHr="6" tag="1"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY FU/HZ" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 48.976406" Lon="-120.914833"/>
+            <Point Lat=" 48.961166" Lon="-119.729576"/>
+            <Point Lat=" 48.347633" Lon="-117.994049"/>
+            <Point Lat=" 47.658897" Lon="-117.198509"/>
+            <Point Lat=" 47.313290" Lon="-115.815895"/>
+            <Point Lat=" 46.870537" Lon="-113.549370"/>
+            <Point Lat=" 45.855251" Lon="-110.542427"/>
+            <Point Lat=" 45.658916" Lon="-109.135117"/>
+            <Point Lat=" 45.072983" Lon="-109.184151"/>
+            <Point Lat=" 44.527988" Lon="-110.186523"/>
+            <Point Lat=" 44.072945" Lon="-112.497108"/>
+            <Point Lat=" 44.151863" Lon="-114.565308"/>
+            <Point Lat=" 43.233612" Lon="-115.685226"/>
+            <Point Lat=" 42.877487" Lon="-116.947830"/>
+            <Point Lat=" 43.824238" Lon="-118.440826"/>
+            <Point Lat=" 43.479668" Lon="-119.728523"/>
+            <Point Lat=" 43.310654" Lon="-122.143364"/>
+            <Point Lat=" 43.033112" Lon="-123.513336"/>
+            <Point Lat=" 44.320690" Lon="-124.271873"/>
+            <Point Lat=" 45.822212" Lon="-124.116554"/>
+            <Point Lat=" 46.416660" Lon="-123.221390"/>
+            <Point Lat=" 46.930939" Lon="-122.197380"/>
+            <Point Lat=" 47.735371" Lon="-121.191223"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  47.25"  lonText=" -76.66" hazard="MT_OBSC" fcstHr="0" tag="2"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY CLDS/PCPN/BR" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 47.599739" Lon="-69.255058"/>
+            <Point Lat=" 45.502850" Lon="-68.533325"/>
+            <Point Lat=" 43.312077" Lon="-71.562111"/>
+            <Point Lat=" 40.039169" Lon="-77.115021"/>
+            <Point Lat=" 40.173878" Lon="-77.848083"/>
+            <Point Lat=" 41.784451" Lon="-77.483582"/>
+            <Point Lat=" 42.792576" Lon="-77.351250"/>
+            <Point Lat=" 43.137039" Lon="-76.188774"/>
+            <Point Lat=" 44.822491" Lon="-74.706047"/>
+            <Point Lat=" 45.487587" Lon="-71.663811"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  36.07"  lonText="-113.89" hazard="MT_OBSC" fcstHr="0" tag="3"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY FU/HZ" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 42.140945" Lon="-112.380959"/>
+            <Point Lat=" 40.962666" Lon="-112.412842"/>
+            <Point Lat=" 39.950333" Lon="-111.847092"/>
+            <Point Lat=" 38.587433" Lon="-110.758980"/>
+            <Point Lat=" 38.154037" Lon="-112.850266"/>
+            <Point Lat=" 38.403027" Lon="-114.049538"/>
+            <Point Lat=" 39.046246" Lon="-114.870186"/>
+            <Point Lat=" 40.206383" Lon="-114.905167"/>
+            <Point Lat=" 40.758846" Lon="-114.594383"/>
+            <Point Lat=" 41.539455" Lon="-113.559799"/>
+            <Point Lat=" 41.987217" Lon="-112.966156"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  36.31"  lonText="-111.91" hazard="MT_OBSC" fcstHr="3" tag="3"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY FU/HZ" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 40.123993" Lon="-112.807846"/>
+            <Point Lat=" 39.226231" Lon="-112.040215"/>
+            <Point Lat=" 39.107224" Lon="-110.446991"/>
+            <Point Lat=" 38.703171" Lon="-109.970100"/>
+            <Point Lat=" 38.372597" Lon="-110.106766"/>
+            <Point Lat=" 38.154556" Lon="-110.779785"/>
+            <Point Lat=" 38.331062" Lon="-112.323715"/>
+            <Point Lat=" 38.620029" Lon="-112.980240"/>
+            <Point Lat=" 38.757484" Lon="-114.389526"/>
+            <Point Lat=" 39.443668" Lon="-114.791351"/>
+            <Point Lat=" 39.875484" Lon="-114.313263"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  39.70"  lonText=" -86.64" hazard="MT_OBSC" fcstHr="0" tag="4"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY CLDS/PCPN/BR" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 39.224239" Lon="-79.857239"/>
+            <Point Lat=" 38.629852" Lon="-78.246803"/>
+            <Point Lat=" 35.283581" Lon="-80.872574"/>
+            <Point Lat=" 33.508743" Lon="-84.405960"/>
+            <Point Lat=" 34.930325" Lon="-85.133423"/>
+            <Point Lat=" 36.698586" Lon="-85.040131"/>
+            <Point Lat=" 38.833252" Lon="-82.006050"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  40.65"  lonText="-101.05" hazard="MT_OBSC" fcstHr="0" tag="5"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY FU/HZ" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 43.850960" Lon="-106.496201"/>
+            <Point Lat=" 41.479912" Lon="-104.860306"/>
+            <Point Lat=" 40.926014" Lon="-106.467491"/>
+            <Point Lat=" 40.143467" Lon="-106.818016"/>
+            <Point Lat=" 40.140366" Lon="-108.142670"/>
+            <Point Lat=" 41.299992" Lon="-108.034729"/>
+            <Point Lat=" 42.247261" Lon="-107.272148"/>
+            <Point Lat=" 43.471851" Lon="-107.492676"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  43.32"  lonText="-101.57" hazard="MT_OBSC" fcstHr="3" tag="5"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY FU/HZ" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 42.912586" Lon="-105.941368"/>
+            <Point Lat=" 40.802643" Lon="-104.575310"/>
+            <Point Lat=" 40.737869" Lon="-105.736862"/>
+            <Point Lat=" 41.842239" Lon="-106.048920"/>
+            <Point Lat=" 41.830399" Lon="-107.129227"/>
+            <Point Lat=" 42.312122" Lon="-107.710449"/>
+            <Point Lat=" 42.725796" Lon="-107.433090"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  47.27"  lonText=" -76.75" hazard="MT_OBSC" fcstHr="3" tag="2"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY CLDS/PCPN/BR" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 47.586330" Lon="-69.318954"/>
+            <Point Lat=" 45.628468" Lon="-68.487091"/>
+            <Point Lat=" 43.173779" Lon="-71.558388"/>
+            <Point Lat=" 40.366638" Lon="-76.790184"/>
+            <Point Lat=" 41.825066" Lon="-77.027969"/>
+            <Point Lat=" 43.151878" Lon="-76.362259"/>
+            <Point Lat=" 44.752724" Lon="-74.698746"/>
+            <Point Lat=" 45.502552" Lon="-71.604042"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  38.46"  lonText=" -87.54" hazard="MT_OBSC" fcstHr="3" tag="4"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY CLDS/PCPN/BR" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 38.938869" Lon="-80.371750"/>
+            <Point Lat=" 38.601650" Lon="-78.259109"/>
+            <Point Lat=" 35.208168" Lon="-80.936142"/>
+            <Point Lat=" 33.604618" Lon="-84.450432"/>
+            <Point Lat=" 35.021057" Lon="-85.146202"/>
+            <Point Lat=" 36.755985" Lon="-85.024925"/>
+            <Point Lat=" 38.639114" Lon="-82.112068"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  47.94"  lonText=" -76.17" hazard="MT_OBSC" fcstHr="6" tag="2"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY CLDS/PCPN/BR" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 47.515018" Lon="-69.321022"/>
+            <Point Lat=" 45.600815" Lon="-68.508553"/>
+            <Point Lat=" 43.216320" Lon="-71.483612"/>
+            <Point Lat=" 41.940994" Lon="-73.737335"/>
+            <Point Lat=" 42.793552" Lon="-75.104111"/>
+            <Point Lat=" 44.800026" Lon="-74.861938"/>
+            <Point Lat=" 45.487587" Lon="-71.663811"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  42.15"  lonText="-101.57" hazard="MT_OBSC" fcstHr="6" tag="5"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY FU/HZ" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 42.231308" Lon="-106.426765"/>
+            <Point Lat=" 41.942974" Lon="-105.154343"/>
+            <Point Lat=" 40.060413" Lon="-104.367249"/>
+            <Point Lat=" 40.066223" Lon="-105.722023"/>
+            <Point Lat=" 41.175987" Lon="-106.440933"/>
+            <Point Lat=" 41.197193" Lon="-107.225899"/>
+            <Point Lat=" 41.370258" Lon="-107.763382"/>
+            <Point Lat=" 42.022026" Lon="-107.091537"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  45.27"  lonText="-127.68" hazard="MT_OBSC" fcstHr="9" tag="1"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY FU/HZ" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 48.829971" Lon="-119.699112"/>
+            <Point Lat=" 48.142277" Lon="-117.722046"/>
+            <Point Lat=" 46.997810" Lon="-116.299110"/>
+            <Point Lat=" 47.041756" Lon="-115.090385"/>
+            <Point Lat=" 46.323364" Lon="-113.314522"/>
+            <Point Lat=" 45.444176" Lon="-111.232101"/>
+            <Point Lat=" 45.315365" Lon="-109.487274"/>
+            <Point Lat=" 44.701458" Lon="-110.108208"/>
+            <Point Lat=" 43.784611" Lon="-111.140823"/>
+            <Point Lat=" 43.753937" Lon="-112.955238"/>
+            <Point Lat=" 43.688423" Lon="-114.452843"/>
+            <Point Lat=" 42.909603" Lon="-114.870689"/>
+            <Point Lat=" 42.374908" Lon="-115.864319"/>
+            <Point Lat=" 42.364063" Lon="-117.271568"/>
+            <Point Lat=" 42.719032" Lon="-118.123184"/>
+            <Point Lat=" 43.168823" Lon="-118.635376"/>
+            <Point Lat=" 42.851879" Lon="-120.238205"/>
+            <Point Lat=" 42.611958" Lon="-122.484955"/>
+            <Point Lat=" 42.042202" Lon="-123.772942"/>
+            <Point Lat=" 42.381805" Lon="-124.332771"/>
+            <Point Lat=" 45.682434" Lon="-123.913040"/>
+            <Point Lat=" 46.416660" Lon="-123.221390"/>
+            <Point Lat=" 46.620129" Lon="-122.290764"/>
+            <Point Lat=" 47.452026" Lon="-121.883682"/>
+            <Point Lat=" 48.477516" Lon="-121.643120"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  39.38"  lonText=" -86.52" hazard="MT_OBSC" fcstHr="6" tag="4"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY CLDS/PCPN/BR" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 38.958942" Lon="-80.323906"/>
+            <Point Lat=" 38.385651" Lon="-78.512665"/>
+            <Point Lat=" 35.144562" Lon="-80.921722"/>
+            <Point Lat=" 33.654087" Lon="-84.402084"/>
+            <Point Lat=" 35.015114" Lon="-85.111710"/>
+            <Point Lat=" 36.675964" Lon="-85.083481"/>
+            <Point Lat=" 38.675606" Lon="-82.139168"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  40.91"  lonText="-101.32" hazard="MT_OBSC" fcstHr="9" tag="5"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY FU/HZ" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 41.630821" Lon="-107.455414"/>
+            <Point Lat=" 41.566734" Lon="-106.279701"/>
+            <Point Lat=" 41.049576" Lon="-105.148140"/>
+            <Point Lat=" 40.340187" Lon="-104.614845"/>
+            <Point Lat=" 39.093643" Lon="-104.634666"/>
+            <Point Lat=" 39.167950" Lon="-105.857613"/>
+            <Point Lat=" 40.465885" Lon="-106.931854"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  34.77"  lonText="-111.27" hazard="MT_OBSC" fcstHr="9" tag="3"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY FU/HZ" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 39.762352" Lon="-117.746429"/>
+            <Point Lat=" 39.673515" Lon="-117.160690"/>
+            <Point Lat=" 39.114761" Lon="-117.102386"/>
+            <Point Lat=" 38.613739" Lon="-116.625175"/>
+            <Point Lat=" 38.243496" Lon="-116.136681"/>
+            <Point Lat=" 38.096325" Lon="-115.633446"/>
+            <Point Lat=" 38.546616" Lon="-114.984886"/>
+            <Point Lat=" 39.330421" Lon="-114.866539"/>
+            <Point Lat=" 39.135658" Lon="-113.855667"/>
+            <Point Lat=" 38.931675" Lon="-112.975296"/>
+            <Point Lat=" 39.200249" Lon="-112.311684"/>
+            <Point Lat=" 39.290874" Lon="-111.261932"/>
+            <Point Lat=" 38.251820" Lon="-110.265366"/>
+            <Point Lat=" 37.561089" Lon="-109.372841"/>
+            <Point Lat=" 37.190018" Lon="-109.422234"/>
+            <Point Lat=" 37.221020" Lon="-111.485062"/>
+            <Point Lat=" 37.750092" Lon="-112.588928"/>
+            <Point Lat=" 37.908268" Lon="-113.387360"/>
+            <Point Lat=" 38.185226" Lon="-114.558258"/>
+            <Point Lat=" 37.599979" Lon="-115.265587"/>
+            <Point Lat=" 37.474724" Lon="-116.195442"/>
+            <Point Lat=" 38.270683" Lon="-117.274864"/>
+            <Point Lat=" 38.807220" Lon="-117.939728"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  36.06"  lonText="-107.75" hazard="MT_OBSC" fcstHr="6" tag="3"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY FU/HZ" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 39.625732" Lon="-114.171463"/>
+            <Point Lat=" 39.609482" Lon="-113.431313"/>
+            <Point Lat=" 39.275944" Lon="-112.539345"/>
+            <Point Lat=" 39.158123" Lon="-111.617218"/>
+            <Point Lat=" 38.652901" Lon="-110.897522"/>
+            <Point Lat=" 38.564537" Lon="-109.890190"/>
+            <Point Lat=" 37.980812" Lon="-109.914093"/>
+            <Point Lat=" 37.577843" Lon="-110.448608"/>
+            <Point Lat=" 37.737450" Lon="-112.506790"/>
+            <Point Lat=" 38.141651" Lon="-112.767334"/>
+            <Point Lat=" 38.378201" Lon="-113.762161"/>
+            <Point Lat=" 38.282623" Lon="-114.915688"/>
+            <Point Lat=" 37.749519" Lon="-115.643761"/>
+            <Point Lat=" 37.291008" Lon="-115.840866"/>
+            <Point Lat=" 37.138092" Lon="-116.283264"/>
+            <Point Lat=" 37.877903" Lon="-116.095413"/>
+            <Point Lat=" 38.302856" Lon="-115.682281"/>
+            <Point Lat=" 38.760513" Lon="-114.631676"/>
+            <Point Lat=" 39.521072" Lon="-114.987236"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  47.52"  lonText=" -74.94" hazard="MT_OBSC" fcstHr="9" tag="2"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY CLDS/BR/FG" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 47.629421" Lon="-69.338905"/>
+            <Point Lat=" 45.630810" Lon="-68.587692"/>
+            <Point Lat=" 44.513111" Lon="-69.774124"/>
+            <Point Lat=" 43.630474" Lon="-71.589973"/>
+            <Point Lat=" 44.252327" Lon="-73.379463"/>
+            <Point Lat=" 45.198578" Lon="-72.691162"/>
+            <Point Lat=" 45.445728" Lon="-71.642494"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  36.02"  lonText=" -88.55" hazard="MT_OBSC" fcstHr="9" tag="4"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY CLDS/BR/FG" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 38.729500" Lon="-80.012360"/>
+            <Point Lat=" 38.489094" Lon="-78.428322"/>
+            <Point Lat=" 35.180363" Lon="-80.945930"/>
+            <Point Lat=" 33.626247" Lon="-84.409554"/>
+            <Point Lat=" 34.998703" Lon="-85.187981"/>
+            <Point Lat=" 36.807289" Lon="-84.973877"/>
+            <Point Lat=" 38.210541" Lon="-82.725456"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  34.77"  lonText="-111.27" hazard="MT_OBSC" fcstHr="12" tag="3"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY FU/HZ" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 39.762356" Lon="-117.746407"/>
+            <Point Lat=" 39.673515" Lon="-117.160690"/>
+            <Point Lat=" 39.114758" Lon="-117.102402"/>
+            <Point Lat=" 38.613743" Lon="-116.625175"/>
+            <Point Lat=" 38.243496" Lon="-116.136681"/>
+            <Point Lat=" 38.096333" Lon="-115.633446"/>
+            <Point Lat=" 38.546619" Lon="-114.984879"/>
+            <Point Lat=" 39.196915" Lon="-114.770477"/>
+            <Point Lat=" 39.032314" Lon="-113.895699"/>
+            <Point Lat=" 38.852974" Lon="-112.627228"/>
+            <Point Lat=" 39.200245" Lon="-112.311653"/>
+            <Point Lat=" 39.290874" Lon="-111.261703"/>
+            <Point Lat=" 38.251808" Lon="-110.265205"/>
+            <Point Lat=" 37.186852" Lon="-109.610703"/>
+            <Point Lat=" 37.107895" Lon="-110.839500"/>
+            <Point Lat=" 37.584846" Lon="-111.642403"/>
+            <Point Lat=" 37.750069" Lon="-112.588829"/>
+            <Point Lat=" 37.908257" Lon="-113.387299"/>
+            <Point Lat=" 38.176250" Lon="-114.594269"/>
+            <Point Lat=" 37.599979" Lon="-115.265587"/>
+            <Point Lat=" 37.474724" Lon="-116.195435"/>
+            <Point Lat=" 38.270676" Lon="-117.274902"/>
+            <Point Lat=" 38.807236" Lon="-117.939728"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  38.35"  lonText="-102.22" hazard="MT_OBSC" fcstHr="12" tag="5"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY FU/HZ" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 41.646175" Lon="-106.877632"/>
+            <Point Lat=" 40.903072" Lon="-105.364059"/>
+            <Point Lat=" 41.027260" Lon="-104.777634"/>
+            <Point Lat=" 40.386044" Lon="-104.462646"/>
+            <Point Lat=" 39.544624" Lon="-104.949181"/>
+            <Point Lat=" 38.706501" Lon="-105.147202"/>
+            <Point Lat=" 38.611435" Lon="-105.708290"/>
+            <Point Lat=" 38.855183" Lon="-106.183472"/>
+            <Point Lat=" 39.535210" Lon="-106.326454"/>
+            <Point Lat=" 40.593910" Lon="-107.123489"/>
+            <Point Lat=" 41.423321" Lon="-107.156349"/>
+          </Gfa>
+          <Gfa pgenCategory="MET" pgenType="GFA" lineWidth="2" sizeScale="  1.0" smoothFactor="0" closed="true" filled="false" fillPattern="SOLID" latText="  45.32"  lonText="-127.66" hazard="MT_OBSC" fcstHr="12" tag="1"  desk="E" issueType="NRML" cycleDay=""  cycleHour="21" area="" rg=""  beginning="" ending="" states="" type="MTNS OBSC BY FU/HZ" top="" bottom="" coverage=""  fzlTopBottom="" level=""  fzlRange="" contour="" severity=""  dueto="" speed="" intensity="" category=""  frequency="" isOutlook="false" textVor="">
+            <Color red="255" green="255" blue="0" alpha="255"/>
+            <Color red="255" green="255" blue="255" alpha="255"/>
+            <Point Lat=" 48.869026" Lon="-119.300247"/>
+            <Point Lat=" 48.071041" Lon="-117.732910"/>
+            <Point Lat=" 46.617287" Lon="-116.203194"/>
+            <Point Lat=" 47.081841" Lon="-115.060516"/>
+            <Point Lat=" 46.362591" Lon="-113.283165"/>
+            <Point Lat=" 45.482372" Lon="-111.199493"/>
+            <Point Lat=" 45.352814" Lon="-109.453239"/>
+            <Point Lat=" 44.738995" Lon="-110.075272"/>
+            <Point Lat=" 43.679230" Lon="-111.015556"/>
+            <Point Lat=" 43.557865" Lon="-112.966873"/>
+            <Point Lat=" 43.512539" Lon="-114.510864"/>
+            <Point Lat=" 42.556217" Lon="-114.584549"/>
+            <Point Lat=" 42.210381" Lon="-115.744736"/>
+            <Point Lat=" 42.162392" Lon="-117.171181"/>
+            <Point Lat=" 42.471516" Lon="-117.949059"/>
+            <Point Lat=" 42.882195" Lon="-118.706841"/>
+            <Point Lat=" 42.082550" Lon="-122.054848"/>
+            <Point Lat=" 42.819828" Lon="-122.573586"/>
+            <Point Lat=" 41.534340" Lon="-124.117020"/>
+            <Point Lat=" 42.423203" Lon="-124.314903"/>
+            <Point Lat=" 45.724758" Lon="-123.893234"/>
+            <Point Lat=" 46.204491" Lon="-123.223221"/>
+            <Point Lat=" 46.662308" Lon="-122.268715"/>
+            <Point Lat=" 47.494328" Lon="-121.860733"/>
+            <Point Lat=" 48.493290" Lon="-121.707329"/>
+          </Gfa>
+        </DrawableElement>
+      </Layer>
+    </Product>
+  </Products>
