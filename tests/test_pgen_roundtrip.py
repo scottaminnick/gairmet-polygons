@@ -6,12 +6,17 @@ NMAP2's format exactly -- including whitespace and numeric widths.
 import sys
 import difflib
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
-from pgen_xml import gfa_element, build_product_xml
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from pipeline.pgen_xml import gfa_element, build_product_xml
+
+_FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 SAMPLES = [
-    "/mnt/user-data/uploads/21Z_CV.xml",
-    "/mnt/user-data/uploads/21Z_MT_OBSC.xml",
+    str(_FIXTURES / "21Z_CV.xml"),
+    str(_FIXTURES / "21Z_MT_OBSC.xml"),
 ]
 
 
