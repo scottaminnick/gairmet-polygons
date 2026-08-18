@@ -34,11 +34,10 @@
       <span class="swatch swatch-ifr"></span>
       <span class="mono">IFR CIG/VIS</span>
     </label>
-    <label class="layer-toggle layer-disabled" title="Mountain obscuration hazard not yet implemented -- see project README">
-      <input type="checkbox" id="toggle-mtn" disabled />
+    <label class="layer-toggle">
+      <input type="checkbox" id="toggle-mtn" checked />
       <span class="swatch swatch-mtn"></span>
       <span class="mono">MTN OBSC</span>
-      <span class="pending">soon</span>
     </label>
     <label class="layer-toggle">
       <input type="checkbox" id="toggle-states" checked />
@@ -53,7 +52,7 @@
   </div>
 
   <div class="panel" id="adjust-panel">
-    <div class="panel-title">ADJUST (LIVE) <span id="adjust-status" class="mono"></span></div>
+    <div class="panel-title">ADJUST IFR (LIVE) <span id="adjust-status" class="mono"></span></div>
     <div class="adjust-row">
       <span class="mono adjust-label">THRESH</span>
       <input type="range" id="adjust-threshold" min="10" max="90" step="5" value="50" />
@@ -78,6 +77,7 @@
 <div class="panel panel-bottom-left" id="legend">
   <div class="panel-title">LEGEND</div>
   <div class="legend-row"><span class="swatch swatch-ifr"></span><span class="mono">PROB(IFR) &ge; <span id="legend-threshold">70</span>%</span></div>
+  <div class="legend-row"><span class="swatch swatch-mtn"></span><span class="mono">MTN OBSC &ge; <span id="legend-mtn-threshold">--</span>%</span></div>
   <div class="panel-row"><span class="label">SMOOTHING</span><span class="mono value"><span id="legend-radius">--</span>nm radius</span></div>
   <div class="panel-row"><span class="label">MIN AREA</span><span class="mono value"><span id="legend-min-area">--</span> sq mi</span></div>
 </div>
