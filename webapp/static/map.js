@@ -217,6 +217,43 @@ async function recomputeCurrentSnapshot() {
 
 const debouncedRecompute = debounce(recomputeCurrentSnapshot, 300);
 
+// --- Same idea as recomputeCurrentSnapshot() above, but for the
+//     Mountain Obscuration layer and its own sliders. Kept as a separate
+//     function (and a separate panel) rather than having one set of
+//     sliders drive both layers: MTN OBSC has a parameter IFR doesn't
+//     (clearance_margin_ft), and the two hazards are genuinely tuned
+//     independently -- a forecaster dialing in an IFR threshold
+//     shouldn't silently move the mountain obscuration boundaries too. ---
+async function recomputeCurrentMtnSnapshot() {
+  if (currentFxx == null || !liveAdjustAvailable) return;
+
+  const threshold = document.getElementById('adjust-mtn-threshold').value;
+  const clearance = document.getElementById('adjust-mtn-clearance').value;
+  const radius = document.getElementById('adjust-mtn-radius').value;
+  const minArea = document.getElementById('adjust-mtn-minarea').value;
+  const statusEl = document.getElementById('adjust-mtn-status');
+  const fxxStr = String(currentFxx).padStart(2, '0');
+
+  statusEl.textContent = 'computing...';
+  try {
+    const url = `/api/hazards/mtn_obsc/${fxxStr}/recompute?threshold_pct=${threshold}` +
+      `&clearance_margin_ft=${clearance}&neighborhood_radius_nm=${radius}&min_area_sq_mi=${minArea}`;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`MTN OBSC recompute failed (${resp.status})`);
+    const geojson = await resp.json();
+
+    layers.mtn.clearLayers();
+    layers.mtn.addData(geojson);
+    document.getElementById('legend-mtn-threshold').textContent = threshold;
+    statusEl.textContent = '';
+  } catch (err) {
+    console.error('MTN OBSC recompute failed:', err);
+    statusEl.textContent = 'error (see console)';
+  }
+}
+
+const debouncedMtnRecompute = debounce(recomputeCurrentMtnSnapshot, 300);
+
 // --- Wire up the three sliders: update the live numeric label
 //     immediately (feels responsive even before the network call
 //     resolves), and debounce the actual recompute. ---
@@ -231,6 +268,20 @@ document.getElementById('adjust-radius').addEventListener('input', (e) => {
 document.getElementById('adjust-minarea').addEventListener('input', (e) => {
   document.getElementById('adjust-minarea-val').textContent = e.target.value;
   debouncedRecompute();
+});
+
+// --- MTN OBSC sliders: same pattern as the IFR ones above (immediate
+//     label update, debounced recompute). ---
+[
+  ['adjust-mtn-threshold', 'adjust-mtn-threshold-val'],
+  ['adjust-mtn-clearance', 'adjust-mtn-clearance-val'],
+  ['adjust-mtn-radius', 'adjust-mtn-radius-val'],
+  ['adjust-mtn-minarea', 'adjust-mtn-minarea-val'],
+].forEach(([sliderId, labelId]) => {
+  document.getElementById(sliderId).addEventListener('input', (e) => {
+    document.getElementById(labelId).textContent = e.target.value;
+    debouncedMtnRecompute();
+  });
 });
 
 // --- Reset button: reloads the ORIGINAL scheduled snapshot (its
@@ -295,6 +346,50 @@ document.getElementById('adjust-generate').addEventListener('click', async () =>
   }
 });
 
+// --- MTN OBSC reset: reloads the original scheduled snapshot for the
+//     current forecast hour, discarding slider changes. ---
+document.getElementById('adjust-mtn-reset').addEventListener('click', async () => {
+  if (currentFxx == null) return;
+  await loadMtnObscSnapshot(currentFxx);
+});
+
+// --- MTN OBSC generate: downloads GeoJSON + XML for whatever the MTN
+//     sliders currently say, same as the IFR generate button. ---
+document.getElementById('adjust-mtn-generate').addEventListener('click', async () => {
+  if (currentFxx == null || !liveAdjustAvailable) return;
+
+  const threshold = document.getElementById('adjust-mtn-threshold').value;
+  const clearance = document.getElementById('adjust-mtn-clearance').value;
+  const radius = document.getElementById('adjust-mtn-radius').value;
+  const minArea = document.getElementById('adjust-mtn-minarea').value;
+  const fxxStr = String(currentFxx).padStart(2, '0');
+  const statusEl = document.getElementById('generate-mtn-status');
+  const baseName = `mtn_obsc_f${fxxStr}_t${threshold}_c${clearance}_r${radius}_a${minArea}`;
+
+  statusEl.textContent = 'generating...';
+  try {
+    const baseUrl = `/api/hazards/mtn_obsc/${fxxStr}/recompute?threshold_pct=${threshold}` +
+      `&clearance_margin_ft=${clearance}&neighborhood_radius_nm=${radius}&min_area_sq_mi=${minArea}`;
+
+    const geojsonResp = await fetch(baseUrl);
+    if (!geojsonResp.ok) throw new Error(`GeoJSON fetch failed (${geojsonResp.status})`);
+    const geojsonText = await geojsonResp.text();
+
+    const xmlResp = await fetch(`${baseUrl}&format=xml`);
+    if (!xmlResp.ok) throw new Error(`XML fetch failed (${xmlResp.status})`);
+    const xmlText = await xmlResp.text();
+
+    downloadTextFile(geojsonText, `${baseName}.geojson`, 'application/geo+json');
+    downloadTextFile(xmlText, `${baseName}.xml`, 'application/xml');
+
+    statusEl.textContent = 'downloaded';
+    setTimeout(() => { statusEl.textContent = ''; }, 3000);
+  } catch (err) {
+    console.error('MTN OBSC generate failed:', err);
+    statusEl.textContent = 'error (see console)';
+  }
+});
+
 // --- Loads one specific IFR snapshot by its REQUESTED forecast hour
 //     (matching the manifest's "requested_forecast_hour" and the
 //     filename convention ifr_fNN.geojson), replaces the ifr layer's
@@ -346,6 +441,21 @@ async function loadMtnObscSnapshot(requestedFxx) {
     const firstProps = geojson.features?.[0]?.properties;
     document.getElementById('legend-mtn-threshold').textContent =
       firstProps?.threshold_pct ?? '--';
+
+    // Sync the MTN sliders to what's actually on screen -- otherwise
+    // they'd keep showing whatever was last dragged, which after a reset
+    // or a forecast-hour switch would misrepresent the displayed data.
+    if (firstProps) {
+      const sync = (sliderId, labelId, value) => {
+        if (value == null) return;
+        document.getElementById(sliderId).value = value;
+        document.getElementById(labelId).textContent = value;
+      };
+      sync('adjust-mtn-threshold', 'adjust-mtn-threshold-val', firstProps.threshold_pct);
+      sync('adjust-mtn-clearance', 'adjust-mtn-clearance-val', firstProps.clearance_margin_ft);
+      sync('adjust-mtn-radius', 'adjust-mtn-radius-val', firstProps.neighborhood_radius_nm);
+      sync('adjust-mtn-minarea', 'adjust-mtn-minarea-val', firstProps.min_area_sq_mi);
+    }
   } catch (err) {
     console.warn('Mountain Obscuration layer unavailable:', err);
     layers.mtn.clearLayers();
@@ -433,6 +543,7 @@ async function loadData() {
     console.warn('No forecast-hour manifest available, falling back to single snapshot:', err);
     document.getElementById('fxx-row').style.display = 'none';
     document.getElementById('adjust-panel').style.display = 'none'; // nothing cached to recompute from
+    document.getElementById('adjust-mtn-panel').style.display = 'none'; // same
     try {
       const ifrResp = await fetch('/api/hazards/ifr');
       const ifrGeoJSON = await ifrResp.json();
