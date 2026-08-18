@@ -96,8 +96,18 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import requests
 from scipy.ndimage import maximum_filter, uniform_filter
+
+# NOTE: `requests` is deliberately NOT imported here at module level,
+# even though this module's fetching functions need it. webapp/main.py's
+# Mountain Obscuration recompute endpoint imports load_terrain_grid()
+# from this module, and the webapp installs only requirements.txt (the
+# light set) -- which does NOT include requests. A module-level import
+# here would therefore crash that endpoint on Railway with
+# ModuleNotFoundError, even though load_terrain_grid() itself only needs
+# numpy. Same reasoning as pipeline/hazards/ifr.py's local xarray import;
+# see that module's docstring. The fetching functions below import
+# requests locally instead.
 
 # Needed because this script is meant to be run directly
 # (`python3 pipeline/fetch_terrain.py`), which only puts this file's own
@@ -315,6 +325,11 @@ def assemble_intermediate_mosaic(
     and 0 can never wrongly dominate a later MAX filter the way a
     fabricated high value would.
     """
+    # Imported locally, not at module level -- see the note beside this
+    # module's numpy/scipy imports for why (webapp/main.py imports
+    # load_terrain_grid() from here and does not install requests).
+    import requests
+
     session = session or requests.Session()
     west, south, east, north = bounds
     intermediate_deg = downsample_factor / 3600.0  # arcsec -> degrees
