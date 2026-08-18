@@ -115,6 +115,16 @@ def geojson_to_xml(feature_collection: dict) -> str:
         ("threshold_pct", "thresholdPct"),
         ("neighborhood_radius_nm", "neighborhoodRadiusNm"),
         ("min_area_sq_mi", "minAreaSqMi"),
+        # Mountain Obscuration only -- IFR's feature properties simply
+        # don't contain these keys, and the `if key in props` guard below
+        # means they're silently skipped for IFR rather than emitting
+        # empty attributes. Both matter to anyone reading a handed-off
+        # draft: clearance_margin_ft is the forecaster-chosen margin above
+        # the ridge, and terrain_radius_nm records which terrain-grid
+        # vintage produced the result (it's baked in at fetch time, not
+        # adjustable at polygonize time -- see pipeline/fetch_terrain.py).
+        ("clearance_margin_ft", "clearanceMarginFt"),
+        ("terrain_radius_nm", "terrainRadiusNm"),
     ]:
         if key in props and props[key] is not None:
             root_attrs[xml_name] = str(props[key])
