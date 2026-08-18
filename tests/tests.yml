@@ -1,0 +1,82 @@
+name: Tests
+
+# Runs on every push to main and every pull request -- the safety net
+# that catches a broken or PARTIAL update before it reaches production.
+# Motivating case: this repo's files are often updated by hand a few at a
+# time, and a cross-file change (e.g. renaming a function used by both
+# pipeline/hazards/mtn_obsc.py and tests/test_mtn_obsc.py) is broken if
+# only some files land. Nothing caught that before this workflow existed
+# -- the first signal was a failed scheduled production run, hours later.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Unlike the generate_*.yml workflows (where cancel-in-progress is
+# deliberately false, because each run produces real forecast output
+# someone may be waiting on), cancelling superseded test runs is correct:
+# results for a commit that's already been replaced aren't useful, and
+# the newer commit's run supersedes them.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          # Caches pip downloads between runs, keyed on the requirements
+          # file -- shaves most of the install time off repeat runs.
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # Deliberately requirements.txt (the LIGHT set the webapp deploys
+      # with) plus pytest -- NOT requirements-pipeline.txt, even though
+      # pytest is declared there. Verified directly: the whole suite
+      # passes without the heavy GRIB2 stack (cfgrib/xarray/herbie/
+      # pandas/matplotlib), because the modules that need those import
+      # them locally inside functions rather than at module level.
+      #
+      # This is a feature, not just a speed optimization: installing only
+      # the light set means CI FAILS if someone adds a module-level heavy
+      # import to a path the webapp touches.
+      - name: Install dependencies (light set + pytest)
+        run: pip install -r requirements.txt pytest
+
+      # Guards the specific Railway failure mode this repo has actually
+      # hit: pipeline/fetch_terrain.py imported requests at module level
+      # while webapp/main.py imports load_terrain_grid() from it, and
+      # requests is NOT in requirements.txt -- so that endpoint would
+      # have 500'd in production with ModuleNotFoundError.
+      #
+      # Note importing webapp.main ALONE does not catch this, because
+      # main.py imports its pipeline dependencies LAZILY (inside the
+      # endpoint functions, deliberately -- see that file's docstring),
+      # so a module-level import error in one of them stays invisible
+      # until the endpoint is actually hit. Confirmed by testing: the
+      # bare `import webapp.main` check passed while the bug was present.
+      # Hence the explicit list below -- every module main.py imports
+      # lazily has to be importable under the deployed dependency set.
+      - name: Verify webapp and its lazily-imported deps under deployed dependencies only
+        run: |
+          python3 -c "
+          import webapp.main
+          import pipeline.export_xml
+          import pipeline.fetch_terrain
+          import pipeline.hazards.ifr
+          import pipeline.hazards.mtn_obsc
+          import pipeline.polygons
+          print('webapp + all lazily-imported pipeline deps import OK under requirements.txt')
+          "
+
+      - name: Run tests
+        run: python3 -m pytest tests/ -v
