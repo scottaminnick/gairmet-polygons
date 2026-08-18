@@ -23,7 +23,9 @@ from pipeline.hazards.mtn_obsc import (
     MOUNTAINOUS_RELIEF_THRESHOLD_FT,
     THRESHOLD_ANCHORS_FT,
     _determine_weather_type,
-    _get_conus_mask,
+    CONUS_BOUNDARY_PATH,
+    LAND_BOUNDARY_PATH,
+    _get_boundary_mask,
     find_message_excluding,
     interpolate_terrain_relative_probability,
     polygonize_mtn_obsc_grid,
@@ -268,7 +270,7 @@ def test_polygonize_generates_polygon_over_real_relief():
 
 # ---------------------------------------------------------------------------
 # Bathymetry / ocean-depth exclusion (MIN_BASELINE_ELEVATION_FT) and the
-# CONUS/ARTCC boundary mask (_get_conus_mask) -- both added directly in
+# CONUS/ARTCC boundary mask (_get_boundary_mask) -- both added directly in
 # response to a real production run painting real relief in Mexico,
 # Quebec, and open Pacific water. See the constants' own docstrings in
 # mtn_obsc.py for the full real-data diagnosis behind each.
@@ -338,7 +340,93 @@ def test_polygonize_still_generates_polygon_when_baseline_is_positive():
     assert len(result["features"]) > 0
 
 
-def test_get_conus_mask_excludes_quebec_and_mexico_includes_conus():
+def test_land_mask_excludes_ocean_but_keeps_coastal_land():
+    """
+    The land mask is the PRIMARY water exclusion, and this pins the
+    specific case an elevation test structurally cannot catch: an ocean
+    cell near steep coastal terrain, where the elevation-based check is
+    structurally unreliable: the same smoothing that lifts an ocean
+    cell's baseline is what an elevation cutoff would have to see
+    through. Checked against the REAL data/boundaries/us_states.json,
+    not a synthetic boundary.
+    """
+    grid_spec = GridSpec(west=-126.0, north=50.0, dx=0.025, dy=-0.025)
+    shape = (1120, 2440)
+    land = _get_boundary_mask(grid_spec, shape, LAND_BOUNDARY_PATH)
+
+    def idx(lat, lon):
+        return round((grid_spec.north - lat) / grid_spec.dx), round((lon - grid_spec.west) / grid_spec.dx)
+
+    water_points = {
+        "Pacific ~15mi off Oregon": (44.0, -124.55),
+        "Pacific ~30mi off Oregon": (44.0, -124.90),
+        # -121.5 is genuinely open water here (baseline -562 ft); note the
+        # coastline at this latitude sits near -121.35, and -121.31 is real
+        # LAND (Santa Lucia Range, baseline 1251 ft) despite being only ~2mi
+        # further east -- the Big Sur coast rises that steeply.
+        "Pacific off the Big Sur coast": (35.74, -121.5),
+        "Mid Lake Michigan": (43.5, -87.0),
+    }
+    for name, (lat, lon) in water_points.items():
+        r, c = idx(lat, lon)
+        assert not land[r, c], f"{name} should be excluded as water"
+
+    land_points = {
+        "Coastal Oregon (just inland)": (44.0, -124.10),
+        "Denver, CO": (39.7392, -104.9903),
+        "Mt. Whitney, CA": (36.5785, -118.2923),
+    }
+    for name, (lat, lon) in land_points.items():
+        r, c = idx(lat, lon)
+        assert land[r, c], f"{name} should be kept as land"
+
+
+def test_below_sea_level_land_is_not_excluded():
+    """
+    Regression guard for a real false negative introduced when
+    MIN_BASELINE_ELEVATION_FT was briefly set to exactly sea level (0 ft)
+    -- which seems like the obvious "land vs water" cutoff but silently
+    dropped genuine below-sea-level LAND with dramatic mountain relief.
+    Death Valley's floor sits at -255 ft with 10,065 ft of relief from
+    the Panamint Range above it: exactly the terrain this hazard exists
+    to flag.
+
+    Verified against the REAL terrain grid and REAL land boundary rather
+    than synthetic fixtures, since the whole point is that the real-world
+    values are what make sea level the wrong cutoff.
+    """
+    import pipeline.fetch_terrain as ft
+
+    terrain_path = Path(__file__).resolve().parent.parent / "data" / "terrain" / "terrain_grid.npz"
+    if not terrain_path.exists():
+        import pytest
+
+        pytest.skip("terrain grid not available in this checkout")
+
+    grids, grid_spec, _radius = ft.load_terrain_grid(str(terrain_path))
+    baseline = grids["baseline_elevation_ft"]
+    ridge = grids["ridge_elevation_ft"]
+    land = _get_boundary_mask(grid_spec, baseline.shape, LAND_BOUNDARY_PATH)
+
+    def idx(lat, lon):
+        return round((grid_spec.north - lat) / grid_spec.dx), round((lon - grid_spec.west) / grid_spec.dx)
+
+    # (name, lat, lon) -- all real below-sea-level LAND in CONUS
+    for name, lat, lon in [
+        ("Death Valley floor (Badwater)", 36.25, -116.83),
+        ("Salton Sea shore, CA", 33.35, -115.85),
+    ]:
+        r, c = idx(lat, lon)
+        assert baseline[r, c] < 0, f"{name} fixture assumes below-sea-level baseline; grid says {baseline[r, c]}"
+        assert land[r, c], f"{name} is real land and must not be excluded by the land mask"
+        assert baseline[r, c] >= MIN_BASELINE_ELEVATION_FT, (
+            f"{name} (baseline {baseline[r, c]:.0f} ft, relief {ridge[r, c] - baseline[r, c]:.0f} ft) "
+            f"is real land with real mountain relief, but MIN_BASELINE_ELEVATION_FT "
+            f"({MIN_BASELINE_ELEVATION_FT}) excludes it -- that threshold is too high."
+        )
+
+
+def test_conus_boundary_mask_excludes_quebec_and_mexico_includes_conus():
     """
     Direct check against the REAL data/boundaries/artcc.json file (not a
     synthetic boundary) -- confirms the specific real coordinates from
@@ -348,7 +436,7 @@ def test_get_conus_mask_excludes_quebec_and_mexico_includes_conus():
     """
     grid_spec = GridSpec(west=-126.0, north=50.0, dx=0.025, dy=-0.025)
     shape = (1120, 2440)
-    mask = _get_conus_mask(grid_spec, shape)
+    mask = _get_boundary_mask(grid_spec, shape, CONUS_BOUNDARY_PATH)
 
     def idx(lat, lon):
         row = round((grid_spec.north - lat) / grid_spec.dx)
@@ -373,7 +461,7 @@ def test_get_conus_mask_excludes_quebec_and_mexico_includes_conus():
         assert mask[r, c], f"{name} should be INSIDE the CONUS/ARTCC boundary"
 
 
-def test_get_conus_mask_is_memoized():
+def test_boundary_mask_is_memoized():
     """
     Confirms the expensive union+rasterize step (several real seconds --
     see load_boundary_mask's docstring) only actually runs once across
@@ -398,9 +486,9 @@ def test_get_conus_mask_is_memoized():
     with unittest.mock.patch.object(mtn_obsc, "load_boundary_mask", side_effect=counting_load_boundary_mask):
         grid_spec = GridSpec(west=-999.0, north=999.0, dx=1.0, dy=-1.0)  # distinct, won't collide with other tests
         shape = (5, 5)
-        _get_conus_mask(grid_spec, shape)
-        _get_conus_mask(grid_spec, shape)
-        _get_conus_mask(grid_spec, shape)
+        _get_boundary_mask(grid_spec, shape, CONUS_BOUNDARY_PATH)
+        _get_boundary_mask(grid_spec, shape, CONUS_BOUNDARY_PATH)
+        _get_boundary_mask(grid_spec, shape, CONUS_BOUNDARY_PATH)
 
     assert call_count["n"] == 1, f"Expected exactly 1 real computation, got {call_count['n']}"
 
