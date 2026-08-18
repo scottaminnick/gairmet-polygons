@@ -10,8 +10,10 @@ emits every polygon as a <Gfa> element via pipeline/pgen_xml.py.
 Example:
     python scripts/make_pgen_test.py --hazard IFR --cycle-hour 21 --out 21Z_IFR.xml
 
-NOTE ON TAGS: tag assignment here is a deliberate placeholder. See
-assign_naive_tags() -- it is not feature tracking and is meant to be replaced.
+NOTE ON TAGS: every polygon gets its own unique tag by default, with no
+reuse across forecast hours (assign_unique_tags). The forecaster renumbers in
+NMAP2 anyway, so guessing at AWC's convention buys nothing. The older
+tag-reusing assigner is still here behind --naive-tags; see assign_naive_tags.
 
 NOTE ON SIMPLIFICATION: rings are thinned to a vertex budget on the way out
 (see simplify_to_budget). That is an export-path concern only -- it does not
@@ -149,11 +151,49 @@ def simplify_to_budget(ring, max_points=25):
     return simplified
 
 
+def assign_unique_tags(centroids_by_hour):
+    """
+    DEFAULT tag assignment: one unique integer per polygon, numbered
+    sequentially across the whole cycle and never reused between forecast
+    hours.
+
+    These are first-guess polygons that the forecaster renumbers in NMAP2, so
+    matching AWC's tag convention is not a goal. Reuse is not merely
+    unnecessary here, it is harmful: a tag shared across hours tells NMAP2 the
+    polygons are one evolving feature, which is what made the naive assigner
+    render heavily overlapping smears. Unique tags cannot express that
+    relationship, so they cannot get it wrong.
+
+    Accepts centroids_by_hour purely so it is drop-in interchangeable with
+    assign_naive_tags. The geometry is not used -- only the per-hour counts.
+
+    centroids_by_hour : list, one entry per forecast hour in order, each a
+                        list of (lat, lon) polygon centroids.
+    returns           : list of the same shape, holding integer tags.
+    """
+    tags_by_hour = []
+    next_tag = 1
+
+    for centroids in centroids_by_hour:
+        tags_by_hour.append(list(range(next_tag, next_tag + len(centroids))))
+        next_tag += len(centroids)
+
+    return tags_by_hour
+
+
 def assign_naive_tags(centroids_by_hour):
     """
-    PLACEHOLDER tag assignment. Deliberately naive -- replace wholesale.
+    OPT-IN tag assignment, unused by default -- enable with --naive-tags.
 
-    Walks the forecast hours in order. For each polygon, if its centroid lies
+    Superseded by assign_unique_tags(), which is now the default. Tag reuse
+    turned out to be the wrong thing to approximate: the forecaster renumbers
+    these first-guess polygons in NMAP2, so matching AWC's convention was
+    never a goal, and reusing a tag across hours made NMAP2 draw the polygons
+    as one evolving feature -- 15 overlapping tag pairs in IFR's F00/F03/F06
+    window alone. Unique tags avoid that by construction. This is kept only
+    in case tag grouping later becomes a real requirement.
+
+    Deliberately naive. Walks the forecast hours in order. For each polygon, if its centroid lies
     within TAG_MATCH_RADIUS_NM of a polygon at the PREVIOUS hour, it reuses
     that polygon's tag; otherwise it takes the next unused integer.
 
@@ -307,6 +347,9 @@ def main(argv=None):
     parser.add_argument("--out", required=True, help="output XML path")
     parser.add_argument("--max-points", type=int, default=25,
                         help="vertex budget per ring (default: 25)")
+    parser.add_argument("--naive-tags", action="store_true",
+                        help="reuse tags across forecast hours via "
+                             "assign_naive_tags (default: unique tags)")
     args = parser.parse_args(argv)
 
     # Cycles are 03/09/15/21Z; zero-pad so "9" and "09" produce the same file.
@@ -316,7 +359,8 @@ def main(argv=None):
 
     by_hour = load_hazard_polygons(args.hazard, args.max_points)
 
-    tags_by_hour = assign_naive_tags(
+    assign_tags = assign_naive_tags if args.naive_tags else assign_unique_tags
+    tags_by_hour = assign_tags(
         [[_centroid(points) for _, points, _, _ in hour] for hour in by_hour])
 
     blocks = []
