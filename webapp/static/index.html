@@ -72,6 +72,33 @@
     <button id="adjust-generate" class="fxx-btn adjust-generate-btn">GENERATE GEOJSON + XML</button>
     <span id="generate-status" class="mono generate-status"></span>
   </div>
+
+  <div class="panel" id="adjust-mtn-panel">
+    <div class="panel-title">ADJUST MTN OBSC (LIVE) <span id="adjust-mtn-status" class="mono"></span></div>
+    <div class="adjust-row">
+      <span class="mono adjust-label">THRESH</span>
+      <input type="range" id="adjust-mtn-threshold" min="10" max="90" step="5" value="50" />
+      <span class="mono adjust-value"><span id="adjust-mtn-threshold-val">50</span>%</span>
+    </div>
+    <div class="adjust-row">
+      <span class="mono adjust-label">CLEARANCE</span>
+      <input type="range" id="adjust-mtn-clearance" min="0" max="2000" step="500" value="500" />
+      <span class="mono adjust-value"><span id="adjust-mtn-clearance-val">500</span>ft</span>
+    </div>
+    <div class="adjust-row">
+      <span class="mono adjust-label">RADIUS</span>
+      <input type="range" id="adjust-mtn-radius" min="0" max="150" step="5" value="50" />
+      <span class="mono adjust-value"><span id="adjust-mtn-radius-val">50</span>nm</span>
+    </div>
+    <div class="adjust-row">
+      <span class="mono adjust-label">MIN AREA</span>
+      <input type="range" id="adjust-mtn-minarea" min="0" max="10000" step="250" value="3000" />
+      <span class="mono adjust-value"><span id="adjust-mtn-minarea-val">3000</span>mi&sup2;</span>
+    </div>
+    <button id="adjust-mtn-reset" class="fxx-btn adjust-reset-btn">RESET TO SCHEDULED</button>
+    <button id="adjust-mtn-generate" class="fxx-btn adjust-generate-btn">GENERATE GEOJSON + XML</button>
+    <span id="generate-mtn-status" class="mono generate-status"></span>
+  </div>
 </div>
 
 <div class="panel panel-bottom-left" id="legend">
