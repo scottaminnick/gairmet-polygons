@@ -206,3 +206,51 @@ if __name__ == "__main__":
     test_missing_weather_type_omitted_gracefully()
     test_empty_feature_collection_produces_valid_xml_with_no_polygons()
     print("All manual checks passed.")
+
+
+def test_mtn_obsc_specific_parameters_appear_in_xml():
+    """
+    clearance_margin_ft and terrain_radius_nm are Mountain Obscuration's
+    two distinctive parameters -- the forecaster-chosen margin above the
+    ridge, and which terrain-grid vintage produced the result. Both were
+    silently dropped from the XML export originally (it only knew IFR's
+    three parameters), which matters because the XML is the form handed
+    off to N-AWIPS: a draft arriving without its clearance margin is
+    missing the single most Mountain-Obscuration-specific thing about it.
+    """
+    fc = _make_fc([_polygon_feature(
+        [[[-121.0, 47.0], [-120.5, 47.5], [-120.0, 47.2], [-121.0, 47.0]]],
+        properties={
+            "hazard": "MTN_OBSC",
+            "valid_time": "2026-08-18T09:00:00Z",
+            "threshold_pct": 30.0,
+            "clearance_margin_ft": 1000.0,
+            "terrain_radius_nm": 12.0,
+            "weather_type": "CLDS",
+        },
+    )])
+    root = ET.fromstring(geojson_to_xml(fc))
+    assert root.get("hazard") == "MTN_OBSC"
+    assert root.get("clearanceMarginFt") == "1000.0"
+    assert root.get("terrainRadiusNm") == "12.0"
+
+
+def test_ifr_xml_omits_mtn_obsc_only_parameters():
+    """
+    Guards the other direction: adding Mountain Obscuration's parameters
+    to the shared exporter must NOT start emitting empty or bogus
+    attributes on IFR output, which has no such keys.
+    """
+    fc = _make_fc([_polygon_feature(
+        [[[-104.5, 39.2], [-104.3, 39.5], [-104.1, 39.6], [-104.5, 39.2]]],
+        properties={
+            "hazard": "IFR",
+            "valid_time": "2026-08-18T09:00:00Z",
+            "threshold_pct": 50.0,
+            "cause": "CIG",
+        },
+    )])
+    root = ET.fromstring(geojson_to_xml(fc))
+    assert root.get("hazard") == "IFR"
+    assert root.get("clearanceMarginFt") is None
+    assert root.get("terrainRadiusNm") is None
