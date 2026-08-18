@@ -220,6 +220,153 @@ def get_ifr_hazard():
     )
 
 
+# ---------------------------------------------------------------------------
+# Mountain Obscuration -- mirrors the IFR endpoints above. Kept as
+# separate routes rather than one generic /api/hazards/{hazard}/... family
+# because the two hazards genuinely differ in ways the frontend needs to
+# see: Mountain Obscuration has an extra forecaster-adjustable parameter
+# (clearance_margin_ft), its cached grid holds a different set of keys
+# (five ceiling-probability thresholds vs. IFR's single ceiling grid), and
+# it additionally depends on the static terrain grid. A generic route
+# would have to branch on hazard type internally anyway, for no real gain.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/hazards/mtn_obsc/manifest")
+def get_mtn_obsc_manifest():
+    """
+    Same role as get_ifr_manifest() -- and registered BEFORE the
+    /{fxx} route below for the same reason (a generic {fxx} string
+    parameter would otherwise match the literal word "manifest").
+    """
+    manifest_path = OUTPUT_DIR / "mtn_obsc_manifest.json"
+    if not manifest_path.exists():
+        raise HTTPException(
+            status_code=404, detail="No Mountain Obscuration manifest available yet (pipeline hasn't run)"
+        )
+    return FileResponse(manifest_path, media_type="application/json")
+
+
+@app.get("/api/hazards/mtn_obsc/{fxx}/recompute")
+def recompute_mtn_obsc_snapshot(
+    fxx: str,
+    threshold_pct: float = 50.0,
+    clearance_margin_ft: float = 500.0,
+    neighborhood_radius_nm: float = 50.0,
+    min_area_sq_mi: float = 3000.0,
+    format: str = "geojson",
+):
+    """
+    Live parameter adjustment for Mountain Obscuration -- same idea as
+    recompute_ifr_snapshot(), re-running only the cheap NBM-independent
+    polygonize phase against an already-cached grid.
+
+    One extra input vs. IFR: the static terrain grid
+    (data/terrain/terrain_grid.npz), which polygonize_mtn_obsc_grid()
+    needs and which the per-snapshot cache deliberately does NOT
+    duplicate -- terrain never changes between forecast cycles, so
+    storing a copy in all five snapshots' caches would be pure waste.
+
+    Note terrain_radius_nm is NOT a parameter here: unlike the four
+    below, it's baked into the terrain grid at fetch time (see
+    pipeline/fetch_terrain.py), so changing it requires re-running that
+    fetch, not just re-polygonizing.
+    """
+    manifest_path = OUTPUT_DIR / "mtn_obsc_manifest.json"
+    if not manifest_path.exists():
+        raise HTTPException(status_code=404, detail="No Mountain Obscuration manifest available yet")
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+    snapshot = next(
+        (s for s in manifest.get("snapshots", []) if str(s["requested_forecast_hour"]).zfill(2) == fxx.zfill(2)),
+        None,
+    )
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail=f"No Mountain Obscuration snapshot for F{fxx}")
+
+    cache_filename = snapshot.get("cache_filename")
+    if not cache_filename:
+        raise HTTPException(status_code=404, detail=f"No cached grid for F{fxx}")
+    cache_path = OUTPUT_DIR / cache_filename
+    if not cache_path.exists():
+        raise HTTPException(status_code=404, detail=f"Cached grid file missing: {cache_filename}")
+
+    terrain_path = BASE_DIR / "data" / "terrain" / "terrain_grid.npz"
+    if not terrain_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Terrain grid not found (data/terrain/terrain_grid.npz) -- run the 'Fetch Terrain Grid' workflow",
+        )
+
+    # Imported here (not at module level) for the same reason as the IFR
+    # recompute endpoint -- see its comment.
+    from pipeline.fetch_terrain import load_terrain_grid
+    from pipeline.hazards.mtn_obsc import CEILING_PROB_THRESHOLDS_FT, polygonize_mtn_obsc_grid
+    from pipeline.polygons import load_grid_cache
+
+    grids, grid_spec = load_grid_cache(cache_path)
+    expected_ceiling_keys = {f"ceiling_prob_{t}" for t in CEILING_PROB_THRESHOLDS_FT}
+    required_keys = expected_ceiling_keys | {"precip", "vis3", "vis1"}
+    if not required_keys.issubset(grids.keys()):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cached grid for F{fxx} is in an outdated format (found keys: {sorted(grids.keys())}, "
+                f"expected {sorted(required_keys)}). This happens when new pipeline code deploys before "
+                "the next scheduled run regenerates the cache -- manually trigger the "
+                "'Generate Latest Mountain Obscuration Polygons' workflow to fix."
+            ),
+        )
+
+    terrain_grids, _terrain_grid_spec, terrain_radius_nm = load_terrain_grid(terrain_path)
+    ceiling_prob_grids = {t: grids[f"ceiling_prob_{t}"] for t in CEILING_PROB_THRESHOLDS_FT}
+    model_cycle = datetime.fromisoformat(manifest["model_cycle"].rstrip("Z"))
+    # This manifest has no "actual_forecast_hour" field (unlike IFR's,
+    # which needs it because NBM has no true 0-hour file) -- fall back to
+    # the requested hour rather than assuming the field is present.
+    forecast_hour = snapshot.get("actual_forecast_hour", snapshot["requested_forecast_hour"])
+
+    fc = polygonize_mtn_obsc_grid(
+        ceiling_prob_grids,
+        grids["precip"],
+        grids["vis3"],
+        grids["vis1"],
+        terrain_grids["baseline_elevation_ft"],
+        terrain_grids["ridge_elevation_ft"],
+        grid_spec,
+        model_cycle,
+        forecast_hour,
+        threshold_pct=threshold_pct,
+        clearance_margin_ft=clearance_margin_ft,
+        neighborhood_radius_nm=neighborhood_radius_nm,
+        min_area_sq_mi=min_area_sq_mi,
+        terrain_radius_nm=terrain_radius_nm,
+    )
+
+    if format == "xml":
+        from pipeline.export_xml import geojson_to_xml
+
+        return Response(content=geojson_to_xml(fc), media_type="application/xml")
+    return fc
+
+
+@app.get("/api/hazards/mtn_obsc/{fxx}")
+def get_mtn_obsc_snapshot(fxx: str, format: str = "geojson"):
+    """A specific Mountain Obscuration forecast-hour snapshot, e.g. /api/hazards/mtn_obsc/06."""
+    path = OUTPUT_DIR / f"mtn_obsc_f{fxx}.geojson"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"No Mountain Obscuration snapshot for F{fxx}")
+
+    if format == "xml":
+        from pipeline.export_xml import geojson_to_xml
+
+        with open(path) as f:
+            fc = json.load(f)
+        return Response(content=geojson_to_xml(fc), media_type="application/xml")
+
+    return FileResponse(path, media_type="application/geo+json")
+
+
 @app.get("/api/hazards/demo")
 def get_demo_hazard():
     """Kept as a stable reference/example endpoint -- always the original synthetic demo data, never real output."""
