@@ -39,6 +39,34 @@ const layers = {
     },
   }),
 
+  mtn: L.geoJSON(null, {
+    style: {
+      color: '#b985ff',
+      weight: 1.5,
+      fillColor: '#b985ff',
+      fillOpacity: 0.28,
+    },
+    onEachFeature: (feature, layer) => {
+      const p = feature.properties || {};
+      // weather_type is ALWAYS present for Mountain Obscuration (CLDS is
+      // the base case when nothing more specific applies), unlike IFR
+      // where it's only set when the cause involves visibility.
+      const weatherTypeRow = p.weather_type ? `<div>weather: ${p.weather_type}</div>` : '';
+      const clearanceRow = p.clearance_margin_ft != null
+        ? `<div>clearance: ${p.clearance_margin_ft} ft</div>` : '';
+      const terrainRadiusRow = p.terrain_radius_nm != null
+        ? `<div>terrain search: ${p.terrain_radius_nm} nm</div>` : '';
+      layer.bindPopup(
+        `<div><strong>${p.hazard || 'MTN OBSC'}</strong></div>` +
+        weatherTypeRow +
+        clearanceRow +
+        terrainRadiusRow +
+        `<div>threshold: &ge;${p.threshold_pct ?? '?'}%</div>` +
+        `<div>valid: ${formatValidTime(p.valid_time)}</div>`
+      );
+    },
+  }),
+
   states: L.geoJSON(null, {
     style: {
       color: '#64749a',
@@ -68,6 +96,7 @@ const layers = {
 
 layers.states.addTo(map);
 layers.ifr.addTo(map);
+layers.mtn.addTo(map);
 
 // --- Wire up the checkbox toggles in the top-right panel ---
 document.getElementById('toggle-ifr').addEventListener('change', (e) => {
@@ -85,8 +114,10 @@ document.getElementById('toggle-artcc').addEventListener('change', (e) => {
   else map.removeLayer(layers.artcc);
 });
 
-// toggle-mtn is intentionally disabled in the HTML until Mountain
-// Obscuration is implemented -- see project README.
+document.getElementById('toggle-mtn').addEventListener('change', (e) => {
+  if (e.target.checked) map.addLayer(layers.mtn);
+  else map.removeLayer(layers.mtn);
+});
 
 // --- Formats an ISO timestamp as a DDHHMMZ group, matching the date/time
 //     group convention used in real SIGMET/AIRMET bulletins (e.g. "071800Z"
@@ -296,6 +327,32 @@ async function loadIfrSnapshot(requestedFxx, { refit = true } = {}) {
   }
 }
 
+// --- Loads one Mountain Obscuration snapshot for the given forecast
+//     hour. Deliberately tolerant of failure: if MTN OBSC data isn't
+//     available (pipeline hasn't run yet, older deployment, etc.) this
+//     clears the layer and returns quietly rather than throwing, so a
+//     missing second hazard can never break the IFR display that
+//     forecasters actually depend on. ---
+async function loadMtnObscSnapshot(requestedFxx) {
+  const fxxStr = String(requestedFxx).padStart(2, '0');
+  try {
+    const resp = await fetch(`/api/hazards/mtn_obsc/${fxxStr}`);
+    if (!resp.ok) throw new Error(`MTN OBSC F${fxxStr} not available (${resp.status})`);
+    const geojson = await resp.json();
+
+    layers.mtn.clearLayers();
+    layers.mtn.addData(geojson);
+
+    const firstProps = geojson.features?.[0]?.properties;
+    document.getElementById('legend-mtn-threshold').textContent =
+      firstProps?.threshold_pct ?? '--';
+  } catch (err) {
+    console.warn('Mountain Obscuration layer unavailable:', err);
+    layers.mtn.clearLayers();
+    document.getElementById('legend-mtn-threshold').textContent = '--';
+  }
+}
+
 // --- Builds the FCST HR button row from the manifest, and wires up
 //     clicking a button to switch snapshots. ---
 function buildFxxSelector(manifest) {
@@ -319,7 +376,16 @@ function buildFxxSelector(manifest) {
       container.querySelectorAll('.fxx-btn').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
       try {
-        await loadIfrSnapshot(snap.requested_forecast_hour);
+        // Both hazards share this one selector -- they're generated on
+        // the same G-AIRMET forecast-hour schedule (F00/03/06/09/12), so
+        // showing IFR at F06 alongside MTN OBSC at F00 would be
+        // misleading. loadMtnObscSnapshot never throws (see its
+        // docstring), so a missing MTN OBSC file can't block the IFR
+        // switch here.
+        await Promise.all([
+          loadIfrSnapshot(snap.requested_forecast_hour),
+          loadMtnObscSnapshot(snap.requested_forecast_hour),
+        ]);
       } catch (err) {
         console.error('Failed to switch forecast hour:', err);
       }
@@ -358,7 +424,10 @@ async function loadData() {
     if (!manifest.snapshots?.length) throw new Error('manifest has no snapshots');
 
     buildFxxSelector(manifest);
-    await loadIfrSnapshot(manifest.snapshots[0].requested_forecast_hour);
+    await Promise.all([
+      loadIfrSnapshot(manifest.snapshots[0].requested_forecast_hour),
+      loadMtnObscSnapshot(manifest.snapshots[0].requested_forecast_hour),
+    ]);
     liveAdjustAvailable = true;
   } catch (err) {
     console.warn('No forecast-hour manifest available, falling back to single snapshot:', err);
