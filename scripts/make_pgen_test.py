@@ -12,6 +12,10 @@ Example:
 
 NOTE ON TAGS: tag assignment here is a deliberate placeholder. See
 assign_naive_tags() -- it is not feature tracking and is meant to be replaced.
+
+NOTE ON SIMPLIFICATION: rings are thinned to a vertex budget on the way out
+(see simplify_to_budget). That is an export-path concern only -- it does not
+touch polygonization or the GeoJSON on disk, which keep their full detail.
 """
 import argparse
 import json
@@ -40,6 +44,13 @@ HAZARDS = {
 # Centroid separation under which a polygon inherits the previous hour's tag.
 TAG_MATCH_RADIUS_NM = 300.0
 
+# Ring simplification. Tolerances are in degrees, which is crude near the
+# poles but fine over CONUS and keeps this dependency-free.
+SIMPLIFY_START_TOLERANCE = 0.005
+SIMPLIFY_GROWTH = 1.5
+SIMPLIFY_MAX_PASSES = 60
+MIN_RING_POINTS = 4
+
 _EARTH_RADIUS_NM = 3440.065
 
 
@@ -57,6 +68,85 @@ def _centroid(points):
     for its default latText/lonText label anchor."""
     return (sum(p[0] for p in points) / len(points),
             sum(p[1] for p in points) / len(points))
+
+
+def _segment_distance(point, start, end):
+    """Distance from `point` to the segment start-end, in degrees."""
+    (py, px), (ay, ax), (by, bx) = point, start, end
+    dy, dx = by - ay, bx - ax
+    if dy == 0.0 and dx == 0.0:
+        return math.hypot(py - ay, px - ax)
+    # Projection of the point onto the segment, clamped to the segment.
+    t = ((py - ay) * dy + (px - ax) * dx) / (dy * dy + dx * dx)
+    t = max(0.0, min(1.0, t))
+    return math.hypot(py - (ay + t * dy), px - (ax + t * dx))
+
+
+def _douglas_peucker(points, tolerance):
+    """
+    Ramer-Douglas-Peucker decimation of an open polyline.
+
+    Iterative rather than recursive -- our rings run to a few hundred
+    vertices and recursion depth is not worth risking. The first and last
+    vertices are always kept, so applying this to a ring whose duplicate
+    closing vertex has already been dropped leaves the closure intact.
+    """
+    if len(points) < 3:
+        return list(points)
+
+    keep = [False] * len(points)
+    keep[0] = keep[-1] = True
+    stack = [(0, len(points) - 1)]
+
+    while stack:
+        first, last = stack.pop()
+        if last <= first + 1:
+            continue
+        worst_dist, worst_i = tolerance, None
+        for i in range(first + 1, last):
+            dist = _segment_distance(points[i], points[first], points[last])
+            if dist > worst_dist:
+                worst_dist, worst_i = dist, i
+        if worst_i is not None:
+            keep[worst_i] = True
+            stack.append((first, worst_i))
+            stack.append((worst_i, last))
+
+    return [p for p, kept in zip(points, keep) if kept]
+
+
+def simplify_to_budget(ring, max_points=25):
+    """
+    Thin a ring down to at most `max_points` vertices for the PGEN export.
+
+    Runs Douglas-Peucker repeatedly, starting at SIMPLIFY_START_TOLERANCE and
+    growing the tolerance geometrically by SIMPLIFY_GROWTH until the ring fits
+    the budget, capped at SIMPLIFY_MAX_PASSES so it cannot spin forever.
+
+    Never returns fewer than MIN_RING_POINTS vertices. Once a tolerance
+    collapses the ring past that floor we stop and keep the last result that
+    was still above it, which means a ring can come back over budget rather
+    than degenerate -- the floor wins. In practice DP steps from "comfortably
+    under budget" to "collapsed" in one pass, so this is rare.
+
+    Rings already within budget are returned unchanged.
+    """
+    if len(ring) <= max_points:
+        return list(ring)
+
+    simplified = list(ring)
+    tolerance = SIMPLIFY_START_TOLERANCE
+
+    for _ in range(SIMPLIFY_MAX_PASSES):
+        candidate = _douglas_peucker(ring, tolerance)
+        if len(candidate) < MIN_RING_POINTS:
+            break               # overshot; keep the previous, larger result
+        simplified = candidate
+        if len(simplified) <= max_points:
+            break
+        tolerance *= SIMPLIFY_GROWTH
+
+    return simplified
 
 
 def assign_naive_tags(centroids_by_hour):
@@ -161,12 +251,13 @@ def iter_rings(feature):
         yield [(lat, lon) for lon, lat in ring]
 
 
-def load_hazard_polygons(hazard):
+def load_hazard_polygons(hazard, max_points):
     """
-    Read all five snapshots for one hazard.
+    Read all five snapshots for one hazard, simplifying each ring on the way.
 
     Returns a list, one entry per forecast hour in FORECAST_HOURS order, of
-    lists of (forecast_hour, points, properties) tuples.
+    lists of (forecast_hour, points, properties, raw_point_count) tuples,
+    where raw_point_count is the vertex count before simplification.
     """
     stem = HAZARDS[hazard]["stem"]
     by_hour = []
@@ -184,10 +275,25 @@ def load_hazard_polygons(hazard):
             for points in iter_rings(feature):
                 if len(points) < 3:
                     continue           # pgen_xml rejects degenerate outlines
-                polygons.append((fcst_hr, points, feature["properties"]))
+                raw_count = len(points)
+                points = simplify_to_budget(points, max_points)
+                polygons.append(
+                    (fcst_hr, points, feature["properties"], raw_count))
         by_hour.append(polygons)
 
     return by_hour
+
+
+def _describe(counts, max_points):
+    """One-line summary of a vertex-count distribution."""
+    if not counts:
+        return "none"
+    ordered = sorted(counts)
+    median = ordered[len(ordered) // 2]
+    over = sum(1 for c in counts if c > max_points)
+    return ("min=%-4d median=%-4d max=%-4d total=%-6d over budget=%d/%d"
+            % (ordered[0], median, ordered[-1], sum(counts),
+               over, len(counts)))
 
 
 def main(argv=None):
@@ -199,6 +305,8 @@ def main(argv=None):
                         help="G-AIRMET cycle hour, e.g. 21")
     parser.add_argument("--desk", default="E", help="desk letter (default: E)")
     parser.add_argument("--out", required=True, help="output XML path")
+    parser.add_argument("--max-points", type=int, default=25,
+                        help="vertex budget per ring (default: 25)")
     args = parser.parse_args(argv)
 
     # Cycles are 03/09/15/21Z; zero-pad so "9" and "09" produce the same file.
@@ -206,14 +314,14 @@ def main(argv=None):
     if cycle_hour.isdigit():
         cycle_hour = "%02d" % int(cycle_hour)
 
-    by_hour = load_hazard_polygons(args.hazard)
+    by_hour = load_hazard_polygons(args.hazard, args.max_points)
 
     tags_by_hour = assign_naive_tags(
-        [[_centroid(points) for _, points, _ in hour] for hour in by_hour])
+        [[_centroid(points) for _, points, _, _ in hour] for hour in by_hour])
 
     blocks = []
     for hour, tags in zip(by_hour, tags_by_hour):
-        for (fcst_hr, points, properties), tag in zip(hour, tags):
+        for (fcst_hr, points, properties, _raw), tag in zip(hour, tags):
             blocks.append(gfa_element(
                 points=points,
                 hazard=args.hazard,
@@ -235,6 +343,11 @@ def main(argv=None):
     for fcst_hr, hour, tags in zip(FORECAST_HOURS, by_hour, tags_by_hour):
         print("  f%02d  %2d polygons  tags=%s"
               % (fcst_hr, len(hour), ",".join(str(t) for t in tags) or "-"))
+
+    before = [raw for hour in by_hour for _, _, _, raw in hour]
+    after = [len(points) for hour in by_hour for _, points, _, _ in hour]
+    print("  vertices before  %s" % _describe(before, args.max_points))
+    print("  vertices after   %s" % _describe(after, args.max_points))
 
 
 if __name__ == "__main__":
