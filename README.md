@@ -261,6 +261,15 @@ branches are rebuilt from scratch each run (`git init` in a scratch
 directory, then a force-push), so they are permanently one commit deep
 and never grow.
 
+Because that push is a force-push, it is guarded so a branch's cycle can
+only move forward: the publish step reads the branch's current manifest
+first and skips the push (cleanly, exit 0) if it already holds a
+`model_cycle` newer than or equal to the one being published. That covers
+what each workflow's `concurrency:` group can't — re-running an *old*
+workflow run from the Actions tab, which republishes that run's original
+artifacts and would otherwise walk the live site backwards. See
+`.github/scripts/should_publish_cycle.py`.
+
 ### Configuration
 
 All defaults are sensible; override via environment variables on the

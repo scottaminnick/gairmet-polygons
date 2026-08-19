@@ -41,10 +41,21 @@ on:
 # overlapping them makes last-to-finish and newest-cycle the same run.
 # Secondary benefit: no two runs hammer NBM for the same fields at once.
 #
-# cancel-in-progress stays false: a new trigger QUEUES and waits its turn
-# rather than silently cancelling a run already in progress (which could
-# throw away a legitimate manual trigger someone was specifically
-# waiting on).
+# The group is scoped to THIS workflow alone (generate_mtn_obsc.yml has
+# its own, "generate-mtn-obsc-polygons"), because the race is entirely
+# same-hazard: two runs of THIS workflow, force-pushing THIS branch. The
+# two hazards publish to separate branches now and cannot collide with
+# each other at all, so a shared group would only make Mountain
+# Obscuration's long runs (tens of minutes) needlessly block IFR's.
+#
+# cancel-in-progress is set explicitly to false: a new trigger QUEUES and
+# waits its turn rather than silently cancelling a run already in
+# progress (which could throw away a legitimate manual trigger someone
+# was specifically waiting on).
+#
+# Note this only covers runs that OVERLAP. Re-running an old run from the
+# Actions tab long after the fact is a different problem, handled by the
+# cycle monotonicity guard in the publish step below.
 concurrency:
   group: generate-ifr-polygons
   cancel-in-progress: false
@@ -108,6 +119,9 @@ jobs:
         # -- webapp/artifacts.py polls exactly that URL every 5 minutes
         # and re-downloads this hazard's set whenever model_cycle changes.
         #
+        # The push is guarded so it can only ever move the branch's cycle
+        # FORWARD -- see the monotonicity check in the script below.
+        #
         # Pushing with GITHUB_TOKEN deliberately does not trigger further
         # workflow runs, and since nothing lands on main any more, data
         # updates no longer trigger a Railway redeploy either.
@@ -129,6 +143,44 @@ jobs:
           ls -la
 
           git init -q -b "$PUBLISH_BRANCH"
+          REMOTE="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          # Cycle monotonicity guard. Because the push below is a --force
+          # that replaces the branch outright, a run carrying an OLD model
+          # cycle would silently overwrite a newer one and walk the live
+          # site's data backwards. concurrency: (top of this file) stops
+          # two runs of this hazard from overlapping, but it cannot stop
+          # someone re-running an OLD run from the Actions tab -- that run
+          # regenerates nothing, it republishes its original artifacts.
+          #
+          # Reading the branch's own manifest (rather than
+          # raw.githubusercontent.com) keeps this authoritative: the raw
+          # CDN can serve a stale copy for minutes, which is exactly the
+          # window this guard has to be right in. --depth=1 on a branch
+          # that is always one commit deep pulls its ~8 MB of
+          # artifacts along with it; a couple of seconds, 8x/day, for a
+          # check that can't be fooled.
+          EXISTING_MANIFEST="$(mktemp)"
+          if git fetch --quiet --depth=1 "$REMOTE" "$PUBLISH_BRANCH" 2>/dev/null; then
+            git show "FETCH_HEAD:ifr_manifest.json" > "$EXISTING_MANIFEST" 2>/dev/null || : > "$EXISTING_MANIFEST"
+          else
+            echo "Branch $PUBLISH_BRANCH doesn't exist yet -- nothing to compare against."
+          fi
+
+          # set +e around it deliberately: exit 10 ("skip") is a correct
+          # outcome this step has to inspect, not a failure set -e should
+          # abort on.
+          set +e
+          python3 "$GITHUB_WORKSPACE/.github/scripts/should_publish_cycle.py" \
+            --new "ifr_manifest.json" --existing "$EXISTING_MANIFEST"
+          GUARD_STATUS=$?
+          set -e
+          if [ "$GUARD_STATUS" -eq 10 ]; then
+            exit 0
+          elif [ "$GUARD_STATUS" -ne 0 ]; then
+            exit "$GUARD_STATUS"
+          fi
+
           git add -A
           git -c user.name="github-actions[bot]" \
               -c user.email="github-actions[bot]@users.noreply.github.com" \
@@ -139,7 +191,6 @@ jobs:
           # transient network/GitHub failures -- there is no
           # fetch-and-rebase fallback any more (and none is wanted: this
           # branch intentionally has no shared history to rebase onto).
-          REMOTE="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           for attempt in 1 2 3 4 5; do
             if git push --force "$REMOTE" "$PUBLISH_BRANCH:$PUBLISH_BRANCH"; then
               echo "Pushed $PUBLISH_BRANCH successfully on attempt $attempt"
