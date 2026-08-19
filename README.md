@@ -67,10 +67,13 @@ Currently working:
       float32 storage) so parameters can be re-applied later without
       re-fetching from NBM.
 - [x] **Scheduled generation** (`.github/workflows/generate_ifr.yml`) —
-      runs every 6 hours, commits `output/ifr_f00.geojson` through
+      runs every 6 hours and force-pushes `ifr_f00.geojson` through
       `ifr_f12.geojson`, their cached `*_grid.npz` grids, and
-      `output/ifr_manifest.json` back to the repo, which triggers Railway
-      to redeploy with fresh data
+      `ifr_manifest.json` to the **`data-ifr`** branch (Mountain
+      Obscuration publishes the same way to **`data-mtnobsc`**). Nothing
+      lands on `main`, so data updates no longer redeploy Railway — the
+      running app picks them up on its own (see "How artifacts reach the
+      deployed app" below)
 - [x] Web app serves real data with a full forecast-hour selector
       (`/api/hazards/ifr/manifest`, `/api/hazards/ifr/{fxx}`) — the map
       viewer's top-left panel lets you switch between F00/F03/F06/F09/F12
@@ -205,6 +208,11 @@ G-AIRMET valid-time offset) plus `output/ifr_manifest.json` describing
 them. Requires real internet access to NOAA's servers (won't work from a
 sandboxed dev environment without egress).
 
+`output/` is gitignored now (see "How artifacts reach the deployed app"),
+so these stay local and are never committed — but the web app still reads
+them from there in preference to anything it fetched from the data
+branches, so a local run shows up in the local map as usual.
+
 ## Forecaster-adjustable parameters
 
 All three can be overridden per-run via the "Run workflow" button on the
@@ -224,14 +232,74 @@ project owner's own `model-viewer` repo rather than FAA's ArcGIS Hub
 (which requires their web UI or an authenticated API export, neither
 reachable from a sandboxed dev environment during initial development).
 
+## How artifacts reach the deployed app
+
+Generated output is **not** in `main` and not part of a deploy. Each
+hazard workflow force-pushes its own artifacts to its own data branch,
+and the running web app fetches them over HTTP.
+
+| | |
+|---|---|
+| IFR artifacts | `data-ifr` branch, files at the branch root |
+| Mountain Obscuration artifacts | `data-mtnobsc` branch, files at the branch root |
+| Manifest URL the app polls | `https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{hazard}_manifest.json` |
+| Poll interval | every 5 minutes, plus once at startup |
+
+`webapp/artifacts.py` compares each manifest's `model_cycle` against
+what's loaded, downloads that hazard's set when it changes, and swaps it
+in by directory rename so a request never sees half a cycle. The initial
+download runs on a background thread — startup and Railway's health check
+never wait on it — and a failed refresh keeps serving the last good
+cycle. `/api/data/status` reports what's loaded, where it came from, and
+why the last refresh failed if it did.
+
+This replaced committing `output/` back to `main` 8x/day. `.npz` files
+don't delta-compress, so every run stored full fresh copies; `main`
+reached 2.2 GB against a 23.5 MB working tree, and Railway began failing
+at its "Snapshot code" step because the clone timed out. The data
+branches are rebuilt from scratch each run (`git init` in a scratch
+directory, then a force-push), so they are permanently one commit deep
+and never grow.
+
+Because that push is a force-push, it is guarded so a branch's cycle can
+only move forward: the publish step reads the branch's current manifest
+first and skips the push (cleanly, exit 0) if it already holds a
+`model_cycle` newer than or equal to the one being published. That covers
+what each workflow's `concurrency:` group can't — re-running an *old*
+workflow run from the Actions tab, which republishes that run's original
+artifacts and would otherwise walk the live site backwards. See
+`.github/scripts/should_publish_cycle.py`.
+
+### Configuration
+
+All defaults are sensible; override via environment variables on the
+deployment if you fork the repo or rename a branch.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ARTIFACT_REPO_OWNER` | `scottaminnick` | Owner of the repo holding the data branches |
+| `ARTIFACT_REPO_NAME` | `gairmet-polygons` | Repo holding the data branches |
+| `ARTIFACT_BRANCH_IFR` | `data-ifr` | Branch IFR artifacts are published to |
+| `ARTIFACT_BRANCH_MTN_OBSC` | `data-mtnobsc` | Branch Mountain Obscuration artifacts are published to |
+| `ARTIFACT_REFRESH_SECONDS` | `300` | How often to poll each manifest |
+| `ARTIFACT_CACHE_DIR` | `.artifact-cache/` | Where downloads are cached (ephemeral; re-downloaded on restart) |
+| `ARTIFACT_HTTP_TIMEOUT_SECONDS` | `60` | Per-request timeout |
+| `ARTIFACT_FETCH_ENABLED` | `1` | Set to `0` to never touch the network (offline work) |
+
+Locally, none of this normally matters: if `output/` already holds a
+hazard's manifest from your own pipeline run, the app serves **that**
+hazard entirely from `output/` and skips fetching it. Run the pipeline,
+run the app, see your own output — exactly as before.
+
 ## Deploying to Railway
 
 Point a Railway project at this GitHub repo; it auto-detects the
 `Procfile` and `requirements.txt` (the lightweight web-app-only one —
 Railway never installs the heavy pipeline dependencies, see
-`requirements-pipeline.txt` vs `requirements.txt` below). The scheduled
-GitHub Action commits fresh forecast-hour snapshots every 6 hours,
-which triggers Railway to redeploy with updated data automatically.
+`requirements-pipeline.txt` vs `requirements.txt` below). Deploys are now
+triggered only by real code changes on `main`; fresh forecast data
+arrives at runtime instead, within 5 minutes of the pipeline publishing
+it, with no redeploy.
 
 ## Why there are two requirements files
 
@@ -242,7 +310,10 @@ which triggers Railway to redeploy with updated data automatically.
   `polygonize_ifr_grid`). What Railway installs to run the web app.
   Still deliberately excludes the heavy GRIB2 stack below — the web app
   never fetches from NBM directly, it only reads/reprocesses what's
-  already on disk.
+  already on disk. The runtime artifact fetcher
+  (`webapp/artifacts.py`) adds nothing here on purpose: it uses stdlib
+  `urllib` rather than `requests`/`httpx`, so the deployed dependency
+  set is unchanged.
 - `requirements-pipeline.txt` — the heavy stuff (`cfgrib`, `eccodes`,
   `xarray`, `herbie-data`, `requests`, etc.) needed to actually fetch and
   parse NBM grib2 data from NOAA. Only installed by GitHub Actions
