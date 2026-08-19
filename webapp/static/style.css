@@ -384,3 +384,18 @@ html, body {
     padding: 8px 10px;
   }
 }
+
+/* Combined PGEN export: all five forecast hours in one NMAP2 document.
+   Distinguished from the per-hour GENERATE button above it, which exports
+   only the hour on screen. */
+.adjust-pgen-btn {
+  width: 100%;
+  text-align: center;
+  margin-top: 4px;
+  border-color: var(--accent-mtn, #d8b4fe);
+  color: var(--accent-mtn, #d8b4fe);
+}
+
+.adjust-pgen-btn:hover {
+  background: rgba(216, 180, 254, 0.15);
+}

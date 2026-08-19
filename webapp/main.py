@@ -49,6 +49,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from webapp import artifacts
 
@@ -414,6 +415,178 @@ def get_mtn_obsc_snapshot(fxx: str, format: str = "geojson"):
         return Response(content=geojson_to_xml(fc), media_type="application/xml")
 
     return FileResponse(path, media_type="application/geo+json")
+
+
+# ---------------------------------------------------------------------------
+# Combined PGEN export. One NMAP2 PGEN XML document per hazard holding ALL
+# five forecast hours, each polygonized at that hour's own settings --
+# NMAP2's Filter Control steps through hours within a single file, so
+# splitting them would break that workflow.
+#
+# POST rather than GET because the input is structured (per-hour settings
+# for up to five hours, four parameters each) and would make a 20-parameter
+# query string. The response carries the XML and its provenance sidecar
+# together so the five recomputes happen once, not twice.
+#
+# The per-hour export_xml.py downloads above are untouched -- this is an
+# addition, not a replacement.
+# ---------------------------------------------------------------------------
+
+
+class PgenHourSettings(BaseModel):
+    """One forecast hour's forecaster-chosen settings."""
+
+    forecast_hour: int
+    threshold_pct: float = 50.0
+    neighborhood_radius_nm: float = 50.0
+    min_area_sq_mi: float = 3000.0
+    # Mountain Obscuration only; ignored for IFR.
+    clearance_margin_ft: float = 500.0
+
+
+class PgenRequest(BaseModel):
+    """
+    Body of a combined-PGEN request.
+
+    An empty `hours` means "every forecast hour in the manifest, at the
+    pipeline defaults" -- which makes the endpoint testable with a bare
+    `curl -X POST ... -d '{}'` rather than requiring a hand-built payload.
+    """
+
+    cycle_hour: str | None = None
+    desk: str = "E"
+    hours: list[PgenHourSettings] = []
+
+
+def _cycle_hour_from_manifest(manifest: dict) -> str:
+    """
+    "21" from a model_cycle of "2026-08-17T21:00:00Z". Derived server-side
+    rather than trusted from the client, so the file cannot claim a cycle
+    the data didn't come from.
+    """
+    try:
+        return "%02d" % datetime.fromisoformat(manifest["model_cycle"].rstrip("Z")).hour
+    except (KeyError, ValueError, AttributeError):
+        return "00"
+
+
+def _requested_hours(request: PgenRequest, manifest: dict) -> list:
+    """
+    Every forecast hour in the manifest, ascending, with the client's
+    settings overlaid onto the ones it sent.
+
+    The export must always cover the whole cycle: a forecaster who adjusted
+    F00 and F03 and never opened F09 still needs F09 in the file. Hours the
+    client didn't send fall back to the manifest's own committed
+    parameters -- i.e. exactly as scheduled -- rather than to this
+    endpoint's defaults, which would silently differ if the pipeline ran
+    with something else.
+    """
+    scheduled = {
+        "threshold_pct": manifest.get("threshold_pct", 50.0),
+        "neighborhood_radius_nm": manifest.get("neighborhood_radius_nm", 50.0),
+        "min_area_sq_mi": manifest.get("min_area_sq_mi", 3000.0),
+        "clearance_margin_ft": manifest.get("clearance_margin_ft", 500.0),
+    }
+    supplied = {h.forecast_hour: h for h in request.hours}
+
+    hours = []
+    for snapshot in manifest.get("snapshots", []):
+        fxx = int(snapshot["requested_forecast_hour"])
+        hours.append(supplied.pop(fxx, None)
+                     or PgenHourSettings(forecast_hour=fxx, **scheduled))
+    # Anything the client asked for that the manifest doesn't list: keep it
+    # rather than dropping it silently, and let the recompute 404 say so.
+    hours.extend(supplied.values())
+    return sorted(hours, key=lambda h: h.forecast_hour)
+
+
+@app.post("/api/hazards/ifr/pgen")
+def export_ifr_pgen(request: PgenRequest):
+    """
+    Combined IFR PGEN document. Recomputes each forecast hour at its own
+    settings and maps every polygon to a Gfa element.
+
+    The five recomputes run SEQUENTIALLY and deliberately so -- each is
+    numpy/shapely work against an already-cached grid, and concurrency was
+    tried elsewhere in this project and came out slower.
+    """
+    from webapp.pgen_export import build_pgen_document
+
+    manifest = _require_manifest("ifr")
+    cycle_hour = request.cycle_hour or _cycle_hour_from_manifest(manifest)
+
+    hours = []
+    for spec in _requested_hours(request, manifest):
+        fc = recompute_ifr_snapshot(
+            fxx="%02d" % spec.forecast_hour,
+            threshold_pct=spec.threshold_pct,
+            neighborhood_radius_nm=spec.neighborhood_radius_nm,
+            min_area_sq_mi=spec.min_area_sq_mi,
+            format="geojson",
+        )
+        hours.append({
+            "forecast_hour": spec.forecast_hour,
+            "settings": {
+                "threshold_pct": spec.threshold_pct,
+                "neighborhood_radius_nm": spec.neighborhood_radius_nm,
+                "min_area_sq_mi": spec.min_area_sq_mi,
+            },
+            "feature_collection": fc,
+        })
+
+    xml, sidecar = build_pgen_document(
+        "IFR", hours, cycle_hour, desk=request.desk,
+        model_cycle=manifest.get("model_cycle"),
+    )
+    base = "ifr_%sZ_pgen" % cycle_hour
+    return {"filename": base + ".xml", "sidecar_filename": base + ".settings.json",
+            "xml": xml, "sidecar": sidecar}
+
+
+@app.post("/api/hazards/mtn_obsc/pgen")
+def export_mtn_obsc_pgen(request: PgenRequest):
+    """
+    Combined Mountain Obscuration PGEN document -- same shape as
+    export_ifr_pgen(), plus clearance_margin_ft per hour.
+
+    Note the hazard string written into the XML is "MT_OBSC", not the
+    "MTN_OBSC" the GeoJSON carries: the reference NMAP2 samples use the
+    former, and it is what pgen_xml's colour table keys on.
+    """
+    from webapp.pgen_export import build_pgen_document
+
+    manifest = _require_manifest("mtn_obsc")
+    cycle_hour = request.cycle_hour or _cycle_hour_from_manifest(manifest)
+
+    hours = []
+    for spec in _requested_hours(request, manifest):
+        fc = recompute_mtn_obsc_snapshot(
+            fxx="%02d" % spec.forecast_hour,
+            threshold_pct=spec.threshold_pct,
+            clearance_margin_ft=spec.clearance_margin_ft,
+            neighborhood_radius_nm=spec.neighborhood_radius_nm,
+            min_area_sq_mi=spec.min_area_sq_mi,
+            format="geojson",
+        )
+        hours.append({
+            "forecast_hour": spec.forecast_hour,
+            "settings": {
+                "threshold_pct": spec.threshold_pct,
+                "clearance_margin_ft": spec.clearance_margin_ft,
+                "neighborhood_radius_nm": spec.neighborhood_radius_nm,
+                "min_area_sq_mi": spec.min_area_sq_mi,
+            },
+            "feature_collection": fc,
+        })
+
+    xml, sidecar = build_pgen_document(
+        "MT_OBSC", hours, cycle_hour, desk=request.desk,
+        model_cycle=manifest.get("model_cycle"),
+    )
+    base = "mtn_obsc_%sZ_pgen" % cycle_hour
+    return {"filename": base + ".xml", "sidecar_filename": base + ".settings.json",
+            "xml": xml, "sidecar": sidecar}
 
 
 @app.get("/api/hazards/demo")
