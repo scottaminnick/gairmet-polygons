@@ -152,65 +152,93 @@ function debounce(fn, delay) {
   };
 }
 
-// --- PER-FORECAST-HOUR IFR ADJUSTMENT STATE ---
-//     Each forecast hour keeps its OWN threshold / radius / min-area rather
-//     than sharing one set across the whole cycle. Forecasters need this:
+// --- PER-FORECAST-HOUR ADJUSTMENT STATE ---
+//     Each forecast hour keeps its OWN slider settings, per hazard, rather
+//     than one set shared across the whole cycle. Forecasters need this:
 //     overnight hours want a lower threshold for radiation fog than the
-//     daytime hours do, and previously switching hours silently discarded
+//     daytime hours do, and switching hours used to silently discard
 //     whatever had been dialled in.
 //
-//     An hour is seeded from its scheduled snapshot's own properties the
-//     first time it is shown, and from then on remembers wherever the
-//     sliders were left. Keyed by zero-padded forecast hour ("00", "03").
+//     One store per hazard, built from a field list so IFR's three sliders
+//     and MTN OBSC's four (it has clearance_margin_ft as well) get
+//     identical semantics without duplicating the logic. Each field maps a
+//     store key to its slider element, its live label, and the GeoJSON
+//     property the scheduled snapshot carries it in.
 //
-//     NOTE: this covers the IFR panel only. The MTN OBSC panel still
-//     re-seeds from its snapshot on every hour switch -- see the note in
-//     showForecastHour().
-const hourSettings = {};
-
+//     An hour is seeded from its own scheduled snapshot the first time it
+//     is shown, and remembers wherever the sliders were left from then on.
+//     Keyed by zero-padded forecast hour ("00", "03").
 function hourKey(fxx) {
   return String(fxx).padStart(2, '0');
 }
 
-// The three IFR sliders, read as numbers, as one object.
-function readSliders() {
+const IFR_FIELDS = [
+  { key: 'threshold', slider: 'adjust-threshold', label: 'adjust-threshold-val', prop: 'threshold_pct' },
+  { key: 'radius', slider: 'adjust-radius', label: 'adjust-radius-val', prop: 'neighborhood_radius_nm' },
+  { key: 'minArea', slider: 'adjust-minarea', label: 'adjust-minarea-val', prop: 'min_area_sq_mi' },
+];
+
+const MTN_FIELDS = [
+  { key: 'threshold', slider: 'adjust-mtn-threshold', label: 'adjust-mtn-threshold-val', prop: 'threshold_pct' },
+  { key: 'clearance', slider: 'adjust-mtn-clearance', label: 'adjust-mtn-clearance-val', prop: 'clearance_margin_ft' },
+  { key: 'radius', slider: 'adjust-mtn-radius', label: 'adjust-mtn-radius-val', prop: 'neighborhood_radius_nm' },
+  { key: 'minArea', slider: 'adjust-mtn-minarea', label: 'adjust-mtn-minarea-val', prop: 'min_area_sq_mi' },
+];
+
+function makeHourStore(fields) {
+  const byHour = {};
   return {
-    threshold: Number(document.getElementById('adjust-threshold').value),
-    radius: Number(document.getElementById('adjust-radius').value),
-    minArea: Number(document.getElementById('adjust-minarea').value),
+    fields,
+
+    // The hazard's sliders, read as numbers, as one settings object.
+    read() {
+      const out = {};
+      fields.forEach((f) => { out[f.key] = Number(document.getElementById(f.slider).value); });
+      return out;
+    },
+
+    // Push a settings object onto the sliders and their live labels.
+    apply(settings) {
+      if (!settings) return;
+      fields.forEach((f) => {
+        if (settings[f.key] == null) return;
+        document.getElementById(f.slider).value = settings[f.key];
+        document.getElementById(f.label).textContent = settings[f.key];
+      });
+    },
+
+    // Starting settings for an hour, from its scheduled snapshot's
+    // properties, falling back to the sliders for anything absent.
+    fromProps(props) {
+      if (!props) return null;
+      const current = this.read();
+      const out = {};
+      fields.forEach((f) => { out[f.key] = props[f.prop] ?? current[f.key]; });
+      return out;
+    },
+
+    get(fxx) { return byHour[hourKey(fxx)]; },
+    set(fxx, settings) { byHour[hourKey(fxx)] = settings; },
+
+    // Persist the sliders against an hour. Called on every slider input --
+    // NOT debounced, so a fast switch away cannot lose the value.
+    saveCurrent(fxx) {
+      if (fxx == null) return;
+      byHour[hourKey(fxx)] = this.read();
+    },
+
+    clear(fxx) { delete byHour[hourKey(fxx)]; },
+    clearAll() { Object.keys(byHour).forEach((k) => delete byHour[k]); },
+
+    // Snapshot of every hour's settings -- used to build the PGEN export
+    // payload and its sidecar.
+    all() { return { ...byHour }; },
   };
 }
 
-// Push a settings object onto the sliders and their live numeric labels.
-function applySettingsToSliders(settings) {
-  if (!settings) return;
-  document.getElementById('adjust-threshold').value = settings.threshold;
-  document.getElementById('adjust-threshold-val').textContent = settings.threshold;
-  document.getElementById('adjust-radius').value = settings.radius;
-  document.getElementById('adjust-radius-val').textContent = settings.radius;
-  document.getElementById('adjust-minarea').value = settings.minArea;
-  document.getElementById('adjust-minarea-val').textContent = settings.minArea;
-}
+const ifrHours = makeHourStore(IFR_FIELDS);
+const mtnHours = makeHourStore(MTN_FIELDS);
 
-// Derive an hour's starting settings from its scheduled snapshot's
-// properties, falling back to whatever the sliders say for any field the
-// snapshot doesn't carry.
-function settingsFromProps(props) {
-  if (!props) return null;
-  const current = readSliders();
-  return {
-    threshold: props.threshold_pct ?? current.threshold,
-    radius: props.neighborhood_radius_nm ?? current.radius,
-    minArea: props.min_area_sq_mi ?? current.minArea,
-  };
-}
-
-// Persist the sliders against the current hour. Called on every slider
-// input -- NOT debounced, so a fast switch away cannot lose the value.
-function saveCurrentHourSettings() {
-  if (currentFxx == null) return;
-  hourSettings[hourKey(currentFxx)] = readSliders();
-}
 
 // --- Re-processes the CURRENTLY selected forecast hour's cached grid
 //     with whatever the sliders currently say, and swaps in the
@@ -222,7 +250,7 @@ async function recomputeCurrentSnapshot(settings = null) {
 
   // Slider-driven calls pass nothing and read the DOM; hour switches pass
   // that hour's stored settings explicitly.
-  const { threshold, radius, minArea } = settings || readSliders();
+  const { threshold, radius, minArea } = settings || ifrHours.read();
   const statusEl = document.getElementById('adjust-status');
   const fxxStr = String(currentFxx).padStart(2, '0');
 
@@ -259,13 +287,12 @@ const debouncedRecompute = debounce(recomputeCurrentSnapshot, 300);
 //     (clearance_margin_ft), and the two hazards are genuinely tuned
 //     independently -- a forecaster dialing in an IFR threshold
 //     shouldn't silently move the mountain obscuration boundaries too. ---
-async function recomputeCurrentMtnSnapshot() {
+async function recomputeCurrentMtnSnapshot(settings = null) {
   if (currentFxx == null || !liveAdjustAvailable) return;
 
-  const threshold = document.getElementById('adjust-mtn-threshold').value;
-  const clearance = document.getElementById('adjust-mtn-clearance').value;
-  const radius = document.getElementById('adjust-mtn-radius').value;
-  const minArea = document.getElementById('adjust-mtn-minarea').value;
+  // Slider-driven calls pass nothing and read the DOM; hour switches pass
+  // that hour's stored settings explicitly.
+  const { threshold, clearance, radius, minArea } = settings || mtnHours.read();
   const statusEl = document.getElementById('adjust-mtn-status');
   const fxxStr = String(currentFxx).padStart(2, '0');
 
@@ -294,17 +321,17 @@ const debouncedMtnRecompute = debounce(recomputeCurrentMtnSnapshot, 300);
 //     resolves), and debounce the actual recompute. ---
 document.getElementById('adjust-threshold').addEventListener('input', (e) => {
   document.getElementById('adjust-threshold-val').textContent = e.target.value;
-  saveCurrentHourSettings();
+  ifrHours.saveCurrent(currentFxx);
   debouncedRecompute();
 });
 document.getElementById('adjust-radius').addEventListener('input', (e) => {
   document.getElementById('adjust-radius-val').textContent = e.target.value;
-  saveCurrentHourSettings();
+  ifrHours.saveCurrent(currentFxx);
   debouncedRecompute();
 });
 document.getElementById('adjust-minarea').addEventListener('input', (e) => {
   document.getElementById('adjust-minarea-val').textContent = e.target.value;
-  saveCurrentHourSettings();
+  ifrHours.saveCurrent(currentFxx);
   debouncedRecompute();
 });
 
@@ -318,6 +345,7 @@ document.getElementById('adjust-minarea').addEventListener('input', (e) => {
 ].forEach(([sliderId, labelId]) => {
   document.getElementById(sliderId).addEventListener('input', (e) => {
     document.getElementById(labelId).textContent = e.target.value;
+    mtnHours.saveCurrent(currentFxx);
     debouncedMtnRecompute();
   });
 });
@@ -327,7 +355,7 @@ document.getElementById('adjust-minarea').addEventListener('input', (e) => {
 document.getElementById('adjust-reset').addEventListener('click', async () => {
   if (currentFxx == null) return;
   // This hour only -- other hours keep their own adjustments.
-  delete hourSettings[hourKey(currentFxx)];
+  ifrHours.clear(currentFxx);
   try {
     await loadIfrSnapshot(currentFxx, { refit: false });
   } catch (err) {
@@ -341,7 +369,7 @@ document.getElementById('adjust-reset').addEventListener('click', async () => {
 //     which is exactly the un-adjusted state. ---
 document.getElementById('adjust-reset-all').addEventListener('click', async () => {
   if (currentFxx == null) return;
-  Object.keys(hourSettings).forEach((k) => delete hourSettings[k]);
+  ifrHours.clearAll();
   try {
     await loadIfrSnapshot(currentFxx, { refit: false });
   } catch (err) {
@@ -400,10 +428,21 @@ document.getElementById('adjust-generate').addEventListener('click', async () =>
   }
 });
 
-// --- MTN OBSC reset: reloads the original scheduled snapshot for the
-//     current forecast hour, discarding slider changes. ---
+// --- MTN OBSC reset: drops THIS hour's saved settings and reloads its
+//     original scheduled snapshot. Other hours keep their adjustments.
+//     Same semantics as the IFR reset above. ---
 document.getElementById('adjust-mtn-reset').addEventListener('click', async () => {
   if (currentFxx == null) return;
+  mtnHours.clear(currentFxx);
+  await loadMtnObscSnapshot(currentFxx);
+});
+
+// --- MTN OBSC reset-all: clears every hour's saved MTN settings. Only the
+//     current hour is on screen so only it needs reloading -- the others
+//     re-seed from their own scheduled snapshots when next shown. ---
+document.getElementById('adjust-mtn-reset-all').addEventListener('click', async () => {
+  if (currentFxx == null) return;
+  mtnHours.clearAll();
   await loadMtnObscSnapshot(currentFxx);
 });
 
@@ -444,6 +483,67 @@ document.getElementById('adjust-mtn-generate').addEventListener('click', async (
   }
 });
 
+// --- COMBINED PGEN EXPORT ---
+//     Downloads ONE PGEN XML document holding all five forecast hours,
+//     each polygonized at that hour's own settings, plus a sidecar JSON
+//     recording those settings. NMAP2's Filter Control steps through hours
+//     within a single file, so they have to travel together.
+//
+//     The sidecar exists because provenance deliberately does NOT go into
+//     the XML: their parser was verified against a specific Gfa attribute
+//     set and this export does not perturb it.
+//
+//     Hours the forecaster never opened are simply absent from the store;
+//     the server fills those in from the manifest's scheduled parameters,
+//     so the file always covers the whole cycle. ---
+function pgenHoursPayload(store) {
+  const saved = store.all();
+  return Object.keys(saved).map((key) => {
+    const entry = { forecast_hour: Number(key) };
+    // field.prop is deliberately the API parameter name as well as the
+    // GeoJSON property name -- they agree, so no translation table.
+    store.fields.forEach((f) => { entry[f.prop] = saved[key][f.key]; });
+    return entry;
+  });
+}
+
+async function downloadPgen(hazardPath, store, statusEl) {
+  statusEl.textContent = 'building all hours...';
+  try {
+    const resp = await fetch(`/api/hazards/${hazardPath}/pgen`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hours: pgenHoursPayload(store) }),
+    });
+    if (!resp.ok) {
+      const detail = await resp.text();
+      throw new Error(`PGEN export failed (${resp.status}): ${detail}`);
+    }
+    const data = await resp.json();
+
+    downloadTextFile(data.xml, data.filename, 'application/xml');
+    downloadTextFile(JSON.stringify(data.sidecar, null, 2),
+                     data.sidecar_filename, 'application/json');
+
+    statusEl.textContent = `${data.sidecar.total_gfa_elements} elements downloaded`;
+    setTimeout(() => { statusEl.textContent = ''; }, 4000);
+  } catch (err) {
+    console.error('PGEN export failed:', err);
+    statusEl.textContent = 'error (see console)';
+  }
+}
+
+document.getElementById('adjust-pgen').addEventListener('click', () => {
+  if (!liveAdjustAvailable) return;
+  downloadPgen('ifr', ifrHours, document.getElementById('generate-status'));
+});
+
+document.getElementById('adjust-mtn-pgen').addEventListener('click', () => {
+  if (!liveAdjustAvailable) return;
+  downloadPgen('mtn_obsc', mtnHours, document.getElementById('generate-mtn-status'));
+});
+
+
 // --- Loads one specific IFR snapshot by its REQUESTED forecast hour
 //     (matching the manifest's "requested_forecast_hour" and the
 //     filename convention ifr_fNN.geojson), replaces the ifr layer's
@@ -468,9 +568,9 @@ async function loadIfrSnapshot(requestedFxx, { refit = true } = {}) {
     // scheduled snapshot. Hours that already have saved settings go through
     // showForecastHour() and never reach here, so switching hours no longer
     // clobbers what was dialled in.
-    const seeded = settingsFromProps(firstProps);
-    hourSettings[hourKey(requestedFxx)] = seeded;
-    applySettingsToSliders(seeded);
+    const seeded = ifrHours.fromProps(firstProps);
+    ifrHours.set(requestedFxx, seeded);
+    ifrHours.apply(seeded);
   }
 
   // Only re-fit the view the FIRST time data loads (on subsequent
@@ -502,19 +602,14 @@ async function loadMtnObscSnapshot(requestedFxx) {
     document.getElementById('legend-mtn-threshold').textContent =
       firstProps?.threshold_pct ?? '--';
 
-    // Sync the MTN sliders to what's actually on screen -- otherwise
-    // they'd keep showing whatever was last dragged, which after a reset
-    // or a forecast-hour switch would misrepresent the displayed data.
+    // First visit to this hour (or a reset): seed its settings from the
+    // scheduled snapshot and sync the sliders to what's actually on
+    // screen. Hours with saved settings go through showForecastHour() and
+    // never reach here, so switching hours no longer clobbers them.
     if (firstProps) {
-      const sync = (sliderId, labelId, value) => {
-        if (value == null) return;
-        document.getElementById(sliderId).value = value;
-        document.getElementById(labelId).textContent = value;
-      };
-      sync('adjust-mtn-threshold', 'adjust-mtn-threshold-val', firstProps.threshold_pct);
-      sync('adjust-mtn-clearance', 'adjust-mtn-clearance-val', firstProps.clearance_margin_ft);
-      sync('adjust-mtn-radius', 'adjust-mtn-radius-val', firstProps.neighborhood_radius_nm);
-      sync('adjust-mtn-minarea', 'adjust-mtn-minarea-val', firstProps.min_area_sq_mi);
+      const seeded = mtnHours.fromProps(firstProps);
+      mtnHours.set(requestedFxx, seeded);
+      mtnHours.apply(seeded);
     }
   } catch (err) {
     console.warn('Mountain Obscuration layer unavailable:', err);
@@ -523,25 +618,42 @@ async function loadMtnObscSnapshot(requestedFxx) {
   }
 }
 
-// --- Switches the displayed IFR forecast hour, restoring THAT hour's own
-//     slider settings. An hour previously adjusted comes back at its
-//     adjusted values and is recomputed to match; an hour not yet visited
-//     loads its scheduled snapshot and seeds its settings from it.
+// --- Switches the displayed forecast hour for BOTH hazards, restoring
+//     each panel's own saved settings for that hour. A hazard's hour that
+//     was previously adjusted comes back at its adjusted values and is
+//     recomputed to match; an hour not yet visited loads its scheduled
+//     snapshot and seeds its settings from it.
 //
-//     MTN OBSC is deliberately NOT routed through here -- its panel keeps
-//     today's re-seed-from-snapshot behaviour, so its sliders still reset
-//     on an hour switch while IFR's persist. Bringing MTN OBSC onto the
-//     web was a separate project and per-hour state for it is a separate
-//     decision. ---
+//     currentFxx is set before either hazard starts so both recomputes
+//     target the hour being switched TO, not the one being left. ---
 async function showForecastHour(requestedFxx, { refit = true } = {}) {
-  const saved = hourSettings[hourKey(requestedFxx)];
+  currentFxx = requestedFxx;
+  await Promise.all([
+    showIfrForHour(requestedFxx, { refit }),
+    showMtnForHour(requestedFxx),
+  ]);
+}
+
+async function showIfrForHour(fxx, { refit = true } = {}) {
+  const saved = ifrHours.get(fxx);
   if (saved && liveAdjustAvailable) {
-    currentFxx = requestedFxx;
-    applySettingsToSliders(saved);
+    ifrHours.apply(saved);
     await recomputeCurrentSnapshot(saved);
     return;
   }
-  await loadIfrSnapshot(requestedFxx, { refit });
+  await loadIfrSnapshot(fxx, { refit });
+}
+
+// Mirrors showIfrForHour. loadMtnObscSnapshot never throws (see its
+// docstring), so a missing MTN OBSC cycle still can't block the IFR switch.
+async function showMtnForHour(fxx) {
+  const saved = mtnHours.get(fxx);
+  if (saved && liveAdjustAvailable) {
+    mtnHours.apply(saved);
+    await recomputeCurrentMtnSnapshot(saved);
+    return;
+  }
+  await loadMtnObscSnapshot(fxx);
 }
 
 
@@ -574,10 +686,7 @@ function buildFxxSelector(manifest) {
         // misleading. loadMtnObscSnapshot never throws (see its
         // docstring), so a missing MTN OBSC file can't block the IFR
         // switch here.
-        await Promise.all([
-          showForecastHour(snap.requested_forecast_hour),
-          loadMtnObscSnapshot(snap.requested_forecast_hour),
-        ]);
+        await showForecastHour(snap.requested_forecast_hour);
       } catch (err) {
         console.error('Failed to switch forecast hour:', err);
       }
