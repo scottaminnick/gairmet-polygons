@@ -4,47 +4,32 @@ __pycache__/
 .venv/
 venv/
 
-# Generated outputs - ignored by default so ad-hoc local/test runs
-# don't clutter the repo, EXCEPT the files generate_ifr.yml / 
-# generate_mtn_obsc.yml deliberately commit and overwrite on schedule --
-# those are what the web app actually serves. Without these negation
-# lines, 'git add' would silently refuse to stage them (matches
-# .gitignore), the workflow's commit step would never have anything
-# staged, and the site would never update. Confirmed directly: this is
-# exactly what happened when generate_mtn_obsc.yml first ran for real --
-# mtn_obsc_manifest.json committed fine (plain .json, not caught by
-# either pattern below), but every mtn_obsc_f*.geojson and
-# mtn_obsc_f*_grid.npz was silently dropped, because the exception lines
-# below only ever existed for IFR's five filenames, not Mountain
-# Obscuration's. (ifr_manifest.json / mtn_obsc_manifest.json aren't
-# .geojson files, so neither is caught by the pattern at all -- no
-# exception needed for either.)
-output/*.geojson
-!output/ifr_f00.geojson
-!output/ifr_f03.geojson
-!output/ifr_f06.geojson
-!output/ifr_f09.geojson
-!output/ifr_f12.geojson
-!output/mtn_obsc_f00.geojson
-!output/mtn_obsc_f03.geojson
-!output/mtn_obsc_f06.geojson
-!output/mtn_obsc_f09.geojson
-!output/mtn_obsc_f12.geojson
+# Generated pipeline outputs -- NOT tracked on main any more.
+#
+# These used to be committed back to main 8x/day by generate_ifr.yml and
+# generate_mtn_obsc.yml, which required a thicket of negation exceptions
+# below this line so 'git add output/' would actually stage them. That
+# cost far more than it looked: .npz files don't delta-compress, so every
+# scheduled run stored FULL fresh copies of ~20 MB of grids in history.
+# The repo reached 2.2 GB against a 23.5 MB working tree, and Railway
+# started failing at "Snapshot code" because cloning timed out.
+#
+# Each hazard workflow now force-pushes its own artifacts to its own
+# orphan-style data branch (data-ifr / data-mtnobsc), rebuilt from
+# scratch every run so those branches are permanently one commit deep,
+# and the web app fetches them over HTTP at runtime (see
+# webapp/artifacts.py). Nothing under output/ belongs in main's history
+# any more -- hence a plain directory ignore with no exceptions.
+#
+# Local runs still write here exactly as before (pipeline/generate_latest_*.py
+# create the directory if needed); the files are simply untracked, and the
+# web app serves them from here in preference to anything it fetched
+# remotely, so local pipeline output still shows up in the local map.
+output/
 
-# Cached prepared grids -- power the web app's live parameter-adjustment
-# endpoint (re-threshold/merge/filter without re-fetching from NBM).
-# Same negation-exception need as the .geojson outputs above.
-output/*.npz
-!output/ifr_f00_grid.npz
-!output/ifr_f03_grid.npz
-!output/ifr_f06_grid.npz
-!output/ifr_f09_grid.npz
-!output/ifr_f12_grid.npz
-!output/mtn_obsc_f00_grid.npz
-!output/mtn_obsc_f03_grid.npz
-!output/mtn_obsc_f06_grid.npz
-!output/mtn_obsc_f09_grid.npz
-!output/mtn_obsc_f12_grid.npz
+# Runtime download cache for artifacts fetched from the data branches
+# (webapp/artifacts.py). Ephemeral by design -- re-downloaded on restart.
+.artifact-cache/
 
 # Large cached terrain/DEM files - regenerate locally, don't commit
 data/terrain/*.tif

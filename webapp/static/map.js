@@ -504,6 +504,32 @@ function buildFxxSelector(manifest) {
   });
 }
 
+// --- Fetches the IFR manifest, waiting out a cold start.
+//
+// The deployed app no longer ships its data: artifacts are downloaded at
+// runtime from the pipeline's data branches (see webapp/artifacts.py), so
+// for the first few seconds after a restart there is genuinely nothing to
+// serve and the API answers 503 "not loaded yet". Without this wait, a page
+// loaded in that window would fall straight through to the demo-data path
+// and keep showing SYNTHETIC polygons until someone reloaded by hand --
+// which looks exactly like real data to anyone who wasn't watching. Any
+// other status (or a slow-loading deploy that blows the deadline) still
+// falls back as before.
+async function fetchIfrManifestWhenReady() {
+  const DEADLINE_MS = 120000;
+  const POLL_MS = 5000;
+  const startedAt = Date.now();
+  while (true) {
+    const resp = await fetch('/api/hazards/ifr/manifest');
+    if (resp.ok) return resp.json();
+    if (resp.status !== 503 || Date.now() - startedAt > DEADLINE_MS) {
+      throw new Error(`manifest not available (${resp.status})`);
+    }
+    document.getElementById('valid-time').textContent = 'LOADING\u2026';
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+  }
+}
+
 // --- Load data from our API and populate the layers ---
 async function loadData() {
   try {
@@ -528,9 +554,7 @@ async function loadData() {
   // to the single default endpoint and hide the selector row entirely
   // rather than show a selector with nothing behind it.
   try {
-    const manifestResp = await fetch('/api/hazards/ifr/manifest');
-    if (!manifestResp.ok) throw new Error(`manifest not available (${manifestResp.status})`);
-    const manifest = await manifestResp.json();
+    const manifest = await fetchIfrManifestWhenReady();
     if (!manifest.snapshots?.length) throw new Error('manifest has no snapshots');
 
     buildFxxSelector(manifest);
@@ -541,6 +565,7 @@ async function loadData() {
     liveAdjustAvailable = true;
   } catch (err) {
     console.warn('No forecast-hour manifest available, falling back to single snapshot:', err);
+    document.getElementById('valid-time').textContent = '--------Z'; // clear any "loading" text
     document.getElementById('fxx-row').style.display = 'none';
     document.getElementById('adjust-panel').style.display = 'none'; // nothing cached to recompute from
     document.getElementById('adjust-mtn-panel').style.display = 'none'; // same

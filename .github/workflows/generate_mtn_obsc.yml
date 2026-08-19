@@ -6,9 +6,11 @@ on:
   # mark (not just cosmetically different): this hazard fetches TEN
   # real NBM fields per forecast hour vs. IFR's four (see
   # pipeline/hazards/mtn_obsc.py's docstring), so it takes noticeably
-  # longer to run. Running both workflows at the same offset risked
-  # both trying to commit/push to the repo around the same time; this
-  # gap gives IFR's run room to finish and push first.
+  # longer to run. The stagger originally existed because both
+  # workflows pushed to main and risked colliding there; they now
+  # publish to separate branches and cannot collide at all, but the
+  # offset is kept anyway so the two runs don't fetch from NBM
+  # simultaneously.
   schedule:
     - cron: "35 3,9,15,21 * * *"
   # Manual trigger, with optional overrides so a forecaster can
@@ -32,25 +34,30 @@ on:
         required: false
         default: "3000"
 
-# Ensures only ONE run of this workflow is ever actually executing
-# (including its git push) at a time -- same reasoning as
-# generate_ifr.yml's own concurrency block. Without this, a manual
-# trigger landing close to a scheduled run -- or two manual triggers
-# close together -- both check out main, both generate fresh output/
-# files, and whichever pushes SECOND gets rejected with "failed to push
-# some refs... Updates were rejected because the remote contains work
-# that you do not have locally." Distinct group name from
-# generate_ifr.yml's ("generate-ifr-polygons") -- this should NOT block
-# on or be blocked by IFR's own runs, only prevent double-runs of
-# ITSELF. cancel-in-progress is deliberately false: a new trigger QUEUES
-# and waits its turn rather than silently cancelling a run already in
-# progress.
+# Ensures only ONE run of this workflow is ever actually executing at a
+# time -- same reasoning as generate_ifr.yml's own concurrency block, in
+# full there. Short version: the original push-rejection race it was
+# added for is gone (runs force-push a from-scratch data branch now, not
+# main), but force-pushing brought a quieter one -- of two overlapping
+# runs, whichever finishes LAST wins even if it carries an OLDER model
+# cycle, silently walking the live site's data backwards. Queueing makes
+# last-to-finish and newest-cycle the same run. This matters MORE here
+# than for IFR: this job can take tens of minutes (see timeout-minutes
+# below), so it has a much wider window to be overtaken.
+#
+# Distinct group name from generate_ifr.yml's ("generate-ifr-polygons")
+# -- this should NOT block on or be blocked by IFR's runs, only prevent
+# double-runs of ITSELF. The two hazards now publish to separate branches
+# and cannot interfere with each other at all. cancel-in-progress is
+# deliberately false: a new trigger QUEUES and waits its turn rather than
+# silently cancelling a run already in progress.
 concurrency:
   group: generate-mtn-obsc-polygons
   cancel-in-progress: false
 
-# Needed to commit the regenerated forecast-hour snapshots back to
-# the repo -- the default GITHUB_TOKEN is read-only unless granted this.
+# Needed to force-push the regenerated forecast-hour snapshots to the
+# data-mtnobsc branch -- the default GITHUB_TOKEN is read-only unless
+# granted this. Nothing here writes to main.
 permissions:
   contents: write
 
@@ -101,39 +108,76 @@ jobs:
           MTN_OBSC_MIN_AREA_SQ_MI: ${{ github.event.inputs.min_area_sq_mi || '3000' }}
         run: python3 pipeline/generate_latest_mtn_obsc.py
 
-      - name: Commit and push updated output
+      - name: Publish artifacts to the data-mtnobsc branch
+        # Publishes this hazard's artifacts to a dedicated data branch
+        # instead of committing them back to main. main used to carry
+        # every one of these .npz grids, 8x/day, forever -- and .npz
+        # files don't delta-compress, so each run added FULL copies
+        # (~12 MB/run) to history. That is what pushed the repo to
+        # 2.2 GB against a 23.5 MB working tree and made Railway's
+        # "Snapshot code" step time out cloning it.
+        #
+        # The branch is rebuilt FROM SCRATCH every run in a throwaway
+        # scratch directory with its own 'git init', then force-pushed,
+        # so it is permanently exactly ONE commit deep and its size never
+        # grows no matter how many times this runs. Note this is
+        # deliberately NOT 'git checkout --orphan' in the workspace:
+        # --orphan keeps the working tree and stages everything in it, so
+        # a stray 'git add -A' would commit the ENTIRE repo (source,
+        # terrain grid, the other hazard's output) onto the data branch.
+        # A separate directory that has never seen the repo cannot do
+        # that.
+        #
+        # Only Mountain Obscuration's OWN files are copied in -- the two
+        # publish steps must never touch each other's artifacts, since
+        # each force-push replaces its branch's whole contents and would
+        # otherwise delete the other hazard's data. The globs below are
+        # naturally disjoint (mtn_obsc_f* never matches ifr_f*, and vice versa).
+        #
+        # The manifest lands at the branch root as mtn_obsc_manifest.json
+        # (https://raw.githubusercontent.com/OWNER/REPO/data-mtnobsc/mtn_obsc_manifest.json)
+        # -- webapp/artifacts.py polls exactly that URL every 5 minutes
+        # and re-downloads this hazard's set whenever model_cycle changes.
+        #
+        # Pushing with GITHUB_TOKEN deliberately does not trigger further
+        # workflow runs, and since nothing lands on main any more, data
+        # updates no longer trigger a Railway redeploy either.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH_BRANCH: data-mtnobsc
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add output/
-          git diff --staged --quiet && echo "No changes to commit" && exit 0
-          git commit -m "Auto-update Mountain Obscuration polygons [skip ci]"
+          set -euo pipefail
 
-          # concurrency: above should prevent same-workflow races
-          # entirely, but retry with rebase as a defensive fallback for
-          # a DIFFERENT scenario: some unrelated commit (e.g.
-          # generate_ifr.yml's own push, or a manual commit like a
-          # .gitignore fix) landing on main in the narrow window before
-          # this push -- confirmed directly: a real run hit exactly this
-          # "failed to push some refs... rejected" error. NOTE: this
-          # will NOT help if the race is actually two runs of THIS SAME
-          # workflow (which concurrency: is what prevents) -- both would
-          # have generated different content for the exact same output/
-          # files, so a rebase would hit real conflicts, not resolve
-          # cleanly. Mirrors generate_ifr.yml's identical fix.
+          PUBLISH_DIR="$(mktemp -d)"
+          cp "$GITHUB_WORKSPACE/output/mtn_obsc_manifest.json" "$PUBLISH_DIR/"
+          cp "$GITHUB_WORKSPACE"/output/mtn_obsc_f*.geojson "$PUBLISH_DIR/"
+          cp "$GITHUB_WORKSPACE"/output/mtn_obsc_f*_grid.npz "$PUBLISH_DIR/"
+
+          MODEL_CYCLE="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['model_cycle'])" "$PUBLISH_DIR/mtn_obsc_manifest.json")"
+
+          cd "$PUBLISH_DIR"
+          echo "Publishing $(ls | wc -l) file(s) for model cycle $MODEL_CYCLE to $PUBLISH_BRANCH:"
+          ls -la
+
+          git init -q -b "$PUBLISH_BRANCH"
+          git add -A
+          git -c user.name="github-actions[bot]" \
+              -c user.email="github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "data: mtn_obsc $MODEL_CYCLE"
+
+          # --force is the whole point: the remote branch's single commit
+          # is replaced outright, never appended to. Retried only for
+          # transient network/GitHub failures -- there is no
+          # fetch-and-rebase fallback any more (and none is wanted: this
+          # branch intentionally has no shared history to rebase onto).
+          REMOTE="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           for attempt in 1 2 3 4 5; do
-            if git push; then
-              echo "Pushed successfully on attempt $attempt"
+            if git push --force "$REMOTE" "$PUBLISH_BRANCH:$PUBLISH_BRANCH"; then
+              echo "Pushed $PUBLISH_BRANCH successfully on attempt $attempt"
               exit 0
             fi
-            echo "Push rejected (attempt $attempt/5) -- fetching and rebasing..."
-            git fetch origin main
-            if ! git rebase origin/main; then
-              echo "Rebase hit a real conflict (likely two runs racing on the same output files -- concurrency: should prevent this going forward). Aborting."
-              git rebase --abort
-              exit 1
-            fi
+            echo "Push failed (attempt $attempt/5) -- retrying..."
             sleep $((attempt * 5))
           done
-          echo "Failed to push after 5 attempts"
+          echo "Failed to push $PUBLISH_BRANCH after 5 attempts"
           exit 1
