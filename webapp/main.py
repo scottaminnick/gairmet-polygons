@@ -7,8 +7,8 @@ the heavy GRIB2 stack (cfgrib/eccodes/xarray/herbie-data -- see
 requirements-pipeline.txt vs requirements.txt). Its jobs are:
 
     1. Serve the static frontend (index.html/style.css/map.js)
-    2. Serve whatever GeoJSON files currently exist in data/ and output/
-       as small JSON API endpoints
+    2. Serve whatever hazard artifacts are currently loaded (see
+       webapp/artifacts.py) as small JSON API endpoints
     3. Re-process an ALREADY-FETCHED, cached probability grid with
        forecaster-chosen parameters (threshold/neighborhood-radius/
        min-area) for live interactive adjustment -- see
@@ -22,12 +22,27 @@ The actual polygon generation happens in pipeline/ and runs on a
 schedule via GitHub Actions (.github/workflows/generate_ifr.yml), which
 generates a full set of forecast-hour snapshots (matching G-AIRMET's
 real 00/03/06/09/12h valid-time schedule) plus a manifest describing
-them, and commits them back to the repo -- this file never needs to
-change when that pipeline logic changes, it just reads whatever's on
-disk at request time.
+them -- this file never needs to change when that pipeline logic
+changes, it just reads whatever is on disk at request time.
+
+What HAS changed is how those files get here. They used to be committed
+back to main, so a deploy carried them; main is now free of them (they
+were 2.2 GB of undeltable .npz history, and Railway could no longer
+clone it) and each workflow force-pushes its own artifacts to its own
+single-commit data branch instead. webapp/artifacts.py fetches those
+over HTTP on a timer and owns every path this file reads, which is why
+nothing below builds a path out of an output/ directory any more.
+
+Two consequences worth knowing when reading the endpoints: data can be
+legitimately ABSENT for the first few seconds after a restart (the
+initial download runs in the background so startup and Railway's health
+check don't wait on ~20 MB), and every "no data" case returns 503 with
+an explanation from artifacts.not_loaded_detail() rather than a bare
+404 or a 500.
 """
 
 import json
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -35,13 +50,52 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from webapp import artifacts
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 BOUNDARIES_DIR = BASE_DIR / "data" / "boundaries"
-OUTPUT_DIR = BASE_DIR / "output"
 DEMO_GEOJSON = BASE_DIR / "data" / "sample" / "demo_ifr_polygons.geojson"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
-app = FastAPI(title="G-AIRMET Polygon Viewer")
+_refresher = artifacts.ArtifactRefresher()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Starts the artifact poller and returns IMMEDIATELY. The first fetch
+    is ~20 MB and happens on that background thread, deliberately not
+    awaited here: FastAPI won't report the app as ready until this
+    function yields, and Railway's health check hits it right after, so
+    anything slow in here would show up as a failed deploy rather than
+    as a few seconds of "data loading".
+    """
+    _refresher.start()
+    yield
+    _refresher.stop()
+
+
+app = FastAPI(title="G-AIRMET Polygon Viewer", lifespan=lifespan)
+
+
+def _require_manifest(hazard_key: str) -> dict:
+    """
+    The loaded manifest for a hazard, or a 503 explaining why there
+    isn't one. 503 (not 404) because "the pipeline has never produced
+    this" and "this deploy hasn't finished downloading it yet" are the
+    same thing from the client's side: try again shortly.
+    """
+    manifest = artifacts.load_manifest(hazard_key)
+    if manifest is None:
+        raise HTTPException(status_code=503, detail=artifacts.not_loaded_detail(hazard_key))
+    return manifest
+
+
+def _find_snapshot(manifest: dict, fxx: str):
+    return next(
+        (s for s in manifest.get("snapshots", []) if str(s["requested_forecast_hour"]).zfill(2) == fxx.zfill(2)),
+        None,
+    )
 
 
 @app.get("/api/boundaries/states")
@@ -70,23 +124,14 @@ def get_ifr_manifest():
     in registration order, and a generic {fxx} string parameter would
     otherwise happily (and wrongly) match the literal word "manifest".
     """
-    manifest_path = OUTPUT_DIR / "ifr_manifest.json"
-    if not manifest_path.exists():
-        raise HTTPException(status_code=404, detail="No manifest available yet (pipeline hasn't run)")
-    return FileResponse(manifest_path, media_type="application/json")
+    _require_manifest("ifr")
+    return FileResponse(artifacts.manifest_path("ifr"), media_type="application/json")
 
 
 def _load_manifest_and_snapshot(fxx: str):
     """Shared lookup used by both the recompute endpoint and (indirectly) get_ifr_snapshot."""
-    manifest_path = OUTPUT_DIR / "ifr_manifest.json"
-    if not manifest_path.exists():
-        raise HTTPException(status_code=404, detail="No manifest available yet (pipeline hasn't run)")
-    with open(manifest_path) as f:
-        manifest = json.load(f)
-    snapshot = next(
-        (s for s in manifest.get("snapshots", []) if str(s["requested_forecast_hour"]).zfill(2) == fxx.zfill(2)),
-        None,
-    )
+    manifest = _require_manifest("ifr")
+    snapshot = _find_snapshot(manifest, fxx)
     if snapshot is None:
         raise HTTPException(status_code=404, detail=f"No snapshot for F{fxx}")
     return manifest, snapshot
@@ -125,9 +170,15 @@ def recompute_ifr_snapshot(
             status_code=404,
             detail=f"No cached grid for F{fxx} (this snapshot may have been generated before caching was added)",
         )
-    cache_path = OUTPUT_DIR / cache_filename
-    if not cache_path.exists():
-        raise HTTPException(status_code=404, detail=f"Cached grid file missing: {cache_filename}")
+    cache_path = artifacts.artifact_path("ifr", cache_filename)
+    if cache_path is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Cached grid {cache_filename} is named in the manifest but isn't on disk -- "
+                f"{artifacts.not_loaded_detail('ifr')}"
+            ),
+        )
 
     # Imported here rather than at module level to keep this file's own
     # top-level imports minimal and obviously safe on Railway -- these
@@ -179,8 +230,10 @@ def get_ifr_snapshot(fxx: str, format: str = "geojson"):
     standard (a much heavier lift); N-AWIPS' own existing software
     handles that conversion downstream from this simpler draft form.
     """
-    path = OUTPUT_DIR / f"ifr_f{fxx}.geojson"
-    if not path.exists():
+    path = artifacts.artifact_path("ifr", f"ifr_f{fxx}.geojson")
+    if path is None:
+        if artifacts.load_manifest("ifr") is None:
+            raise HTTPException(status_code=503, detail=artifacts.not_loaded_detail("ifr"))
         raise HTTPException(status_code=404, detail=f"No snapshot for F{fxx}")
 
     if format == "xml":
@@ -203,21 +256,16 @@ def get_ifr_hazard():
     SOMETHING rather than a blank error, while still preferring real
     data whenever it exists.
     """
-    manifest_path = OUTPUT_DIR / "ifr_manifest.json"
-    if manifest_path.exists():
-        with open(manifest_path) as f:
-            manifest = json.load(f)
+    manifest = artifacts.load_manifest("ifr")
+    if manifest:
         snapshots = manifest.get("snapshots") or []
         if snapshots:
-            default_path = OUTPUT_DIR / snapshots[0]["filename"]
-            if default_path.exists():
+            default_path = artifacts.artifact_path("ifr", snapshots[0]["filename"])
+            if default_path is not None:
                 return FileResponse(default_path, media_type="application/geo+json")
     if DEMO_GEOJSON.exists():
         return FileResponse(DEMO_GEOJSON, media_type="application/geo+json")
-    raise HTTPException(
-        status_code=404,
-        detail="No IFR data available yet (pipeline hasn't run, and no demo fallback found)",
-    )
+    raise HTTPException(status_code=503, detail=artifacts.not_loaded_detail("ifr"))
 
 
 # ---------------------------------------------------------------------------
@@ -239,12 +287,8 @@ def get_mtn_obsc_manifest():
     /{fxx} route below for the same reason (a generic {fxx} string
     parameter would otherwise match the literal word "manifest").
     """
-    manifest_path = OUTPUT_DIR / "mtn_obsc_manifest.json"
-    if not manifest_path.exists():
-        raise HTTPException(
-            status_code=404, detail="No Mountain Obscuration manifest available yet (pipeline hasn't run)"
-        )
-    return FileResponse(manifest_path, media_type="application/json")
+    _require_manifest("mtn_obsc")
+    return FileResponse(artifacts.manifest_path("mtn_obsc"), media_type="application/json")
 
 
 @app.get("/api/hazards/mtn_obsc/{fxx}/recompute")
@@ -272,25 +316,28 @@ def recompute_mtn_obsc_snapshot(
     pipeline/fetch_terrain.py), so changing it requires re-running that
     fetch, not just re-polygonizing.
     """
-    manifest_path = OUTPUT_DIR / "mtn_obsc_manifest.json"
-    if not manifest_path.exists():
-        raise HTTPException(status_code=404, detail="No Mountain Obscuration manifest available yet")
-    with open(manifest_path) as f:
-        manifest = json.load(f)
-    snapshot = next(
-        (s for s in manifest.get("snapshots", []) if str(s["requested_forecast_hour"]).zfill(2) == fxx.zfill(2)),
-        None,
-    )
+    manifest = _require_manifest("mtn_obsc")
+    snapshot = _find_snapshot(manifest, fxx)
     if snapshot is None:
         raise HTTPException(status_code=404, detail=f"No Mountain Obscuration snapshot for F{fxx}")
 
     cache_filename = snapshot.get("cache_filename")
     if not cache_filename:
         raise HTTPException(status_code=404, detail=f"No cached grid for F{fxx}")
-    cache_path = OUTPUT_DIR / cache_filename
-    if not cache_path.exists():
-        raise HTTPException(status_code=404, detail=f"Cached grid file missing: {cache_filename}")
+    cache_path = artifacts.artifact_path("mtn_obsc", cache_filename)
+    if cache_path is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Cached grid {cache_filename} is named in the manifest but isn't on disk -- "
+                f"{artifacts.not_loaded_detail('mtn_obsc')}"
+            ),
+        )
 
+    # Terrain is the one input still shipped WITH the deploy rather than
+    # fetched: it's static (one file, regenerated only when
+    # fetch_terrain.yml runs), so it stays tracked on main and never
+    # touched the history-size problem the forecast grids caused.
     terrain_path = BASE_DIR / "data" / "terrain" / "terrain_grid.npz"
     if not terrain_path.exists():
         raise HTTPException(
@@ -353,8 +400,10 @@ def recompute_mtn_obsc_snapshot(
 @app.get("/api/hazards/mtn_obsc/{fxx}")
 def get_mtn_obsc_snapshot(fxx: str, format: str = "geojson"):
     """A specific Mountain Obscuration forecast-hour snapshot, e.g. /api/hazards/mtn_obsc/06."""
-    path = OUTPUT_DIR / f"mtn_obsc_f{fxx}.geojson"
-    if not path.exists():
+    path = artifacts.artifact_path("mtn_obsc", f"mtn_obsc_f{fxx}.geojson")
+    if path is None:
+        if artifacts.load_manifest("mtn_obsc") is None:
+            raise HTTPException(status_code=503, detail=artifacts.not_loaded_detail("mtn_obsc"))
         raise HTTPException(status_code=404, detail=f"No Mountain Obscuration snapshot for F{fxx}")
 
     if format == "xml":
@@ -380,7 +429,30 @@ def get_demo_hazard():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok"}
+    """
+    Railway's health check. Always 200 as long as the process is up:
+    deliberately does NOT depend on artifacts being loaded, since the
+    first download runs in the background and a health check that waited
+    on it would fail every deploy for its first few seconds. The loaded
+    cycles are reported for convenience only -- see /api/data/status for
+    the full picture, including why a fetch last failed.
+    """
+    return {
+        "status": "ok",
+        "data": {key: hazard["model_cycle"] for key, hazard in artifacts.status()["hazards"].items()},
+    }
+
+
+@app.get("/api/data/status")
+def data_status():
+    """
+    What's loaded, where it came from, and how the last refresh went.
+    The one place to look when the map shows stale data or none at all:
+    it distinguishes "still downloading", "GitHub returned 404 because
+    the pipeline has never published this branch", and "the last refresh
+    failed but we're still serving the previous good cycle".
+    """
+    return artifacts.status()
 
 
 # Mounted LAST and at the root path, so the explicit routes above always
