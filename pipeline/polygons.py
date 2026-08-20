@@ -367,15 +367,17 @@ def grid_to_polygons(
     if not (values >= threshold).any():
         return []
 
-    transform = grid.to_affine()
-
     raw_contours = measure.find_contours(values, level=threshold)
 
     rings = []
     for contour in raw_contours:
         if len(contour) < 4:
             continue  # not enough points for a valid ring
-        coords = [transform * (col, row) for row, col in contour]
+        # find_contours works in array index space (integer = cell
+        # CENTRE), so this goes through GridSpec.pixel_to_lonlat rather
+        # than to_affine() directly -- see that method for the half-cell
+        # this used to lose.
+        coords = [grid.pixel_to_lonlat(row, col) for row, col in contour]
         try:
             poly = ShapelyPolygon(coords)
             if not poly.is_valid:
@@ -420,9 +422,17 @@ def grid_to_polygons(
 def lonlat_ring_to_pixel_rowcol(ring_coords, grid_spec: GridSpec):
     """
     Converts a ring's (lon, lat) coordinates to fractional (row, col)
-    pixel coordinates -- the inverse of GridSpec.to_affine(). Used to
-    rasterize a final polygon back onto the grid(s) it came from, to
-    check which underlying conditions actually drove it.
+    ARRAY INDICES -- integer = cell centre, which is what
+    skimage.draw.polygon() expects. Used to rasterize a final polygon
+    back onto the grid(s) it came from, to check which underlying
+    conditions actually drove it.
+
+    This used to invert GridSpec.to_affine() by hand, which is
+    corner-based, so every index came out half a cell too large and the
+    rasterized cells sat half a cell southeast of the polygon. Measured
+    on a synthetic rectangle spanning cell centres 10..20, it filled
+    11..20 -- the north and west edges were simply dropped. Going
+    through GridSpec.lonlat_to_pixel() keeps the convention in one place.
 
     Promoted here from pipeline/hazards/ifr.py (originally private,
     `_lonlat_ring_to_pixel_rowcol`) once a second hazard
@@ -433,8 +443,7 @@ def lonlat_ring_to_pixel_rowcol(ring_coords, grid_spec: GridSpec):
     """
     rows, cols = [], []
     for lon, lat in ring_coords:
-        col = (lon - (grid_spec.west - grid_spec.dx / 2)) / grid_spec.dx
-        row = (lat - (grid_spec.north - grid_spec.dy / 2)) / grid_spec.dy
+        row, col = grid_spec.lonlat_to_pixel(lon, lat)
         rows.append(row)
         cols.append(col)
     return rows, cols

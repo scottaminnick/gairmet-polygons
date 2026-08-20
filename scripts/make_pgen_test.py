@@ -16,8 +16,12 @@ NMAP2 anyway, so guessing at AWC's convention buys nothing. The older
 tag-reusing assigner is still here behind --naive-tags; see assign_naive_tags.
 
 NOTE ON SIMPLIFICATION: rings are thinned to a vertex budget on the way out
-(see simplify_to_budget). That is an export-path concern only -- it does not
-touch polygonization or the GeoJSON on disk, which keep their full detail.
+(see simplify_to_budget) ONLY on the v1 vector path. Label-grid output
+(pipeline.hazards.ifr.polygonize_ifr_grid_v2) is written through untouched,
+because per-ring Douglas-Peucker pulls apart the shared boundaries that
+polygonizer exists to produce -- see rings_are_disjoint_by_construction. Either
+way this is an export-path concern only: it does not touch polygonization or
+the GeoJSON on disk, which keep their full detail.
 """
 import argparse
 import json
@@ -28,7 +32,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from pipeline.pgen_xml import gfa_element, build_product_xml
+from pipeline.pgen_xml import assert_rings_disjoint, gfa_element, build_product_xml
 
 # The five snapshots the pipeline writes per cycle.
 FORECAST_HOURS = (0, 3, 6, 9, 12)
@@ -149,6 +153,53 @@ def simplify_to_budget(ring, max_points=25):
         tolerance *= SIMPLIFY_GROWTH
 
     return simplified
+
+
+
+def rings_are_disjoint_by_construction(hazard):
+    """
+    True when this hazard's polygons come from the label-grid
+    polygonizer (pipeline.hazards.ifr.polygonize_ifr_grid_v2), which
+    partitions the raster and contours each region once, so adjacent
+    areas share their boundary exactly and no two areas overlap.
+
+    Two consequences, and they travel together on purpose:
+
+      - NO VERTEX BUDGET. Douglas-Peucker applied per ring moves each
+        polygon's copy of a shared edge independently, so two areas that
+        traced the same boundary come apart into a gap or an overlap in
+        the XML the vendor actually receives. There is no PGEN or NMAP2
+        vertex limit to justify paying that -- the 25 was invented, and
+        vertex count on this path is governed upstream by
+        pipeline.hazards.ifr.CONTOUR_RESOLUTION_DEG instead.
+      - THE DISJOINTNESS CHECK RUNS. See
+        pipeline.pgen_xml.assert_rings_disjoint().
+
+    Everything else -- MT_OBSC, and IFR with USE_LABEL_GRID_POLYGONIZE
+    flipped back to the v1 vector path -- keeps the budget and skips the
+    check. Not an oversight: v1 emits overlapping and nested polygons by
+    construction, so checking it would turn the one-line revert into a
+    hard failure, and its rings are already simplified to ~20 vertices
+    with no shared-boundary guarantee left to protect.
+
+    Imported inside the function so this CLI keeps working without the
+    numpy/scipy/skimage stack when it is only reading GeoJSON.
+    """
+    if hazard != "IFR":
+        return False
+    from pipeline.hazards.ifr import USE_LABEL_GRID_POLYGONIZE
+
+    return USE_LABEL_GRID_POLYGONIZE
+
+
+def vertex_budget_for(hazard, max_points):
+    """The per-ring vertex budget to apply, or None to leave rings alone."""
+    return None if rings_are_disjoint_by_construction(hazard) else max_points
+
+
+def apply_vertex_budget(ring, budget):
+    """simplify_to_budget() when there is a budget, identity when there isn't."""
+    return list(ring) if budget is None else simplify_to_budget(ring, budget)
 
 
 def assign_unique_tags(centroids_by_hour):
@@ -300,6 +351,7 @@ def load_hazard_polygons(hazard, max_points):
     where raw_point_count is the vertex count before simplification.
     """
     stem = HAZARDS[hazard]["stem"]
+    budget = vertex_budget_for(hazard, max_points)
     by_hour = []
 
     for fcst_hr in FORECAST_HOURS:
@@ -316,9 +368,15 @@ def load_hazard_polygons(hazard, max_points):
                 if len(points) < 3:
                     continue           # pgen_xml rejects degenerate outlines
                 raw_count = len(points)
-                points = simplify_to_budget(points, max_points)
+                points = apply_vertex_budget(points, budget)
                 polygons.append(
                     (fcst_hr, points, feature["properties"], raw_count))
+
+        # Checked per forecast hour, on the rings as they will be
+        # serialized -- see pipeline.pgen_xml.assert_rings_disjoint.
+        if rings_are_disjoint_by_construction(hazard):
+            assert_rings_disjoint([pts for _, pts, _, _ in polygons], hazard, fcst_hr)
+
         by_hour.append(polygons)
 
     return by_hour
@@ -346,7 +404,9 @@ def main(argv=None):
     parser.add_argument("--desk", default="E", help="desk letter (default: E)")
     parser.add_argument("--out", required=True, help="output XML path")
     parser.add_argument("--max-points", type=int, default=25,
-                        help="vertex budget per ring (default: 25)")
+                        help="vertex budget per ring on the v1 path (default: "
+                             "25); ignored for label-grid output, which is "
+                             "never simplified")
     parser.add_argument("--naive-tags", action="store_true",
                         help="reuse tags across forecast hours via "
                              "assign_naive_tags (default: unique tags)")
@@ -390,8 +450,15 @@ def main(argv=None):
 
     before = [raw for hour in by_hour for _, _, _, raw in hour]
     after = [len(points) for hour in by_hour for _, points, _, _ in hour]
-    print("  vertices before  %s" % _describe(before, args.max_points))
-    print("  vertices after   %s" % _describe(after, args.max_points))
+    budget = vertex_budget_for(args.hazard, args.max_points)
+    if budget is None:
+        # Reporting "over budget" against a budget that was deliberately
+        # not applied reads as a warning about nothing.
+        print("  vertices         %s" % _describe(after, max(after, default=0)))
+        print("  (label-grid output: no vertex budget applied, rings written through whole)")
+    else:
+        print("  vertices before  %s" % _describe(before, budget))
+        print("  vertices after   %s" % _describe(after, budget))
 
 
 if __name__ == "__main__":

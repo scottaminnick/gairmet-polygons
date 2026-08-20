@@ -176,6 +176,78 @@ def gfa_element(points, hazard, fcst_hr, tag, wx_type, cycle_hour,
     return "\n".join(lines)
 
 
+class OverlappingRingsError(ValueError):
+    """
+    Raised when the rings about to be serialized are not disjoint. Its own
+    class so a caller can tell "this artifact is malformed" apart from a
+    plain bad argument -- not that anything should be catching it: the only
+    correct response is to fix whatever produced the rings.
+    """
+
+
+def assert_rings_disjoint(rings, hazard, fcst_hr, tolerance_sq_deg=1e-9):
+    """
+    Verify that no two rings at this hazard and forecast hour share
+    interior area, and that none contains another. Raises
+    OverlappingRingsError; there is no warn mode.
+
+    THE POINT OF CHECKING HERE rather than trusting the polygonizer: this
+    is the last place the rings exist before they become the XML a vendor
+    receives, and three separate times now a vector operation downstream
+    of a sound polygonization has quietly undone it (per-layer closing in
+    v1, per-ring Douglas-Peucker on the way out, and the ARTCC clip being
+    applied before rather than after a closing). Upstream invariants that
+    aren't re-checked at the boundary are folklore. This one is cheap --
+    tens of rings per hour -- so it runs on every export that claims the
+    guarantee.
+
+    Rings that share an EDGE are fine and expected: adjacent label-grid
+    regions trace the same boundary from opposite sides, and two polygons
+    meeting along a line intersect in zero area. The tolerance exists for
+    floating-point dust on those shared edges, not to excuse a real
+    overlap -- 1e-9 sq deg is around 10 square metres.
+
+    rings   : sequence of rings, each a sequence of (lat, lon) pairs, as
+              handed to gfa_element().
+    hazard  : "IFR" / "MT_OBSC" -- for the message only.
+    fcst_hr : forecast hour -- for the message only.
+
+    shapely is imported here rather than at module level so this module
+    stays importable (and byte-comparable against the reference samples)
+    with nothing but the standard library.
+    """
+    from shapely.geometry import Polygon
+
+    polygons = []
+    for index, ring in enumerate(rings):
+        if len(ring) < 3:
+            continue
+        polygon = Polygon([(lon, lat) for lat, lon in ring])
+        if not polygon.is_valid:
+            # A ring pinched to a point is still a legal outline; repair
+            # it for the sake of the test only -- nothing here feeds back
+            # into what gets written.
+            polygon = polygon.buffer(0)
+        if not polygon.is_empty:
+            polygons.append((index, polygon))
+
+    for position, (index_a, a) in enumerate(polygons):
+        for index_b, b in polygons[position + 1:]:
+            where = f"{hazard} F{int(fcst_hr):02d} rings {index_a} and {index_b}"
+            if a.contains(b) or b.contains(a):
+                raise OverlappingRingsError(
+                    f"{where}: one ring is nested inside the other. A GFA element is a simple "
+                    "ring, so a vendor reading this file cannot tell which area applies."
+                )
+            shared = a.intersection(b).area
+            if shared > tolerance_sq_deg:
+                raise OverlappingRingsError(
+                    f"{where}: rings share {shared:.3g} sq deg of interior. Adjacent areas may "
+                    "share an EDGE (zero area); overlapping interiors mean two elements claim "
+                    "the same ground."
+                )
+
+
 def build_product_xml(gfa_blocks, center="OAX", layer_color=LAYER_COLOR):
     """
     Wrap a list of <Gfa> block strings in the Product/Layer scaffolding.

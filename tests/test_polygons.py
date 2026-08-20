@@ -390,6 +390,162 @@ def test_per_polygon_properties_length_mismatch_raises():
         pass
 
 
+# ---------------------------------------------------------------------------
+# THE PIXEL/LONLAT CONVENTION.
+#
+# Two conventions differ by exactly half a cell: to_affine() is
+# corner-based (GDAL/rasterio), array indices are centre-based (numpy,
+# skimage). Mixing them cost ~1.8 km of displacement at 0.025 deg, in
+# opposite directions in the two halves of pipeline/polygons.py, which is
+# why it cancelled well enough to go unnoticed for a long time.
+#
+# These are round-trip tests on purpose. A test of fixed expected
+# coordinates pins one direction and passes happily while the inverse
+# drifts -- which is exactly the failure that happened. Requiring
+# lon/lat -> index -> lon/lat to come back to where it started cannot
+# pass unless both directions agree, at every latitude tried.
+# ---------------------------------------------------------------------------
+
+CONVENTION_GRIDS = [
+    # (name, GridSpec) -- real resolutions this project actually uses,
+    # across the latitude range a CONUS product spans.
+    ("NBM regrid, southern CONUS", GridSpec(west=-100.0, north=30.0, dx=0.025, dy=-0.025)),
+    ("NBM regrid, mid CONUS", GridSpec(west=-110.0, north=45.0, dx=0.025, dy=-0.025)),
+    ("NBM regrid, northern CONUS", GridSpec(west=-95.0, north=49.5, dx=0.025, dy=-0.025)),
+    ("cached-grid resolution", GridSpec(west=-125.0, north=50.0, dx=0.05, dy=-0.05)),
+    ("v2 contour resolution", GridSpec(west=-120.0, north=40.0, dx=0.1, dy=-0.1)),
+]
+
+
+def test_lonlat_to_pixel_and_back_is_the_identity():
+    """
+    lon/lat -> array index -> lon/lat returns where it started.
+
+    NOTE what this does and does not catch. Round-tripping proves the two
+    directions are exact inverses; it CANNOT see a uniform offset,
+    because the old code was self-consistently wrong -- both halves
+    corner-based -- and round-tripped perfectly while sitting half a cell
+    off the ground. test_integer_indices_are_cell_centres() is the anchor
+    that fixes the absolute position, and the two together are the pin.
+    """
+    for name, grid in CONVENTION_GRIDS:
+        for row_offset, col_offset in [(0, 0), (3, 7), (10.5, 4.25), (99, 137), (0.5, 0.5)]:
+            lon = grid.west + col_offset * grid.dx
+            lat = grid.north + row_offset * grid.dy
+            row, col = grid.lonlat_to_pixel(lon, lat)
+            back_lon, back_lat = grid.pixel_to_lonlat(row, col)
+            assert abs(back_lon - lon) < 1e-9, f"{name}: lon {lon} -> {back_lon}"
+            assert abs(back_lat - lat) < 1e-9, f"{name}: lat {lat} -> {back_lat}"
+
+
+def test_pixel_to_lonlat_and_back_is_the_identity():
+    """The other direction: array index -> lon/lat -> array index."""
+    for name, grid in CONVENTION_GRIDS:
+        for row, col in [(0, 0), (1, 1), (12.5, 3.5), (200, 400), (0.5, 99.25)]:
+            lon, lat = grid.pixel_to_lonlat(row, col)
+            back_row, back_col = grid.lonlat_to_pixel(lon, lat)
+            assert abs(back_row - row) < 1e-6, f"{name}: row {row} -> {back_row}"
+            assert abs(back_col - col) < 1e-6, f"{name}: col {col} -> {back_col}"
+
+
+def test_integer_indices_are_cell_centres():
+    """
+    THE ANCHOR. Index (0, 0) is the CENTRE of the top-left cell, which
+    GridSpec documents as (west, north). Everything else here is
+    relative; this is what makes the round-trips mean something.
+    """
+    for name, grid in CONVENTION_GRIDS:
+        lon, lat = grid.pixel_to_lonlat(0, 0)
+        assert abs(lon - grid.west) < 1e-12, f"{name}: index (0,0) should be at west"
+        assert abs(lat - grid.north) < 1e-12, f"{name}: index (0,0) should be at north"
+
+        # And a half-index step lands exactly on the cell edge, i.e. half
+        # a cell away -- the quantity the two conventions disagree about.
+        edge_lon, edge_lat = grid.pixel_to_lonlat(-0.5, -0.5)
+        assert abs(edge_lon - (grid.west - grid.dx / 2)) < 1e-12
+        assert abs(edge_lat - (grid.north - grid.dy / 2)) < 1e-12
+
+
+def test_to_affine_stays_corner_based():
+    """
+    to_affine() is deliberately NOT changed to match array indexing: it
+    is a standard GIS geotransform and anything handed one (GDAL,
+    rasterio, a future GeoTIFF export) reads it as corner-based. This
+    pins that, so a future "fix" that moves the half-cell into the
+    affine has to break this test on the way past.
+    """
+    for name, grid in CONVENTION_GRIDS:
+        corner_lon, corner_lat = grid.to_affine() * (0, 0)
+        assert abs(corner_lon - (grid.west - grid.dx / 2)) < 1e-12, f"{name}"
+        assert abs(corner_lat - (grid.north - grid.dy / 2)) < 1e-12, f"{name}"
+
+
+def test_contour_lands_on_the_real_cell_edges():
+    """
+    Contouring measured against GROUND TRUTH rather than against our own
+    inverse: a block of cells at 100 with everything else at 0 puts the
+    50% isoline exactly on the block's cell edges, which GridSpec's
+    definition (west/north are cell CENTRES) places at centre +/- half a
+    cell.
+
+    Deliberately NOT a contour-then-rasterize round trip. That version
+    passes on the broken code: the contour was half a cell northwest and
+    the rasterization half a cell southeast, so the two cancel exactly
+    and the block comes back where it started. Only an external
+    reference sees the displacement.
+    """
+    grid = GridSpec(west=-105.0, north=42.0, dx=0.05, dy=-0.05)
+    shape = (60, 60)
+    values = np.zeros(shape)
+    row0, row1, col0, col1 = 20, 40, 15, 35     # rows 20..39, cols 15..34
+    values[row0:row1, col0:col1] = 100.0
+
+    polygons = grid_to_polygons(values, grid, threshold=50.0, min_area_deg2=0.0,
+                                simplify_tolerance_deg=0.0)
+    assert len(polygons) == 1
+    west, south, east, north = polygons[0].bounds
+
+    expected_west = grid.west + (col0 - 0.5) * grid.dx
+    expected_east = grid.west + (col1 - 1 + 0.5) * grid.dx
+    expected_north = grid.north + (row0 - 0.5) * grid.dy
+    expected_south = grid.north + (row1 - 1 + 0.5) * grid.dy
+
+    assert abs(west - expected_west) < 1e-9, f"west edge off by {west - expected_west:+.5f} deg"
+    assert abs(east - expected_east) < 1e-9, f"east edge off by {east - expected_east:+.5f} deg"
+    assert abs(north - expected_north) < 1e-9, f"north edge off by {north - expected_north:+.5f} deg"
+    assert abs(south - expected_south) < 1e-9, f"south edge off by {south - expected_south:+.5f} deg"
+
+
+def test_rasterizing_a_lonlat_rectangle_recovers_exactly_its_cells():
+    """
+    The inverse against ground truth: a rectangle built directly in
+    lon/lat -- not from our own contour -- over the centres of a known
+    block of cells must rasterize to exactly that block.
+
+    On the broken code this dropped the north and west edges (a
+    rectangle over centres 10..20 filled 11..20), which is how the ARTCC
+    and land masks came to sit up to a cell southeast of the boundary
+    they were built from.
+    """
+    from shapely.geometry import Polygon as ShapelyPolygon
+
+    from pipeline.polygons import rasterize_polygon_cells
+
+    grid = GridSpec(west=-100.0, north=40.0, dx=0.1, dy=-0.1)
+    shape = (40, 40)
+    row0, row1, col0, col1 = 10, 20, 10, 20     # inclusive cell centres
+
+    west = grid.west + col0 * grid.dx
+    east = grid.west + col1 * grid.dx
+    north = grid.north + row0 * grid.dy
+    south = grid.north + row1 * grid.dy
+    rectangle = ShapelyPolygon([(west, south), (east, south), (east, north), (west, north)])
+
+    rr, cc = rasterize_polygon_cells(rectangle, grid, shape)
+    assert (rr.min(), rr.max()) == (row0, row1), f"rows {rr.min()}..{rr.max()}, expected {row0}..{row1}"
+    assert (cc.min(), cc.max()) == (col0, col1), f"cols {cc.min()}..{cc.max()}, expected {col0}..{col1}"
+
+
 def test_feature_collection_round_trip():
     """Confirm the GeoJSON wrapping works and carries properties through."""
     values = make_fake_ifr_probability_grid()
@@ -423,4 +579,10 @@ if __name__ == "__main__":
     test_grid_cache_round_trip_within_quantization_tolerance()
     test_grid_to_polygons_correctly_handles_holes()
     test_feature_collection_round_trip()
+    test_lonlat_to_pixel_and_back_is_the_identity()
+    test_pixel_to_lonlat_and_back_is_the_identity()
+    test_integer_indices_are_cell_centres()
+    test_to_affine_stays_corner_based()
+    test_contour_lands_on_the_real_cell_edges()
+    test_rasterizing_a_lonlat_rectangle_recovers_exactly_its_cells()
     print("\nAll manual checks passed.")
