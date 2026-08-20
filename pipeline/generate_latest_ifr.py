@@ -49,7 +49,7 @@ from pipeline.gairmet_cycle import (
     PROBE_FORECAST_HOUR,
     find_latest_gairmet_cycle,
 )
-from pipeline.hazards.ifr import polygonize_ifr_grid, prepare_ifr_grid
+from pipeline.hazards.ifr import polygonize_ifr_grid_active, prepare_ifr_grid
 from pipeline.polygons import save_grid_cache
 
 # find_latest_gairmet_cycle(), GAIRMET_CYCLE_HOURS, FORECAST_HOURS,
@@ -93,7 +93,7 @@ def generate_one_snapshot(nbm_cycle_date: datetime, gairmet_cycle_date: datetime
     # time (e.g. 15Z cycle's F00 = 15Z) -- and equals nbm_cycle_date +
     # actual_nbm_fxx by construction, so this is just the more
     # meaningful of two equal ways to express the same instant.
-    fc = polygonize_ifr_grid(
+    fc = polygonize_ifr_grid_active(
         ceil_grid, vis3_grid, vis1_grid, precip_grid, grid_spec, gairmet_cycle_date, requested_fxx,
         threshold_pct=THRESHOLD_PCT,
         neighborhood_radius_nm=NEIGHBORHOOD_RADIUS_NM,

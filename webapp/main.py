@@ -148,8 +148,8 @@ def recompute_ifr_snapshot(
 ):
     """
     Live parameter adjustment: re-runs ONLY the cheap, NBM-independent
-    part of the pipeline (threshold -> merge -> area filter -> boundary
-    smoothing, see pipeline.hazards.ifr.polygonize_ifr_grid) against an
+    part of the pipeline (threshold -> close -> area filter -> contour,
+    see pipeline.hazards.ifr.polygonize_ifr_grid_active) against an
     ALREADY-FETCHED, cached probability grid for this forecast hour.
     No network access, no NBM, no heavy GRIB2 parsing -- just numpy/
     shapely/scipy math against a small cached array, which is what
@@ -157,7 +157,7 @@ def recompute_ifr_snapshot(
     drags a slider.
 
     ONE exception to "no heavy work here," shared with
-    recompute_mtn_obsc_snapshot(): polygonize_ifr_grid() clips its
+    recompute_mtn_obsc_snapshot(): IFR polygonization clips its
     output to the ARTCC boundary, and rasterizing that boundary onto
     the grid takes a few seconds the FIRST time a given grid shape is
     seen after a process restart. It's memoized from then on (see
@@ -194,7 +194,7 @@ def recompute_ifr_snapshot(
     # top-level imports minimal and obviously safe on Railway -- these
     # are exactly the lightweight libraries in requirements.txt (numpy/
     # shapely/scipy/scikit-image/pyproj/geojson), never the heavy GRIB2 ones.
-    from pipeline.hazards.ifr import polygonize_ifr_grid
+    from pipeline.hazards.ifr import polygonize_ifr_grid_active
     from pipeline.polygons import load_grid_cache
 
     grids, grid_spec = load_grid_cache(cache_path)
@@ -211,7 +211,7 @@ def recompute_ifr_snapshot(
         )
     model_cycle = datetime.fromisoformat(manifest["model_cycle"].rstrip("Z"))
 
-    fc = polygonize_ifr_grid(
+    fc = polygonize_ifr_grid_active(
         grids["ceiling"], grids["visibility_3sm"], grids["visibility_1sm"], grids["precipitation"],
         grid_spec, model_cycle, snapshot["actual_forecast_hour"],
         threshold_pct=threshold_pct,
