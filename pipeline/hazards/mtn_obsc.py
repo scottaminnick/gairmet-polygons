@@ -112,13 +112,14 @@ THREE ADDITIONAL GATES beyond the relief threshold, all added after real
 production runs revealed relief exists in places this product has no
 business painting:
 
-  1. LAND_BOUNDARY_PATH (via _get_boundary_mask) -- THE water exclusion.
-     A real land polygon (data/boundaries/us_states.json) following the
-     actual coastline. This is the primary mechanism, and it has to be
-     polygon-based rather than elevation-based: smoothing bleeds real
-     coastal peak elevations into adjacent OCEAN cells, so those cells
-     show both high relief AND positive baseline elevation, defeating
-     any elevation test. Measured ~12% total-area reduction on a real
+  1. LAND_BOUNDARY_PATH (via pipeline.boundaries.get_boundary_mask)
+     -- THE water exclusion. A real land polygon
+     (data/boundaries/us_states.json) following the actual coastline.
+     This is the primary mechanism, and it has to be polygon-based
+     rather than elevation-based: smoothing bleeds real coastal peak
+     elevations into adjacent OCEAN cells, so those cells show both
+     high relief AND positive baseline elevation, defeating any
+     elevation test. Measured ~12% total-area reduction on a real
      F00 run vs. ~0.7% for the elevation check alone -- the elevation
      check simply cannot reach the offshore cells, because the coastal
      smoothing that contaminates them also lifts their baseline above
@@ -138,15 +139,16 @@ business painting:
      Valley (floor at -255 ft with 10,065 ft of relief from the Panamint
      Range) and the Salton Sea shore. See that constant's own docstring.
 
-  3. CONUS_BOUNDARY_PATH (via _get_boundary_mask) -- real relief exists
-     well outside CONUS too (confirmed directly: Mexico's Sierra Madre
-     and Quebec's Laurentians both generated real polygons from a real
-     run, since pipeline.fetch_terrain's terrain grid is deliberately
-     generously-sized and covers those areas). Restricts generation to
-     AWC's own defined area of responsibility (the 20-ARTCC boundary,
-     data/boundaries/artcc.json) rather than an arbitrary bounding box.
-     Note the ARTCC boundary deliberately INCLUDES adjacent coastal
-     waters per NWSI 10-811, so it cannot do #1's job on its own.
+  3. CONUS_BOUNDARY_PATH (via pipeline.boundaries.get_boundary_mask)
+     -- real relief exists well outside CONUS too (confirmed directly:
+     Mexico's Sierra Madre and Quebec's Laurentians both generated real
+     polygons from a real run, since pipeline.fetch_terrain's terrain
+     grid is deliberately generously-sized and covers those areas).
+     Restricts generation to AWC's own defined area of responsibility
+     (the 20-ARTCC boundary, data/boundaries/artcc.json) rather than an
+     arbitrary bounding box. Note the ARTCC boundary deliberately
+     INCLUDES adjacent coastal waters per NWSI 10-811, so it cannot do
+     #1's job on its own.
 
 KNOWN AND DELIBERATELY NOT ADDRESSED: flat valley floors whose terrain
 search radius reaches into surrounding mountains -- most visibly
@@ -208,6 +210,7 @@ from functools import partial
 
 import numpy as np
 
+from pipeline.boundaries import CONUS_BOUNDARY_PATH, LAND_BOUNDARY_PATH, get_boundary_mask
 from pipeline.fetch_terrain import CONUS_BOUNDS, OUTPUT_RESOLUTION_DEG, load_terrain_grid
 from pipeline.hazards.ifr import (
     PRECIP_PROB_THRESHOLD,
@@ -220,7 +223,6 @@ from pipeline.polygons import (
     GridSpec,
     filter_polygons_by_area,
     grid_to_polygons,
-    load_boundary_mask,
     merge_nearby_polygons,
     polygons_to_feature_collection,
     rasterize_polygon_cells,
@@ -305,69 +307,6 @@ MOUNTAINOUS_RELIEF_THRESHOLD_FT = 500.0
 # elevation cutoff. That case is about TERRAIN_RADIUS_NM and
 # MOUNTAINOUS_RELIEF_THRESHOLD_FT -- deliberately left alone for now.
 MIN_BASELINE_ELEVATION_FT = -500.0
-
-# The PRIMARY water exclusion -- a real land polygon following the actual
-# coastline, unlike CONUS_BOUNDARY_PATH below (which deliberately extends
-# over "adjacent coastal waters" per NWSI 10-811, and so cannot exclude
-# ocean on its own).
-#
-# This exists because the current operational drawing tooling can't
-# follow a real coastline -- legacy FAA constraints force a fictitious
-# straight-ish line offshore -- so rather than reproduce that limitation,
-# this cuts polygons off at the real coast, which the higher-resolution
-# terrain data here makes possible.
-#
-# Measured against a real run's F00 output: adds a ~12% total-area
-# reduction over the elevation check alone (which managed only ~0.7%,
-# because smoothing bleeds real coastal peak elevations into adjacent
-# ocean cells, giving them POSITIVE baseline that no sea-level cutoff can
-# catch). Verified to flip exactly at the real coastline (44.0N: -124.1
-# is land at 169 ft, -124.2 is water at -131 ft) and to correctly exclude
-# the Great Lakes.
-LAND_BOUNDARY_PATH = "data/boundaries/us_states.json"
-
-# AWC's own defined area of responsibility per NWSI 10-811 section 3 --
-# "Twenty (20) domestic Air Route Traffic Control Center (ARTCC) Flight
-# Information Regions (FIRs) covering the conterminous U.S. and adjacent
-# coastal waters." Used to restrict Mountain Obscuration to real CONUS,
-# rather than an arbitrary bounding box -- confirmed directly (see a real
-# run's output) that the terrain grid's generously-sized bounding box
-# (see pipeline.fetch_terrain.CONUS_BOUNDS -- deliberately wide margin,
-# by design) was producing real polygons over Quebec, Mexico, and open
-# Pacific water, since a rectangle can't cleanly exclude a neighboring
-# country that happens to share similar latitudes. The real ARTCC
-# boundary follows the actual US border, which a bounding box cannot.
-#
-# Still needed ALONGSIDE LAND_BOUNDARY_PATH above, not replaced by it:
-# us_states.json is US land only, so it happens to exclude Mexico and
-# Canada too -- but the ARTCC boundary is the authoritative statement of
-# what this product is actually responsible for, and keeping it explicit
-# means the intent survives if the land file is ever swapped for one with
-# different coverage.
-CONUS_BOUNDARY_PATH = "data/boundaries/artcc.json"
-
-_boundary_mask_cache: dict = {}
-
-
-def _get_boundary_mask(grid_spec: GridSpec, shape: tuple, boundaries_path: str) -> np.ndarray:
-    """
-    Memoized wrapper around pipeline.polygons.load_boundary_mask().
-    Both boundary files this module uses (LAND_BOUNDARY_PATH and
-    CONUS_BOUNDARY_PATH) are static -- they don't depend on NBM data, the
-    forecast cycle, or the forecast hour -- but unioning + rasterizing
-    either one takes several real seconds (see load_boundary_mask's
-    docstring), so computing them fresh for each of a run's 5 snapshots
-    would add ~5x that cost for zero benefit. Cached here by (grid_spec
-    fields, shape, path) rather than via functools.lru_cache directly on
-    GridSpec, since GridSpec is a plain (non-frozen) dataclass and so
-    isn't hashable by default. Keying on path means the two different
-    boundary files each get their own cache entry rather than colliding.
-    """
-    cache_key = (grid_spec.west, grid_spec.north, grid_spec.dx, grid_spec.dy, shape, boundaries_path)
-    if cache_key not in _boundary_mask_cache:
-        _boundary_mask_cache[cache_key] = load_boundary_mask(boundaries_path, grid_spec, shape)
-    return _boundary_mask_cache[cache_key]
-
 
 # Same fixed cosmetic parameters as IFR, reused for visual consistency
 # across both SIERRA-category hazards -- see pipeline/hazards/ifr.py's
@@ -788,8 +727,8 @@ def polygonize_mtn_obsc_grid(
     # mountain" -- smoothing bleeds real coastal peak elevations into
     # adjacent ocean cells, so those cells show high relief AND positive
     # baseline, defeating any elevation-based test. See
-    # LAND_BOUNDARY_PATH's docstring above.
-    on_land_mask = _get_boundary_mask(grid_spec, mountainous_mask.shape, LAND_BOUNDARY_PATH)
+    # LAND_BOUNDARY_PATH's docstring in pipeline/boundaries.py.
+    on_land_mask = get_boundary_mask(grid_spec, mountainous_mask.shape, LAND_BOUNDARY_PATH)
     mountainous_mask = mountainous_mask & on_land_mask
 
     # Deep-water backstop only -- see MIN_BASELINE_ELEVATION_FT's
@@ -802,9 +741,10 @@ def polygonize_mtn_obsc_grid(
     # outside CONUS too (Mexico's Sierra Madre, Quebec's Laurentians,
     # even the steep bathymetry just off the California coast) -- all of
     # which are outside AWC's actual area of responsibility for this
-    # product. See CONUS_BOUNDARY_PATH's docstring above for why the
-    # real ARTCC boundary is used here rather than a bounding box.
-    within_conus_mask = _get_boundary_mask(grid_spec, mountainous_mask.shape, CONUS_BOUNDARY_PATH)
+    # product. See CONUS_BOUNDARY_PATH's docstring in
+    # pipeline/boundaries.py for why the real ARTCC boundary is used
+    # here rather than a bounding box.
+    within_conus_mask = get_boundary_mask(grid_spec, mountainous_mask.shape, CONUS_BOUNDARY_PATH)
     mountainous_mask = mountainous_mask & within_conus_mask
 
     critical_ceiling_agl = terrain_relief_ft + clearance_margin_ft

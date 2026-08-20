@@ -75,6 +75,18 @@ itself (not being a distinct cause) doesn't get its own dedicated
 split. The union of all three layers reconstructs exactly the same
 overall IFR area as the original single combined-max approach.
 
+AREA OF RESPONSIBILITY: all three layers are clipped to AWC's own
+20-ARTCC CONUS boundary (data/boundaries/artcc.json, via
+pipeline.boundaries.get_boundary_mask) before contouring. NBM's CONUS
+grid has real coverage far beyond that -- out over the Pacific, up into
+Canada, out over the Atlantic -- and IFR conditions out there are real
+data that this product simply isn't responsible for. Same file, same
+helper, and same sentinel-pinning technique MTN OBSC already uses for
+the identical problem with its generously-sized terrain grid; the ARTCC
+boundary deliberately includes adjacent coastal waters per NWSI 10-811,
+so unlike MTN OBSC (which also needs a real coastline to exclude water)
+this is the only geographic gate IFR needs.
+
 RAW NBM RESOLUTION vs. FORECASTER-DRAWN LOOK: NBM's ~2.5km resolution
 produces far more small-scale detail than a real G-AIRMET forecaster
 draws by hand in N-AWIPS -- lots of tiny, separate polygons and jagged
@@ -111,6 +123,7 @@ from datetime import datetime, timedelta
 
 import numpy as np
 
+from pipeline.boundaries import CONUS_BOUNDARY_PATH, get_boundary_mask
 from pipeline.polygons import (
     GridSpec,
     filter_polygons_by_area,
@@ -392,6 +405,13 @@ def polygonize_ifr_grid(
     reasoning and the real-valued (not boolean-flattened) sentinel
     trick used to preserve sub-pixel-accurate contours per layer.
 
+    All three layers are clipped to the ARTCC boundary first, so no
+    polygon extends past AWC's area of responsibility even where NBM
+    has real coverage out over the Pacific, Canada, or the Atlantic --
+    see this module's docstring. The mask is computed here (memoized in
+    pipeline.boundaries) rather than baked into the cached grids, so the
+    cache format is untouched.
+
     Safe to call repeatedly against the SAME cached grids with different
     parameter values -- no NBM access, no heavy geospatial parsing, just
     numpy/shapely/scipy/pyproj math. This is what the web app's live
@@ -453,6 +473,29 @@ def polygonize_ifr_grid(
         ("pcpn", np.where(precip_mask, np.maximum(ceil_grid, vis3_grid), LAYER_OFF)),
         ("vis_nonprecip", np.where(precip_mask, LAYER_OFF, vis3_grid)),
     ]
+
+    # AWC's area of responsibility, applied to all three layers at once:
+    # NBM's CONUS grid extends well past it (open Pacific, Canada, the
+    # Atlantic), and without this gate real IFR conditions out there
+    # generate real polygons -- the exact same problem MTN OBSC already
+    # hit with its generously-sized terrain grid, solved the same way
+    # (see CONUS_BOUNDARY_PATH's docstring in pipeline/boundaries.py).
+    #
+    # Pinned to LAYER_OFF rather than zeroed: zero is a real probability
+    # value and would still cross a threshold_pct of 0, whereas the
+    # sentinel can't cross any real 0-100 threshold -- so contours land
+    # exactly on the boundary, the same way the per-layer exclusions
+    # above already work.
+    #
+    # Computed here at recompute time rather than baked into the cached
+    # grids, so the on-disk cache format doesn't change: the first
+    # request after a web-process restart pays the rasterization cost
+    # (several seconds, see pipeline.polygons.load_boundary_mask), and
+    # every subsequent one hits get_boundary_mask's memo -- exactly what
+    # MTN OBSC already does.
+    inside_artcc = get_boundary_mask(grid_spec, ceil_grid.shape, CONUS_BOUNDARY_PATH)
+    outside = ~inside_artcc
+    layers = [(name, np.where(outside, LAYER_OFF, grid)) for name, grid in layers]
 
     all_polygons = []
     all_per_polygon_properties = []

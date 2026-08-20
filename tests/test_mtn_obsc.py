@@ -17,20 +17,19 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from pipeline.boundaries import CONUS_BOUNDARY_PATH, LAND_BOUNDARY_PATH, get_boundary_mask
 from pipeline.hazards.mtn_obsc import (
     CEILING_PROB_THRESHOLDS_FT,
     MIN_BASELINE_ELEVATION_FT,
     MOUNTAINOUS_RELIEF_THRESHOLD_FT,
     THRESHOLD_ANCHORS_FT,
     _determine_weather_type,
-    CONUS_BOUNDARY_PATH,
-    LAND_BOUNDARY_PATH,
-    _get_boundary_mask,
     find_message_excluding,
     interpolate_terrain_relative_probability,
     polygonize_mtn_obsc_grid,
     prepare_mtn_obsc_grid,
 )
+import pipeline.boundaries as boundaries
 import pipeline.hazards.mtn_obsc as mtn_obsc
 from pipeline.grid_spec import GridSpec
 
@@ -270,10 +269,12 @@ def test_polygonize_generates_polygon_over_real_relief():
 
 # ---------------------------------------------------------------------------
 # Bathymetry / ocean-depth exclusion (MIN_BASELINE_ELEVATION_FT) and the
-# CONUS/ARTCC boundary mask (_get_boundary_mask) -- both added directly in
-# response to a real production run painting real relief in Mexico,
-# Quebec, and open Pacific water. See the constants' own docstrings in
-# mtn_obsc.py for the full real-data diagnosis behind each.
+# CONUS/ARTCC boundary mask (pipeline.boundaries.get_boundary_mask) --
+# both added directly in response to a real production run painting real
+# relief in Mexico, Quebec, and open Pacific water. See the constants'
+# own docstrings (MIN_BASELINE_ELEVATION_FT in mtn_obsc.py, the boundary
+# paths in pipeline/boundaries.py) for the real-data diagnosis behind
+# each.
 # ---------------------------------------------------------------------------
 
 def test_polygonize_excludes_deep_ocean_bathymetry():
@@ -352,7 +353,7 @@ def test_land_mask_excludes_ocean_but_keeps_coastal_land():
     """
     grid_spec = GridSpec(west=-126.0, north=50.0, dx=0.025, dy=-0.025)
     shape = (1120, 2440)
-    land = _get_boundary_mask(grid_spec, shape, LAND_BOUNDARY_PATH)
+    land = get_boundary_mask(grid_spec, shape, LAND_BOUNDARY_PATH)
 
     def idx(lat, lon):
         return round((grid_spec.north - lat) / grid_spec.dx), round((lon - grid_spec.west) / grid_spec.dx)
@@ -406,7 +407,7 @@ def test_below_sea_level_land_is_not_excluded():
     grids, grid_spec, _radius = ft.load_terrain_grid(str(terrain_path))
     baseline = grids["baseline_elevation_ft"]
     ridge = grids["ridge_elevation_ft"]
-    land = _get_boundary_mask(grid_spec, baseline.shape, LAND_BOUNDARY_PATH)
+    land = get_boundary_mask(grid_spec, baseline.shape, LAND_BOUNDARY_PATH)
 
     def idx(lat, lon):
         return round((grid_spec.north - lat) / grid_spec.dx), round((lon - grid_spec.west) / grid_spec.dx)
@@ -436,7 +437,7 @@ def test_conus_boundary_mask_excludes_quebec_and_mexico_includes_conus():
     """
     grid_spec = GridSpec(west=-126.0, north=50.0, dx=0.025, dy=-0.025)
     shape = (1120, 2440)
-    mask = _get_boundary_mask(grid_spec, shape, CONUS_BOUNDARY_PATH)
+    mask = get_boundary_mask(grid_spec, shape, CONUS_BOUNDARY_PATH)
 
     def idx(lat, lon):
         row = round((grid_spec.north - lat) / grid_spec.dx)
@@ -478,17 +479,18 @@ def test_boundary_mask_is_memoized():
         call_count["n"] += 1
         return real_load_boundary_mask(*args, **kwargs)
 
-    # Patch where mtn_obsc looks it up (it was imported by name into that
-    # module's namespace), and use a distinct grid_spec/shape so this
-    # test can't accidentally reuse another test's cache entry.
+    # Patch where pipeline.boundaries looks it up (it was imported by
+    # name into that module's namespace), and use a distinct
+    # grid_spec/shape so this test can't accidentally reuse another
+    # test's cache entry.
     import unittest.mock
 
-    with unittest.mock.patch.object(mtn_obsc, "load_boundary_mask", side_effect=counting_load_boundary_mask):
+    with unittest.mock.patch.object(boundaries, "load_boundary_mask", side_effect=counting_load_boundary_mask):
         grid_spec = GridSpec(west=-999.0, north=999.0, dx=1.0, dy=-1.0)  # distinct, won't collide with other tests
         shape = (5, 5)
-        _get_boundary_mask(grid_spec, shape, CONUS_BOUNDARY_PATH)
-        _get_boundary_mask(grid_spec, shape, CONUS_BOUNDARY_PATH)
-        _get_boundary_mask(grid_spec, shape, CONUS_BOUNDARY_PATH)
+        get_boundary_mask(grid_spec, shape, CONUS_BOUNDARY_PATH)
+        get_boundary_mask(grid_spec, shape, CONUS_BOUNDARY_PATH)
+        get_boundary_mask(grid_spec, shape, CONUS_BOUNDARY_PATH)
 
     assert call_count["n"] == 1, f"Expected exactly 1 real computation, got {call_count['n']}"
 
@@ -621,6 +623,99 @@ def test_prepare_mtn_obsc_grid_prints_progress_for_all_ten_fields(monkeypatch, t
     captured = capsys.readouterr()
     for i in range(1, 11):
         assert f"[{i}/10]" in captured.out, f"missing progress line for field {i}/10"
+
+
+# ---------------------------------------------------------------------------
+# Byte-for-byte output stability across the _get_boundary_mask ->
+# pipeline.boundaries.get_boundary_mask move. The helper (and both
+# boundary paths) moved out of this module so IFR could reuse it rather
+# than grow a second copy; that move was supposed to be purely
+# mechanical, and this is what proves it was.
+# ---------------------------------------------------------------------------
+
+MTN_OBSC_GOLDEN_PATH = Path(__file__).resolve().parent / "fixtures" / "mtn_obsc_golden.geojson"
+
+
+def _golden_mtn_obsc_scenario():
+    """
+    The exact inputs tests/fixtures/mtn_obsc_golden.geojson was captured
+    from, using the pre-move code. Uniform ceiling probabilities and a
+    uniform relief block mean the output shape is decided ENTIRELY by
+    the two boundary masks -- which is the point: any change in how
+    those masks are built or applied moves the polygon.
+
+    The relief block is kept clear of the grid edges so its contour
+    closes inside the domain, and it straddles the real Oregon/
+    Washington coastline so the land mask visibly carves its western
+    side (the block starts at 125W; the golden polygon starts at the
+    real coast).
+
+    If this scenario is ever changed, the fixture has to be regenerated
+    from a known-good commit -- it is not derivable from the current
+    code, which is what makes it a regression test rather than a
+    tautology.
+    """
+    shape = (100, 100)
+    grid_spec = GridSpec(west=-125.5, north=48.0, dx=0.05, dy=-0.05)
+
+    baseline = np.full(shape, 3000.0)
+    ridge = np.full(shape, 3000.0)
+    ridge[20:71, 10:71] = 5000.0
+    ceiling_prob_grids = {500: 10.0, 1000: 31.0, 2000: 60.0, 3000: 90.0, 6600: 95.0}
+    ceiling_prob_grids = {t: np.full(shape, v) for t, v in ceiling_prob_grids.items()}
+    zeros = np.zeros(shape)
+
+    from datetime import datetime
+
+    return polygonize_mtn_obsc_grid(
+        ceiling_prob_grids, zeros, zeros, zeros, baseline, ridge, grid_spec,
+        datetime(2026, 7, 16, 12), 6,
+        threshold_pct=50.0,
+        clearance_margin_ft=500.0,
+        neighborhood_radius_nm=0.0,
+        min_area_sq_mi=0.0,
+    )
+
+
+def test_mtn_obsc_output_unchanged_by_the_boundary_helper_move():
+    """
+    Compares real MTN OBSC output against output captured from the code
+    BEFORE _get_boundary_mask/LAND_BOUNDARY_PATH/CONUS_BOUNDARY_PATH
+    moved to pipeline/boundaries.py. Feature count, geometry structure,
+    and every property must match exactly; coordinates are compared to
+    1e-9 degrees (~0.1 mm), tight enough that any real change in the
+    masks or in how they're applied fails, loose enough not to break on
+    a GEOS/shapely last-bit difference in some future environment.
+    """
+    import json
+
+    golden = json.loads(MTN_OBSC_GOLDEN_PATH.read_text())
+    current = json.loads(json.dumps(_golden_mtn_obsc_scenario()))  # normalize tuples -> lists
+
+    assert len(current["features"]) == len(golden["features"]), (
+        f"feature count changed: {len(golden['features'])} -> {len(current['features'])}"
+    )
+    for i, (got, want) in enumerate(zip(current["features"], golden["features"])):
+        assert got["properties"] == want["properties"], f"feature {i} properties changed"
+        assert got["geometry"]["type"] == want["geometry"]["type"], f"feature {i} geometry type changed"
+        got_coords = np.asarray(got["geometry"]["coordinates"][0], dtype=float)
+        want_coords = np.asarray(want["geometry"]["coordinates"][0], dtype=float)
+        assert got_coords.shape == want_coords.shape, (
+            f"feature {i} vertex count changed: {want_coords.shape[0]} -> {got_coords.shape[0]}"
+        )
+        assert np.allclose(got_coords, want_coords, atol=1e-9, rtol=0), f"feature {i} geometry moved"
+
+
+def test_mtn_obsc_uses_the_shared_boundary_helper():
+    """
+    The move only stays behavior-neutral as long as this module keeps
+    calling the SHARED helper -- if a local copy ever reappears here,
+    the two hazards can drift apart (and stop sharing the cache) without
+    any output test noticing.
+    """
+    assert mtn_obsc.get_boundary_mask is boundaries.get_boundary_mask
+    assert mtn_obsc.LAND_BOUNDARY_PATH is boundaries.LAND_BOUNDARY_PATH
+    assert mtn_obsc.CONUS_BOUNDARY_PATH is boundaries.CONUS_BOUNDARY_PATH
 
 
 if __name__ == "__main__":

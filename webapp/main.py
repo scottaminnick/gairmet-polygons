@@ -156,6 +156,15 @@ def recompute_ifr_snapshot(
     makes this fast enough to call live from the browser as someone
     drags a slider.
 
+    ONE exception to "no heavy work here," shared with
+    recompute_mtn_obsc_snapshot(): polygonize_ifr_grid() clips its
+    output to the ARTCC boundary, and rasterizing that boundary onto
+    the grid takes a few seconds the FIRST time a given grid shape is
+    seen after a process restart. It's memoized from then on (see
+    pipeline.boundaries.get_boundary_mask), so only that first request
+    pays it -- deliberately preferred over baking the mask into the
+    cached grids, which would have changed the on-disk cache format.
+
     Query params: threshold_pct, neighborhood_radius_nm, min_area_sq_mi
     (all optional, matching the same forecaster-adjustable parameters
     used by the scheduled pipeline); format=xml returns a simple XML
