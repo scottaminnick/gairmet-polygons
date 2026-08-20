@@ -27,6 +27,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+from scipy.ndimage import binary_fill_holes
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -44,6 +45,7 @@ from pipeline.hazards.ifr import (
     _build_class_grid,
     _cell_dimensions_km,
     _close_envelope,
+    _fully_inside_downsample,
     polygonize_ifr_grid,
     polygonize_ifr_grid_v2,
 )
@@ -351,25 +353,45 @@ def test_conus_scale_polygon_stays_editable(tmp_path):
 #    boundary.
 # ---------------------------------------------------------------------------
 
-def test_closing_does_not_spill_across_the_artcc_boundary():
+def _covered_outside_cells(feature_collection, spec, shape, inside_artcc):
+    """(count, max distance from the boundary in cells) for ground outside
+    the ARTCC boundary that ended up inside a polygon."""
+    from scipy.ndimage import distance_transform_edt
+
+    rows, cols = np.indices(shape)
+    lons = spec.west + cols * spec.dx
+    lats = spec.north + rows * spec.dy
+    covered = np.zeros(shape, dtype=bool)
+    for geometry in _geometries(feature_collection):
+        covered |= shapely.contains_xy(geometry, lons.ravel(), lats.ravel()).reshape(shape)
+
+    outside_covered = covered & ~inside_artcc
+    distance_from_boundary = distance_transform_edt(~inside_artcc)
+    distances = distance_from_boundary[outside_covered]
+    return int(outside_covered.sum()), float(distances.max()) if distances.size else 0.0
+
+
+def test_closing_does_not_spill_across_the_artcc_boundary(monkeypatch):
     """
     The gap left open by the ARTCC clip work: that clip masks the grids
     BEFORE polygonization, which is all v1 can do, so a closing applied
     afterwards can still bridge across a concave stretch of the
-    boundary. v2 re-applies the mask after the closing.
+    boundary. v2 re-applies the mask after the closing, and a second
+    time on the coarse grid it actually contours.
 
-    Set up over the Great Lakes -- the most concave stretch of the
-    boundary in the domain -- with hazard filling the whole US side and
-    the radius at 100 nm. This test first confirms the closing genuinely
-    WOULD spill there (otherwise it proves nothing), then asserts no
-    polygon covers ground that far outside the boundary.
+    Set up over the Great Lakes -- the worst concavity in the domain --
+    with hazard filling the whole US side and the radius at 100 nm. The
+    test first confirms the closing genuinely WOULD spill there
+    (otherwise it proves nothing), then pins two things: nothing lands
+    deep across the line, and the coarse-grid masking is load-bearing
+    rather than decorative.
 
-    Points within CONTOUR_RESOLUTION_DEG of the line are excluded from
-    the check: contours run along coarse CELL EDGES, so a polygon
-    legitimately extends up to half a coarse cell past the last cell
-    centre inside the boundary. That is a quantization of the boundary,
-    not a closing that jumped it -- the thing being tested here is the
-    ~200 km excursion, not the ~5 km one.
+    The residue it does allow -- a couple of cells within one cell of
+    the boundary -- is the corner artefact described in
+    _fully_inside_downsample(): marching squares cuts a staircase corner
+    diagonally, so a sliver of the first excluded block falls inside.
+    That is a property of contouring a cell-centred raster at all, not
+    of the closing, and it cannot grow with the radius.
     """
     spec = GridSpec(west=-95.0, north=51.0, dx=0.05, dy=-0.05)
     shape = (200, 300)
@@ -388,33 +410,171 @@ def test_closing_does_not_spill_across_the_artcc_boundary():
         f"(only {spilled.sum()} cells)"
     )
 
-    fc = polygonize_ifr_grid_v2(
-        ceiling, zeros, zeros, zeros, spec, VALID_DATE, 0,
-        threshold_pct=50.0, neighborhood_radius_nm=100.0, min_area_sq_mi=3000.0,
+    def run():
+        return polygonize_ifr_grid_v2(
+            ceiling, zeros, zeros, zeros, spec, VALID_DATE, 0,
+            threshold_pct=50.0, neighborhood_radius_nm=100.0, min_area_sq_mi=3000.0,
+        )
+
+    covered, worst_distance = _covered_outside_cells(run(), spec, shape, inside_artcc)
+    print(f"\n[border] {covered} cells outside the boundary covered, worst {worst_distance:.1f} cells out")
+
+    assert worst_distance <= 1.0, (
+        f"a polygon reaches {worst_distance:.1f} cells ({worst_distance * spec.dx:.2f} deg) past the "
+        "ARTCC boundary -- the closing is getting across the line, not just cutting a corner"
     )
+    assert covered <= 5, f"{covered} cells outside the ARTCC boundary are covered; expected a corner sliver at most"
+
+    # Control: without the coarse-grid mask (i.e. the fine-grid clip
+    # alone, which is all v1 can manage), the majority reduce pulls in
+    # far more foreign ground. If this ever stops being true, the
+    # assertions above have stopped testing anything.
+    import pipeline.hazards.ifr as ifr_module
+
+    monkeypatch.setattr(
+        ifr_module,
+        "_fully_inside_downsample",
+        lambda mask, factor_y, factor_x: np.ones(
+            (mask.shape[0] // factor_y, mask.shape[1] // factor_x), dtype=bool
+        ),
+    )
+    unmasked_covered, _worst = _covered_outside_cells(run(), spec, shape, inside_artcc)
+    print(f"[border] without the coarse-grid mask: {unmasked_covered} cells covered")
+    assert unmasked_covered > 50, (
+        f"only {unmasked_covered} outside cells covered without the coarse-grid mask -- that mask "
+        "is supposed to be what keeps this number near zero"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Enclosure absorption: exactly which configurations get absorbed, and
+# what happens to the one that doesn't. Pinned because the obvious
+# simplification of _absorb_holes() -- "is this sub-region's ring made
+# entirely of one other sub-region" -- gives a different answer to the
+# first of these, and would look like a harmless refactor.
+# ---------------------------------------------------------------------------
+
+def _three_region_component(pocket_rows, pocket_cols, divider_col):
+    """
+    One component split three ways: CIG on the left, VIS/BR on the
+    right, and a VIS/PCPN pocket at (pocket_rows, pocket_cols) that
+    straddles the divider between them. All three land above
+    INCLUDE_FRACTION and none reaches DOMINANT_FRACTION, so neither the
+    inclusion floor nor the dominance rule can fire -- absorption is the
+    only thing that could merge anything.
+    """
+    ceiling, vis3, vis1, precip = _blank_grids()
+    component = np.zeros(RULES_SHAPE, dtype=bool)
+    component[40:160, 40:250] = True
+    pocket = np.zeros(RULES_SHAPE, dtype=bool)
+    pocket[pocket_rows, pocket_cols] = True
+    left = np.zeros(RULES_SHAPE, dtype=bool)
+    left[:, :divider_col] = True
+
+    cig = component & left & ~pocket
+    br = component & ~left & ~pocket
+    ceiling[cig] = 80.0
+    vis3[br | pocket] = 80.0
+    precip[pocket] = 80.0
+    return (ceiling, vis3, vis1, precip), component, cig, br, pocket
+
+
+def test_pocket_enclosed_jointly_by_two_regions_stays_its_own_area():
+    """
+    THE SHARED-HOLE CASE: a pocket sitting in a notch that two regions
+    form TOGETHER. Neither surrounding region has a hole of its own --
+    each just has a bite out of one edge -- so _absorb_holes() finds
+    nothing to absorb and the pocket survives as its own area.
+
+    That is the correct outcome, not a miss: the export invariant is
+    "no region has an interior ring", and here none does. Absorbing the
+    pocket would merge two thirds of the component into one area for no
+    reason a forecaster would recognise.
+
+    What this pins is that the DECISION is made by asking each region
+    about its own holes. A single-neighbour formulation ("is this
+    sub-region surrounded by exactly one other") answers this case the
+    same way by accident, but answers
+    test_region_wrapping_two_others_absorbs_both() wrongly -- see there.
+    """
+    grids, component, cig, br, pocket = _three_region_component(
+        pocket_rows=slice(60, 140), pocket_cols=slice(100, 195), divider_col=145
+    )
+
+    # The premise: neither surrounding region has a hole on its own.
+    assert not (binary_fill_holes(cig) & ~cig).any()
+    assert not (binary_fill_holes(br) & ~br).any()
+    # ...but the pocket is genuinely enclosed by the two of them together.
+    surrounding = cig | br
+    assert not (binary_fill_holes(surrounding) & ~surrounding & ~pocket).any()
+
+    fc = _polygonize(grids, neighborhood_radius_nm=0.0)
+
+    assert len(fc["features"]) == 3, (
+        f"expected the pocket to survive alongside both neighbours, got {_labels(fc)}"
+    )
+    assert sorted(_labels(fc)) == [("CIG", None), ("VIS", "BR"), ("VIS", "PCPN/BR")]
+
+    # And the thing that actually matters downstream still holds.
     geometries = _geometries(fc)
-    assert geometries, "no polygons generated at all"
+    for feature in fc["features"]:
+        assert len(feature["geometry"]["coordinates"]) == 1
+    for i, a in enumerate(geometries):
+        for b in geometries[i + 1:]:
+            assert a.intersection(b).area < 1e-9
+            assert not a.contains(b) and not b.contains(a)
 
-    # Every spilled cell more than one coarse cell outside the boundary.
-    margin_cells = int(np.ceil(CONTOUR_RESOLUTION_DEG / spec.dx))
-    from scipy.ndimage import binary_dilation
 
-    near_boundary = binary_dilation(
-        inside_artcc, structure=np.ones((3, 3), dtype=bool), iterations=margin_cells
+def test_pocket_enclosed_jointly_survives_the_export_disjointness_check():
+    """
+    The same output through pipeline.pgen_xml.assert_rings_disjoint(),
+    which is what the PGEN export runs before serializing. Three areas
+    meeting along shared edges must pass -- if the export check were too
+    strict about coincident boundaries, this is the shape that would
+    expose it.
+    """
+    from pipeline.pgen_xml import assert_rings_disjoint
+
+    grids, *_ = _three_region_component(
+        pocket_rows=slice(60, 140), pocket_cols=slice(100, 195), divider_col=145
     )
-    deep_rows, deep_cols = np.where(spilled & ~near_boundary)
-    assert len(deep_rows) > 0
+    fc = _polygonize(grids, neighborhood_radius_nm=0.0)
 
-    lons = spec.west + deep_cols * spec.dx
-    lats = spec.north + deep_rows * spec.dy
-    covered = np.zeros(lons.shape, dtype=bool)
-    for geometry in geometries:
-        covered |= shapely.contains_xy(geometry, lons, lats)
+    rings = [
+        [(lat, lon) for lon, lat in feature["geometry"]["coordinates"][0][:-1]]
+        for feature in fc["features"]
+    ]
+    assert_rings_disjoint(rings, "IFR", 0)  # raises if the guarantee doesn't hold
 
-    assert not covered.any(), (
-        f"{covered.sum()} of {len(lons)} points the closing pushed across the ARTCC boundary "
-        "ended up inside a polygon"
-    )
+
+def test_region_wrapping_two_others_absorbs_both():
+    """
+    The case _absorb_holes() exists for, and the one a single-neighbour
+    formulation gets wrong: one region wraps TWO others together, so its
+    own outline has an interior ring while neither enclosed region is
+    surrounded by a single neighbour. Both get absorbed; the survivor is
+    solid.
+    """
+    ceiling, vis3, vis1, precip = _blank_grids()
+    component = np.zeros(RULES_SHAPE, dtype=bool)
+    component[40:160, 40:250] = True
+    interior = np.zeros(RULES_SHAPE, dtype=bool)
+    interior[55:145, 70:238] = True          # 60% of the component
+    left = np.zeros(RULES_SHAPE, dtype=bool)
+    left[:, :154] = True
+
+    frame = component & ~interior            # 40% -- under DOMINANT_FRACTION
+    ceiling[frame] = 80.0
+    vis3[interior] = 80.0
+    precip[interior & ~left] = 80.0
+
+    assert (binary_fill_holes(frame) & ~frame).any(), "the wrapping region must have a hole"
+
+    fc = _polygonize((ceiling, vis3, vis1, precip), neighborhood_radius_nm=0.0)
+
+    assert len(fc["features"]) == 1, f"expected one absorbed area, got {_labels(fc)}"
+    assert _labels(fc) == [("CIG/VIS", "PCPN/BR")]
+    assert len(fc["features"][0]["geometry"]["coordinates"]) == 1
 
 
 # ---------------------------------------------------------------------------

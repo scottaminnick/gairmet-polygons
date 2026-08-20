@@ -998,6 +998,35 @@ def _majority_downsample(region_ids: np.ndarray, factor_y: int, factor_x: int) -
     return np.where(coarse == background, 0, coarse)
 
 
+def _fully_inside_downsample(mask: np.ndarray, factor_y: int, factor_x: int) -> np.ndarray:
+    """
+    Coarse cells whose fine cells are ALL inside `mask` -- an erosion, not
+    a majority vote, and deliberately so.
+
+    Used to re-apply the ARTCC boundary on the coarse grid. A contour runs
+    along coarse CELL EDGES, so a coarse cell that is only PARTLY inside
+    the boundary puts the part that isn't inside a polygon. Requiring the
+    whole block pushes the quantization inward: the polygon edge now sits
+    at the edge of a block whose every cell is inside, so it can fall
+    short of the boundary by up to a coarse cell -- a forecaster edit --
+    rather than claiming airspace this product has no authority over.
+
+    NOT quite zero, and worth being precise about: marching squares draws
+    its isoline halfway between CELL CENTRES, so at a staircase corner it
+    cuts the corner diagonally and a triangular sliver of the excluded
+    block (up to half a coarse cell) still ends up inside. Measured over
+    the Great Lakes at 100 nm -- the worst concavity in CONUS -- that is
+    1 outside cell covered where the majority rule alone covered 156. The
+    residue is a corner artefact of contouring a cell-centred raster, not
+    a closing jumping the line.
+    """
+    if factor_y == 1 and factor_x == 1:
+        return mask.copy()
+    rows = mask.shape[0] // factor_y * factor_y
+    cols = mask.shape[1] // factor_x * factor_x
+    return mask[:rows, :cols].reshape(rows // factor_y, factor_y, cols // factor_x, factor_x).all(axis=(1, 3))
+
+
 def _fill_coarse_holes(coarse_ids: np.ndarray) -> None:
     """
     Re-runs hole absorption on the COARSENED grid, in place, until no
@@ -1295,6 +1324,24 @@ def polygonize_ifr_grid_v2(
         factor_y = factor_x = 1
     coarse_spec = _coarse_grid_spec(grid_spec, factor_y, factor_x)
     coarse_ids = _majority_downsample(region_ids, factor_y, factor_x)
+
+    # THE ARTCC BOUNDARY, A SECOND TIME -- now on the grid that is
+    # actually about to be contoured. The fine-grid application above
+    # guarantees no hazard CELL is outside the boundary, but a contour
+    # runs along coarse cell EDGES, so a coarse cell straddling the line
+    # still drew up to half a coarse cell (~5 km at 0.1 deg) outside it.
+    # Dropping any coarse cell not wholly inside pushes that error
+    # inward: under-covering our own area of responsibility is a
+    # forecaster edit, drawing outside it is a product error. (What
+    # remains is a corner sliver -- see _fully_inside_downsample.)
+    #
+    # Applied BEFORE the split and hole passes below rather than
+    # literally last: masking can cut a region in two or notch a hole
+    # into it, and those two passes are what keep such a region
+    # contourable as a single ring.
+    coarse_ids = np.where(
+        _fully_inside_downsample(inside_artcc, factor_y, factor_x), coarse_ids, 0
+    )
 
     # Coarsening can pinch a one-cell isthmus, leaving what was one
     # region in two disconnected pieces -- which would contour into two
