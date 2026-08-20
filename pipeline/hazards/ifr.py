@@ -1011,14 +1011,15 @@ def _fully_inside_downsample(mask: np.ndarray, factor_y: int, factor_x: int) -> 
     short of the boundary by up to a coarse cell -- a forecaster edit --
     rather than claiming airspace this product has no authority over.
 
-    NOT quite zero, and worth being precise about: marching squares draws
-    its isoline halfway between CELL CENTRES, so at a staircase corner it
-    cuts the corner diagonally and a triangular sliver of the excluded
-    block (up to half a coarse cell) still ends up inside. Measured over
-    the Great Lakes at 100 nm -- the worst concavity in CONUS -- that is
-    1 outside cell covered where the majority rule alone covered 156. The
-    residue is a corner artefact of contouring a cell-centred raster, not
-    a closing jumping the line.
+    Not provably zero, and worth being precise about: marching squares
+    draws its isoline halfway between CELL CENTRES, so at a staircase
+    corner it cuts the corner diagonally and a triangular sliver of the
+    excluded block (up to half a coarse cell) can still end up inside.
+    Measured over the Great Lakes at 100 nm -- the worst concavity in
+    CONUS -- that currently comes to 0 outside cells covered, against 129
+    with the majority rule alone. (It was 1 until the pixel/lonlat
+    convention fix, which stopped the boundary mask itself sitting half a
+    cell southeast of the boundary it was built from.)
     """
     if factor_y == 1 and factor_x == 1:
         return mask.copy()
@@ -1143,14 +1144,12 @@ def _contour_region(region_mask: np.ndarray, coarse_spec) -> list:
     touching the array edge still closes into a ring instead of coming
     back as an open curve.
 
-    Contour coordinates are array-index space, where index i is the
-    CENTRE of cell i, while GridSpec.to_affine() maps corner-based
-    coordinates -- hence the half-cell shift before transforming. (v1
-    transforms find_contours output without it, so v1's polygons sit
-    half a fine cell northwest of where the same data would put them;
-    at 0.025 deg that's under 1.5 km, which is presumably why it was
-    never noticed. v2 does it correctly rather than reproducing it,
-    which is worth knowing when comparing the two outputs.)
+    Contour coordinates are array-index space (integer = cell centre),
+    so they go through GridSpec.pixel_to_lonlat() -- the shared
+    conversion that owns the half-cell offset between that space and
+    to_affine()'s corner-based one. v2 got this right from the start by
+    doing the arithmetic inline; it now shares the method with v1, which
+    did not.
     """
     padded = np.pad(region_mask, 1, mode="constant", constant_values=False)
     contours = measure.find_contours(padded.astype(np.float32), 0.5)
@@ -1168,8 +1167,9 @@ def _contour_region(region_mask: np.ndarray, coarse_spec) -> list:
             "disconnected region; see _absorb_within_component()"
         )
 
-    transform = coarse_spec.to_affine()
-    coords = [transform * (col - 1 + 0.5, row - 1 + 0.5) for row, col in contours[0]]
+    # The -1 undoes the padding above; the centre/corner half-cell is
+    # GridSpec.pixel_to_lonlat()'s business, not this function's.
+    coords = [coarse_spec.pixel_to_lonlat(row - 1, col - 1) for row, col in contours[0]]
     polygon = ShapelyPolygon(coords)
     if not polygon.is_valid:
         # A ring that touches itself at a corner (a region pinched to a

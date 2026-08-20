@@ -386,12 +386,14 @@ def test_closing_does_not_spill_across_the_artcc_boundary(monkeypatch):
     deep across the line, and the coarse-grid masking is load-bearing
     rather than decorative.
 
-    The residue it does allow -- a couple of cells within one cell of
-    the boundary -- is the corner artefact described in
-    _fully_inside_downsample(): marching squares cuts a staircase corner
-    diagonally, so a sliver of the first excluded block falls inside.
-    That is a property of contouring a cell-centred raster at all, not
-    of the closing, and it cannot grow with the radius.
+    The bound is a few cells rather than zero because of the corner
+    artefact described in _fully_inside_downsample(): marching squares
+    cuts a staircase corner diagonally, so a sliver of the first
+    excluded block can fall inside. That is a property of contouring a
+    cell-centred raster at all, not of the closing, and it cannot grow
+    with the radius. It currently measures 0 -- it was 1 until the
+    pixel/lonlat convention fix aligned the boundary mask -- and the
+    print below reports the live number.
     """
     spec = GridSpec(west=-95.0, north=51.0, dx=0.05, dy=-0.05)
     shape = (200, 300)
