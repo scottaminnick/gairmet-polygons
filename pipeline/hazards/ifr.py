@@ -142,6 +142,10 @@ from skimage import measure
 from pipeline.boundaries import CONUS_BOUNDARY_PATH, get_boundary_mask
 from pipeline.polygons import (
     GridSpec,
+    KM_PER_DEG_LAT,
+    KM_PER_NM,
+    cell_dimensions_km,
+    close_mask,
     filter_polygons_by_area,
     grid_to_polygons,
     lonlat_ring_to_pixel_rowcol,
@@ -303,10 +307,9 @@ CONTOUR_RESOLUTION_DEG = 0.1
 # a sliver is a real geometry defect of its own, just a less visible one.
 ADJACENT_REGION_EROSION_DEG = 0.0
 
-# Mean km per degree of latitude, used for the local-flat-earth cell
-# sizing in _cell_dimensions_km() / _cell_areas_sq_mi().
-KM_PER_DEG_LAT = 111.32
-KM_PER_NM = 1.852
+# KM_PER_DEG_LAT / KM_PER_NM are imported from pipeline.polygons, which
+# is where the cell sizing and the raster closing that use them now live
+# (shared with MTN OBSC).
 SQ_MI_PER_SQ_KM = 0.386102
 
 
@@ -710,29 +713,10 @@ def _build_class_grid(
     return class_grid
 
 
-def _cell_dimensions_km(grid_spec, shape: tuple) -> tuple[float, float]:
-    """
-    (row spacing, column spacing) in km for one grid cell, for use as
-    scipy's `sampling=` so distances come out in real km rather than in
-    cells (a cell is not square in ground distance, and gets less square
-    the further north you go).
-
-    MID-DOMAIN APPROXIMATION: longitude spacing is evaluated once, at
-    the domain's middle latitude, not per row. Over a CONUS-sized domain
-    (~25N-50N) a degree of longitude runs from ~101 km to ~72 km, so at
-    the edges this over- or under-states the east-west radius by roughly
-    10-15%. That is well inside the precision of a forecaster-chosen
-    "50 nm" in the first place, and the alternative -- a per-row
-    sampling -- isn't something distance_transform_edt supports at all
-    (it takes one sampling vector for the whole array). Cell AREAS,
-    where the same error would accumulate over thousands of cells rather
-    than being a one-off radius fuzz, are computed per row instead --
-    see _cell_areas_sq_mi().
-    """
-    mid_lat = grid_spec.north + (shape[0] - 1) / 2.0 * grid_spec.dy
-    dx_km = KM_PER_DEG_LAT * math.cos(math.radians(mid_lat)) * grid_spec.dx
-    dy_km = KM_PER_DEG_LAT * abs(grid_spec.dy)
-    return dy_km, dx_km
+# Moved to pipeline.polygons (MTN OBSC needs the same sizing for the
+# same closing); kept under the old private name so this module's own
+# call sites and tests read unchanged.
+_cell_dimensions_km = cell_dimensions_km
 
 
 def _cell_areas_sq_mi(grid_spec, shape: tuple) -> np.ndarray:
@@ -766,13 +750,9 @@ def _close_envelope(
 
     Returns (closed_mask, closed_class_grid).
 
-    Implemented as two distance transforms (dilate: within radius of a
-    hazard cell; erode: further than radius from the dilated set's
-    outside) rather than scipy's binary_closing with a structuring
-    element. That's not a style preference: at 100 nm on a 0.025 deg
-    grid the footprint is ~67 cells across, i.e. a ~14,000-cell disc
-    that binary_closing would slide over every cell of a multi-million
-    cell grid. The distance transform is O(cells) regardless of radius.
+    The closing itself is pipeline.polygons.close_mask() -- shared with
+    MTN OBSC, which needs the same operation on a plain boolean mask.
+    All this adds on top is the class bookkeeping.
 
     Cells the closing ADDS inherit their class from the nearest original
     hazard cell -- free from the same call via return_indices, and the
@@ -780,21 +760,9 @@ def _close_envelope(
     nearest to.
     """
     hazard = class_grid > 0
-    if radius_nm <= 0 or not hazard.any():
-        return hazard, class_grid
-
-    radius_km = radius_nm * KM_PER_NM
-    distance_to_hazard, nearest = distance_transform_edt(
-        ~hazard, sampling=sampling, return_indices=True
-    )
-    dilated = distance_to_hazard <= radius_km
-
-    # Erosion of the dilated set: keep cells further than the radius
-    # from anything outside it. Union with the original hazard because
-    # a closing must never REMOVE hazard ground -- discretisation at the
-    # array border can otherwise erode a cell the dilation never added.
-    distance_to_outside = distance_transform_edt(dilated, sampling=sampling)
-    closed = (distance_to_outside > radius_km) | hazard
+    closed, nearest = close_mask(hazard, sampling, radius_nm, return_indices=True)
+    if nearest is None:
+        return closed, class_grid
 
     # nearest[:, r, c] indexes the nearest hazard cell, and is the cell
     # itself where the cell is already hazard -- so this one expression

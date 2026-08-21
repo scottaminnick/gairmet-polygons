@@ -61,9 +61,12 @@ too slow for a live endpoint).
 
 from __future__ import annotations
 
+import math
+
 import geojson
 import numpy as np
 from pyproj import CRS, Geod, Transformer
+from scipy.ndimage import distance_transform_edt
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry import mapping as shapely_mapping
 from shapely.ops import transform as shapely_transform
@@ -82,6 +85,104 @@ from pipeline.grid_spec import GridSpec
 _GEOD = Geod(ellps="WGS84")
 SQ_METERS_PER_SQ_MILE = 2_589_988.11
 NM_TO_METERS = 1852.0
+
+
+# Mean km per degree of latitude -- the local-flat-earth constant behind
+# cell_dimensions_km() below. Good to a few tenths of a percent anywhere
+# in CONUS, which is well inside the precision of a forecaster-chosen
+# radius in nautical miles.
+KM_PER_DEG_LAT = 111.32
+KM_PER_NM = 1.852
+
+
+def cell_dimensions_km(grid_spec: GridSpec, shape: tuple) -> tuple[float, float]:
+    """
+    (row spacing, column spacing) in km for one grid cell, for use as
+    scipy's `sampling=` so distances come out in real km rather than in
+    cells (a cell is not square in ground distance, and gets less square
+    the further north you go).
+
+    MID-DOMAIN APPROXIMATION: longitude spacing is evaluated once, at
+    the domain's middle latitude, not per row. Over a CONUS-sized domain
+    (~25N-50N) a degree of longitude runs from ~101 km to ~72 km, so at
+    the edges this over- or under-states the east-west radius by roughly
+    10-15%. That is well inside the precision of a forecaster-chosen
+    "50 nm" in the first place, and the alternative -- a per-row
+    sampling -- isn't something distance_transform_edt supports at all
+    (it takes one sampling vector for the whole array).
+    """
+    mid_lat = grid_spec.north + (shape[0] - 1) / 2.0 * grid_spec.dy
+    dx_km = KM_PER_DEG_LAT * math.cos(math.radians(mid_lat)) * grid_spec.dx
+    dy_km = KM_PER_DEG_LAT * abs(grid_spec.dy)
+    return dy_km, dx_km
+
+
+def close_mask(
+    mask: np.ndarray, sampling: tuple[float, float], radius_nm: float, return_indices: bool = False
+):
+    """
+    Morphological closing of a boolean mask at a real-world radius --
+    dilate by radius_nm, then erode by the same. This is the RASTER
+    replacement for merge_nearby_polygons(), which does the same job in
+    vector space, on each polygon set separately, AFTER every mask has
+    been applied.
+
+    WHY RASTER, and why this matters beyond tidiness: a vector closing
+    happens downstream of the gates, so it can push a polygon straight
+    back across ground a mask deliberately removed -- over Lake Superior,
+    across the ARTCC boundary, onto terrain the relief gate rejected.
+    Closing the raster instead lets the caller simply re-apply its gates
+    to the closed mask (`closed &= land`, `closed &= inside_artcc`,
+    `closed &= mountainous`), which is a statement the vector path cannot
+    make at all. Both hazards use this: IFR v2 via _close_envelope(),
+    MTN OBSC via polygonize_mtn_obsc_grid().
+
+    Implemented as two distance transforms rather than scipy's
+    binary_closing with a structuring element. That's not a style
+    preference: at 100 nm on a 0.025 deg grid the footprint is ~67 cells
+    across, i.e. a ~14,000-cell disc that binary_closing would slide over
+    every cell of a multi-million cell grid. The distance transform is
+    O(cells) regardless of radius.
+
+    Parameters
+    ----------
+    mask : 2D bool array
+        The cells to close around.
+    sampling : (row_km, col_km)
+        From cell_dimensions_km() -- what makes the radius geodesic
+        rather than measured in cells.
+    radius_nm : float
+        0 (or a mask with nothing in it) is a no-op, returned unchanged.
+    return_indices : bool
+        Also return the (row, col) index arrays of each cell's nearest
+        originally-set cell, as distance_transform_edt computes them
+        anyway. IFR uses this to give cells the closing ADDED the class
+        of whatever they were nearest to; a caller closing a plain
+        boolean mask doesn't need it.
+
+    Returns
+    -------
+    closed mask, or (closed mask, nearest indices) when return_indices.
+    The indices are None when the closing was a no-op.
+    """
+    if radius_nm <= 0 or not mask.any():
+        return (mask, None) if return_indices else mask
+
+    radius_km = radius_nm * KM_PER_NM
+    distance_to_mask, nearest = distance_transform_edt(
+        ~mask, sampling=sampling, return_indices=True
+    )
+    dilated = distance_to_mask <= radius_km
+
+    # Erosion of the dilated set: keep cells further than the radius
+    # from anything outside it. Union with the original mask because a
+    # closing must never REMOVE ground that was already set --
+    # discretisation at the array border can otherwise erode a cell the
+    # dilation never added.
+    distance_to_outside = distance_transform_edt(dilated, sampling=sampling)
+    closed = (distance_to_outside > radius_km) | mask
+
+    return (closed, nearest) if return_indices else closed
 
 
 def geodesic_area_sq_mi(polygon) -> float:

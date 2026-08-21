@@ -92,6 +92,40 @@ const layers = {
       if (name) layer.bindTooltip(name, { sticky: true, className: 'artcc-tooltip' });
     },
   }),
+
+  // The legacy (pre-automation) MTN OBSC areas. DISPLAY ONLY -- nothing
+  // here feeds a gate, mask or filter; it exists so a forecaster can put
+  // derived and legacy areas side by side during calibration. See
+  // data/boundaries/LEGACY_MTNOBSC.md for what the geometry is worth.
+  //
+  // Styled to read as neither hazard nor airspace: outline only, in a
+  // colour used nowhere else (states are slate, ARTCC teal, IFR amber,
+  // MTN OBSC violet), with a long dash that says "reference line".
+  legacyMtnObsc: L.geoJSON(null, {
+    style: (feature) => {
+      const name = (feature.properties && feature.properties.name) || '';
+      // CentralValleyCutout is a HOLE in the Rockies area, not a hazard
+      // area of its own. Drawn dotted and dimmer so it reads as "this
+      // bit is taken out" rather than "here is another area", and
+      // labelled to say so outright.
+      const isCutout = name === 'CentralValleyCutout';
+      return {
+        color: '#ff5c8a',
+        weight: isCutout ? 1 : 2,
+        fill: false,
+        opacity: isCutout ? 0.65 : 1,
+        dashArray: isCutout ? '2 5' : '10 6',
+      };
+    },
+    onEachFeature: (feature, layer) => {
+      const name = (feature.properties && feature.properties.name) || 'legacy area';
+      const isCutout = name === 'CentralValleyCutout';
+      const label = isCutout
+        ? `${name} &mdash; cutout from the Rockies area, not a hazard area`
+        : `${name} &mdash; legacy area (reference only)`;
+      layer.bindTooltip(label, { sticky: true, className: 'legacy-tooltip' });
+    },
+  }),
 };
 
 layers.states.addTo(map);
@@ -112,6 +146,12 @@ document.getElementById('toggle-states').addEventListener('change', (e) => {
 document.getElementById('toggle-artcc').addEventListener('change', (e) => {
   if (e.target.checked) map.addLayer(layers.artcc);
   else map.removeLayer(layers.artcc);
+});
+
+// Off by default -- a comparison overlay, not part of the normal view.
+document.getElementById('toggle-legacy-mtnobsc').addEventListener('change', (e) => {
+  if (e.target.checked) map.addLayer(layers.legacyMtnObsc);
+  else map.removeLayer(layers.legacyMtnObsc);
 });
 
 document.getElementById('toggle-mtn').addEventListener('change', (e) => {
@@ -150,6 +190,18 @@ function debounce(fn, delay) {
     clearTimeout(timer);
     timer = setTimeout(() => fn(...args), delay);
   };
+}
+
+function disableLegacyToggle(reason) {
+  const toggle = document.getElementById('toggle-legacy-mtnobsc');
+  if (!toggle) return;
+  toggle.checked = false;
+  toggle.disabled = true;
+  const row = toggle.closest('.layer-toggle');
+  if (row) {
+    row.classList.add('layer-toggle-disabled');
+    row.title = reason;
+  }
 }
 
 // --- PER-FORECAST-HOUR ADJUSTMENT STATE ---
@@ -737,6 +789,20 @@ async function loadData() {
     layers.artcc.addData(artccGeoJSON);
   } catch (err) {
     console.error('Failed to load ARTCC boundaries:', err);
+  }
+
+  // The legacy overlay is optional data: a deployment without the file
+  // gets a 404 here, which disables the toggle rather than logging an
+  // error the operator can do nothing about.
+  try {
+    const legacyResp = await fetch('/api/boundaries/legacy_mtnobsc');
+    if (legacyResp.ok) {
+      layers.legacyMtnObsc.addData(await legacyResp.json());
+    } else {
+      disableLegacyToggle('legacy_mtnobsc.json not deployed');
+    }
+  } catch (err) {
+    disableLegacyToggle('legacy boundaries unavailable');
   }
 
   // Try the manifest first -- if it exists, build the forecast-hour

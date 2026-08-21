@@ -107,6 +107,28 @@ def get_state_boundaries():
     return FileResponse(path, media_type="application/geo+json")
 
 
+@app.get("/api/boundaries/legacy_mtnobsc")
+def get_legacy_mtnobsc_boundaries():
+    """
+    The legacy (pre-automation) Mountain Obscuration areas, for visual
+    comparison only.
+
+    DISPLAY ONLY. This file is deliberately not wired into any gate,
+    mask or filter -- see data/boundaries/LEGACY_MTNOBSC.md. Terrain-
+    derived areas that fall outside these boundaries are not assumed
+    wrong: the legacy areas are broad-brush because the resolution to do
+    better did not exist, and surfacing real relief they miss is a goal
+    of this tool.
+    """
+    path = BOUNDARIES_DIR / "legacy_mtnobsc.json"
+    if not path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="legacy_mtnobsc.json not found in data/boundaries/",
+        )
+    return FileResponse(path, media_type="application/geo+json")
+
+
 @app.get("/api/boundaries/artcc")
 def get_artcc_boundaries():
     path = BOUNDARIES_DIR / "artcc.json"

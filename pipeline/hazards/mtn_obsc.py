@@ -221,6 +221,8 @@ from pipeline.hazards.ifr import (
 )
 from pipeline.polygons import (
     GridSpec,
+    cell_dimensions_km,
+    close_mask,
     filter_polygons_by_area,
     grid_to_polygons,
     merge_nearby_polygons,
@@ -314,6 +316,24 @@ MIN_BASELINE_ELEVATION_FT = -500.0
 GAUSSIAN_SIGMA_CELLS = 0.6
 BOUNDARY_SMOOTHING_DEG = 0.02
 FINAL_SIMPLIFY_TOLERANCE_DEG = 0.05
+
+# The forecaster's neighborhood radius, applied to the raster rather
+# than to the finished polygons. Flip to False for a one-line revert to
+# merge_nearby_polygons(), matching the pattern
+# pipeline.hazards.ifr.USE_LABEL_GRID_POLYGONIZE uses -- the two paths
+# take the same arguments and mean the same thing by them.
+#
+# Why the raster version is the default: the vector closing runs after
+# the land / elevation / ARTCC / relief gates, so it can (and did) put
+# polygons back over Lake Superior and across the Canadian border. See
+# the branch in polygonize_mtn_obsc_grid() for the full account.
+USE_RASTER_CLOSING_MTNOBSC = True
+
+# What a cell the raster closing ADDED is worth when the grid is
+# contoured. Saturated rather than "just above threshold" so the
+# resulting isoline lands at the cell edge instead of its centre -- see
+# the closing branch in polygonize_mtn_obsc_grid().
+CLOSING_FILL_PCT = 100.0
 
 # Same sentinel-pinning trick as IFR's LAYER_OFF -- guaranteed to never
 # cross any real 0-100 threshold_pct value, so non-mountainous cells are
@@ -747,7 +767,13 @@ def polygonize_mtn_obsc_grid(
     within_conus_mask = get_boundary_mask(grid_spec, mountainous_mask.shape, CONUS_BOUNDARY_PATH)
     mountainous_mask = mountainous_mask & within_conus_mask
 
-    critical_ceiling_agl = terrain_relief_ft + clearance_margin_ft
+    # baseline_elevation_ft is NaN where a terrain block contained no
+    # land at all (see fetch_terrain.compute_output_grids). Those cells
+    # are already out -- NaN fails every gate above, which is the whole
+    # point of using NaN rather than a substituted elevation -- so the
+    # only thing left to do is keep the NaN from travelling into the
+    # interpolation, whose result for them is discarded anyway.
+    critical_ceiling_agl = np.nan_to_num(terrain_relief_ft, nan=0.0) + clearance_margin_ft
     derived_probability, _is_extrapolated = interpolate_terrain_relative_probability(
         critical_ceiling_agl, ceiling_prob_grids
     )
@@ -757,8 +783,47 @@ def polygonize_mtn_obsc_grid(
     # CONUS) can never cross any real threshold_pct.
     layer_grid = np.where(mountainous_mask, derived_probability, LAYER_OFF)
 
+    if USE_RASTER_CLOSING_MTNOBSC:
+        # THE NEIGHBORHOOD RADIUS, IN RASTER SPACE.
+        #
+        # merge_nearby_polygons() (the else branch below) does the same
+        # closing in vector space, but it runs AFTER every gate, so it
+        # can push a polygon straight back over ground a gate removed.
+        # That is what put MTN OBSC areas over Lake Superior in the 09Z
+        # run: the land mask excludes the lake correctly (point-tested),
+        # and the vector closing bridged across it anyway. Same failure
+        # mode IFR v2 was rewritten to remove.
+        #
+        # Closing the raster instead makes the fix a statement rather
+        # than a hope -- the three gates are simply re-applied to the
+        # closed mask below.
+        hazard = mountainous_mask & (derived_probability >= threshold_pct)
+        closed = close_mask(hazard, cell_dimensions_km(grid_spec, hazard.shape), neighborhood_radius_nm)
+
+        # RE-APPLY EVERY GATE. The water one is the reported bug, but the
+        # mountainous one matters just as much: a closing that reaches
+        # across a valley must not invent mountainous terrain where the
+        # relief gate already said there is none. (mountainous_mask has
+        # the land, elevation and ARTCC gates folded into it above; the
+        # two boundary masks are re-applied explicitly as well, so this
+        # reads as the checklist it is rather than relying on that.)
+        closed &= on_land_mask
+        closed &= within_conus_mask
+        closed &= mountainous_mask
+
+        # Cells the closing ADDED were below threshold by definition, so
+        # their real probability cannot carry them past the contour
+        # level. Pin them to a saturated value: the closing has already
+        # decided they are in, and the contour's remaining job is to
+        # place the edge. Pinning just above the threshold instead would
+        # put the isoline almost exactly on the added cell's centre --
+        # eroding the closed area by half a cell -- because the contour
+        # interpolates between LAYER_OFF and the cell's value.
+        layer_grid = np.where(closed, np.where(hazard, derived_probability, CLOSING_FILL_PCT), LAYER_OFF)
+
     polygons = grid_to_polygons(layer_grid, grid_spec, threshold=threshold_pct, min_area_deg2=0.001)
-    polygons = merge_nearby_polygons(polygons, radius_nm=neighborhood_radius_nm)
+    if not USE_RASTER_CLOSING_MTNOBSC:
+        polygons = merge_nearby_polygons(polygons, radius_nm=neighborhood_radius_nm)
     polygons = filter_polygons_by_area(polygons, min_area_sq_mi=min_area_sq_mi)
     polygons = [
         smooth_polygon_boundary(p, smoothing_deg=BOUNDARY_SMOOTHING_DEG, join_style=2) for p in polygons

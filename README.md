@@ -8,6 +8,12 @@ web map and (longer-term) an N-AWIPS-compatible workflow.
 Reference: NWS Instruction 10-811, *En Route Forecasts and Advisories*
 (defines official G-AIRMET criteria this project is trying to approximate).
 
+**[docs/METHODS.md](docs/METHODS.md)** covers how the polygons are actually
+produced and why — the label-grid polygonizer and its no-overlap guarantee,
+the ARTCC gate, the terrain gates and the water-corrected baseline, the
+raster closing, the pixel/lon-lat convention, and the export checks. This
+file covers running and deploying.
+
 ## Status
 
 Currently working:
@@ -221,16 +227,27 @@ Actions tab (`generate_ifr.yml`), without editing any code:
 | Parameter | Default | What it controls |
 |---|---|---|
 | `threshold_pct` | 50% | Probability above which a grid cell counts as hazard |
-| `neighborhood_radius_nm` | 50 nm | Real-world radius used to pull nearby smaller hazard areas into larger ones |
+| `neighborhood_radius_nm` | 50 nm | Real-world radius used to pull nearby smaller hazard areas into larger ones. Applied to the raster, not to finished polygons, and every gate is re-applied afterwards — so for MTN OBSC it can no longer bridge across water or non-mountainous ground ([METHODS §4.4](docs/METHODS.md)) |
 | `min_area_sq_mi` | 3,000 sq mi | Minimum true geodesic polygon area (matches AIRMET/G-AIRMET's historical "widespread" criterion) |
 
-## ARTCC boundaries
+## Boundary reference layers
+
+| File | Layer | Role |
+|---|---|---|
+| `us_states.json` | STATE BOUNDARIES | Reference, and the land/water gate for MTN OBSC |
+| `artcc.json` | ARTCC BOUNDARIES | Reference, and the area-of-responsibility gate for both hazards |
+| `legacy_mtnobsc.json` | LEGACY MTN OBSC | Reference **only** — never a gate. See [`LEGACY_MTNOBSC.md`](data/boundaries/LEGACY_MTNOBSC.md) |
 
 `data/boundaries/artcc.json` — 20 domestic CONUS ARTCC polygons, each with
 a `name` property (e.g. `ZTL` for Atlanta Center). Sourced from the
 project owner's own `model-viewer` repo rather than FAA's ArcGIS Hub
 (which requires their web UI or an authenticated API export, neither
 reachable from a sandboxed dev environment during initial development).
+
+The legacy MTN OBSC layer is off by default and exists so a forecaster can
+compare derived areas against the pre-automation ones during calibration.
+Terrain-derived areas outside it are not assumed wrong — the legacy areas
+are broad-brush because the resolution to do better never existed.
 
 ## How artifacts reach the deployed app
 

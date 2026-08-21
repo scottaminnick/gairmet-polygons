@@ -10,6 +10,10 @@
   --accent-mtn: #b985ff;
   --accent-artcc: #2dd4bf;
   --accent-states: #64749a;
+  /* Legacy MTN OBSC comparison overlay -- deliberately unlike the
+     hazard colours (amber, violet) and the boundary colours (teal,
+     slate), so a forecaster never reads it as either. */
+  --accent-legacy: #ff5c8a;
 
   --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', 'JetBrains Mono', monospace;
@@ -325,6 +329,18 @@ html, body {
   background: transparent;
   border: 1.5px dashed var(--accent-artcc);
 }
+/* Legacy MTN OBSC overlay: outline only, in a colour used by no other
+   layer, so it reads as a reference line rather than a hazard or an
+   airspace boundary. */
+.swatch-legacy {
+  background: transparent;
+  border: 1.5px dashed var(--accent-legacy);
+}
+
+.layer-toggle-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 
 .legend-row {
   display: flex;
@@ -375,6 +391,11 @@ html, body {
 .leaflet-tooltip.artcc-tooltip {
   border-color: var(--accent-artcc);
   color: var(--accent-artcc);
+}
+
+.leaflet-tooltip.legacy-tooltip {
+  border-color: var(--accent-legacy);
+  color: var(--accent-legacy);
 }
 
 @media (max-width: 640px) {

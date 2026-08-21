@@ -148,6 +148,15 @@ OUTPUT_RESOLUTION_DEG = 0.025
 # never an approximate resample.
 INTERMEDIATE_ARCSEC = 30
 RAW_TILE_SIZE = 3601  # Skadi/SRTM1: 3601x3601, 1 arcsecond, tiles overlap
+
+# int16 minimum, used in the stored baseline grid to mean "this block
+# contains no land cells" -- a real distinction from any elevation,
+# since no point on Earth is anywhere near -32,768 ft. load_terrain_grid()
+# turns it back into NaN immediately, so no arithmetic ever sees it; it
+# exists only because the on-disk format is int16 and NaN is not
+# representable there. See compute_output_grids() for why no-land blocks
+# are NaN rather than 0.
+NO_LAND_BASELINE_SENTINEL = -32768
                        # their neighbor's edge pixel by design.
 TILE_DOWNSAMPLE_FACTOR = INTERMEDIATE_ARCSEC  # 1 arcsec -> 30 arcsec
 
@@ -301,6 +310,19 @@ def _block_max_pool(arr: np.ndarray, factor: int) -> np.ndarray:
     return reshaped.max(axis=(1, 3))
 
 
+def _block_sum_pool(arr: np.ndarray, factor: int) -> np.ndarray:
+    """
+    Same block reduce as the others, summing. Only used as the two
+    halves of a masked mean (sum of values over land, divided by count
+    of land cells) -- see compute_output_grids().
+    """
+    rows, cols = arr.shape
+    reshaped = arr[: rows // factor * factor, : cols // factor * factor].reshape(
+        rows // factor, factor, cols // factor, factor
+    )
+    return reshaped.sum(axis=(1, 3))
+
+
 def _block_mean_pool(arr: np.ndarray, factor: int) -> np.ndarray:
     """Same as _block_max_pool but averaging -- used for the baseline
     (local elevation) grid, which should represent "the ground here,"
@@ -435,11 +457,46 @@ def compute_output_grids(
         filtered = maximum_filter(window, size=(2 * row_px + 1, 2 * col_px + 1), mode="nearest")
         ridge_full[band_start:band_end, :] = filtered[pad_top: pad_top + (band_end - band_start), :]
 
+    # LAND MASK, ON THE MOSAIC'S OWN GRID (30 arcsec, 1/120 deg) -- not
+    # on the 0.025 deg output grid. Both baseline averaging steps below
+    # run at mosaic resolution, and a mask built at output resolution
+    # would be three times too coarse to tell which cells inside a block
+    # are land. Rasterizing here costs ~30-60 s on a ~3400x7300 grid,
+    # which is nothing against this script's ~90 minute tile fetch.
+    #
+    # Imported locally for the same reason `requests` is -- webapp
+    # imports load_terrain_grid() from this module and shouldn't pull in
+    # the polygon stack to do it.
+    from pipeline.boundaries import LAND_BOUNDARY_PATH, get_boundary_mask
+
+    land = get_boundary_mask(mosaic_grid_spec, mosaic.shape, LAND_BOUNDARY_PATH)
+    land_f = land.astype(np.float32)
+
     # Baseline: gentle smoothing roughly matching NBM's own working
     # resolution -- standing in for the surface elevation NBM's
     # ceiling-AGL forecast is implicitly relative to (see module
     # docstring; NBM does not publish this field itself).
-    baseline_full = uniform_filter(mosaic, size=3, mode="nearest")
+    #
+    # WATER IS EXCLUDED FROM BOTH AVERAGES. Ocean and lake cells sit at
+    # (or near) 0 ft, and a plain mean drags every coastal or lakeside
+    # block down toward the water surface -- which inflates relief,
+    # since relief is ridge minus baseline. That is a systematic band
+    # along every coast and every large lake, and it is what put MTN
+    # OBSC signal on Minnesota's North Shore and in coastal New England
+    # in the 09Z run. Averaging over land cells only measures the ridge
+    # against the ground beside it, which is the question this hazard
+    # actually asks.
+    #
+    # A masked mean is sum(values over land) / count(land), which is
+    # what dividing one uniform_filter by the other gives: the filters
+    # return means over the same window, so the window size cancels.
+    land_fraction = uniform_filter(land_f, size=3, mode="nearest")
+    land_elevation_mean = uniform_filter(mosaic * land_f, size=3, mode="nearest")
+    baseline_full = np.where(
+        land_fraction > 0,
+        land_elevation_mean / np.where(land_fraction > 0, land_fraction, 1.0),
+        np.nan,
+    )
 
     ratio = output_resolution_deg / intermediate_deg
     if abs(ratio - round(ratio)) > 1e-6:
@@ -453,8 +510,24 @@ def compute_output_grids(
     ridge_out = _block_max_pool(ridge_full, ratio)
     # Mean, not max, for baseline's final reduce -- baseline should stay
     # "the ground here," not get dragged back toward ridge height by a
-    # second max operation.
-    baseline_out = _block_mean_pool(baseline_full, ratio)
+    # second max operation. Masked, for the reason above: the mean is
+    # over the block's LAND cells only.
+    #
+    # A block with no land cells at all gets NaN rather than a
+    # substituted value. That is deliberate and it is not a gap: a block
+    # with no land is water, water cannot be mountainous, and the relief
+    # gate reads NaN as "not mountainous" without any special-casing
+    # (NaN >= threshold is False). Substituting 0 ft would instead hand
+    # the gate a plausible-looking sea-level baseline under whatever
+    # ridge height the max filter reached from the nearest shore --
+    # exactly the false relief this change exists to remove.
+    land_cells_per_block = _block_sum_pool(land_f, ratio)
+    baseline_out = np.where(
+        land_cells_per_block > 0,
+        _block_sum_pool(np.where(land, baseline_full, 0.0), ratio)
+        / np.where(land_cells_per_block > 0, land_cells_per_block, 1.0),
+        np.nan,
+    )
 
     # Defensive final check, in addition to the per-tile validation in
     # _parse_hgt_bytes -- belt-and-suspenders. If ANY float32 value here
@@ -465,8 +538,11 @@ def compute_output_grids(
     # exactly 32767 and implausible negatives, with no exception at all).
     # Clamping explicitly here, with a loud print if it ever actually
     # triggers, converts "silent data corruption" into "impossible."
+    no_land = ~np.isfinite(baseline_out)  # legitimate: see the NaN note above
     for name, grid in (("baseline", baseline_out), ("ridge", ridge_out)):
         bad = ~np.isfinite(grid) | (grid < -32768) | (grid > 32767)
+        if name == "baseline":
+            bad &= ~no_land
         n_bad = int(np.sum(bad))
         if n_bad:
             print(
@@ -480,11 +556,17 @@ def compute_output_grids(
 
     west, south, east, north = output_bounds
     out_grid_spec = GridSpec(west=west, north=north, dx=output_resolution_deg, dy=-output_resolution_deg)
-    return (
-        np.round(baseline_out).astype(np.int16),
-        np.round(ridge_out).astype(np.int16),
-        out_grid_spec,
-    )
+
+    # int16 has no NaN, and the stored format stays int16 deliberately
+    # (see load_terrain_grid's docstring, and the file is 3.9 MB in the
+    # repo -- float32 would double it). So "no land in this block" is
+    # carried as a sentinel and turned back into NaN on load, which is
+    # the only place the grids are read.
+    baseline_int = np.round(np.where(no_land, 0.0, baseline_out)).astype(np.int16)
+    baseline_int[no_land] = NO_LAND_BASELINE_SENTINEL
+    print(f"  baseline: {int(no_land.sum())} of {no_land.size} output cells have no land at all")
+
+    return baseline_int, np.round(ridge_out).astype(np.int16), out_grid_spec
 
 
 # ---------------------------------------------------------------------------
@@ -515,8 +597,13 @@ def load_terrain_grid(path: str = "data/terrain/terrain_grid.npz") -> tuple[dict
     grid_spec = GridSpec(
         west=float(data["west"]), north=float(data["north"]), dx=float(data["dx"]), dy=float(data["dy"])
     )
+    baseline = data["baseline_elevation_ft"].astype(np.float32)
+    # NO_LAND_BASELINE_SENTINEL -> NaN, here and nowhere else, so callers
+    # only ever see a real elevation or "there is no land here". The
+    # int16 -> float32 cast is exact, so == is the right test.
+    baseline[baseline == NO_LAND_BASELINE_SENTINEL] = np.nan
     grids = {
-        "baseline_elevation_ft": data["baseline_elevation_ft"].astype(np.float32),
+        "baseline_elevation_ft": baseline,
         "ridge_elevation_ft": data["ridge_elevation_ft"].astype(np.float32),
     }
     terrain_radius_nm = float(data["terrain_radius_nm"])
