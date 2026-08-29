@@ -96,7 +96,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from scipy.ndimage import maximum_filter, uniform_filter
+from scipy.ndimage import maximum_filter1d, uniform_filter
 
 # NOTE: `requests` is deliberately NOT imported here at module level,
 # even though this module's fetching functions need it. webapp/main.py's
@@ -407,6 +407,100 @@ def _radius_deg(radius_nm: float, center_lat_deg: float) -> tuple[float, float]:
     return lat_deg, lon_deg
 
 
+def _disc_footprint(row_px: int, col_px: int) -> np.ndarray:
+    """
+    Boolean footprint for the ridge search: a circle on the GROUND, which
+    is an ELLIPSE in index space, because a lon/lat cell is not square --
+    at 45N a degree of longitude is ~0.7 of a degree of latitude, and the
+    ratio moves across CONUS. row_px and col_px are the radius in cells
+    along each axis, already computed per latitude band by _radius_deg().
+
+    WHY NOT A RECTANGLE (what this replaced): maximum_filter(size=...) is
+    a rectangle, so the search reaches sqrt(2) ~ 1.41x the nominal radius
+    into its corners and only 1.0x along the axes. At 12 nm that is a
+    17 nm reach on the diagonals. It was a deliberate v1 simplification --
+    over-generous in the safe direction for hazard detection -- and it
+    stopped being harmless once the raster closing stopped bridging
+    across valleys: with terrain-following areas, a footprint that
+    reaches further diagonally than axially prints grid-aligned boxy
+    edges straight onto the polygon.
+
+    The cost of the change is real but bounded: a rectangle is separable
+    (two 1-D running maxima, O(cells) regardless of radius) while a disc
+    is not, which is what _footprint_maximum_filter() exists to work
+    around.
+    """
+    if row_px < 1 or col_px < 1:
+        raise ValueError(f"footprint radius must be at least 1 cell, got {row_px}x{col_px}")
+    rows = np.arange(-row_px, row_px + 1)[:, None]
+    cols = np.arange(-col_px, col_px + 1)[None, :]
+    return ((rows / row_px) ** 2 + (cols / col_px) ** 2) <= 1.0
+
+
+def _footprint_maximum_filter(values: np.ndarray, footprint: np.ndarray) -> np.ndarray:
+    """
+    maximum_filter(values, footprint=footprint) for a footprint whose
+    every row is a centred contiguous run -- which a disc is.
+
+    scipy's own footprint path visits every True cell for every pixel:
+    at 12 nm on the 30 arcsec mosaic that is a ~2,550-cell footprint over
+    ~25 million cells. This decomposes the disc into its rows instead:
+    one horizontal running max per distinct half-width (O(cells) each,
+    via maximum_filter1d), then a vertical max over the shifted results.
+    Same answer -- checked against maximum_filter(footprint=...) across
+    several aspect ratios in the tests -- for ~25 passes instead of
+    ~2,550.
+
+    Measured over the full mosaic: ~9 s this way, ~2 min through scipy's
+    footprint path, ~1 s for the rectangle it replaces. All three are
+    noise against the ~90 minute tile fetch, so this is about keeping the
+    change cheap rather than about it being unaffordable otherwise.
+
+    Edges replicate, matching the mode="nearest" the rectangular filter
+    used, so the change of footprint doesn't quietly change edge
+    behaviour too.
+    """
+    half_rows = footprint.shape[0] // 2
+    half_widths = []
+    for offset, row in enumerate(footprint):
+        (indices,) = np.nonzero(row)
+        if len(indices) == 0:
+            half_widths.append(-1)                       # empty row, contributes nothing
+            continue
+        centre = footprint.shape[1] // 2
+        width = centre - indices[0]
+        if indices[-1] - centre != width or len(indices) != 2 * width + 1:
+            raise ValueError(
+                f"footprint row {offset} is not a centred contiguous run; "
+                "this filter only handles footprints like a disc or a rectangle"
+            )
+        half_widths.append(int(width))
+
+    result = np.full_like(values, -np.inf, dtype=np.float32)
+    for width in sorted({w for w in half_widths if w >= 0}):
+        row_max = maximum_filter1d(values, size=2 * width + 1, axis=1, mode="nearest")
+        for offset, this_width in enumerate(half_widths):
+            if this_width != width:
+                continue
+            shift = offset - half_rows                   # result[i] = max over rows i+shift
+            np.maximum(result, _shift_rows(row_max, shift), out=result)
+    return result
+
+
+def _shift_rows(values: np.ndarray, shift: int) -> np.ndarray:
+    """values[i + shift], with the edge row replicated (mode="nearest")."""
+    if shift == 0:
+        return values
+    shifted = np.empty_like(values)
+    if shift > 0:
+        shifted[:-shift] = values[shift:]
+        shifted[-shift:] = values[-1]
+    else:
+        shifted[-shift:] = values[:shift]
+        shifted[:-shift] = values[0]
+    return shifted
+
+
 # ---------------------------------------------------------------------------
 # Final output grids
 # ---------------------------------------------------------------------------
@@ -449,12 +543,11 @@ def compute_output_grids(
         pad_top = min(band_start, row_px)
         pad_bottom = min(n_rows - band_end, row_px)
         window = mosaic[band_start - pad_top: band_end + pad_bottom, :]
-        # NOTE: rectangular footprint (size=...), not a true circle --
-        # a deliberate v1 simplification. Slightly over-generous at the
-        # window's corners, which is the safe direction to be wrong in
-        # for a hazard-detection search (better to over-include a
-        # borderline ridge than miss one).
-        filtered = maximum_filter(window, size=(2 * row_px + 1, 2 * col_px + 1), mode="nearest")
+        # A circle on the ground, not a rectangle -- see _disc_footprint()
+        # for why the rectangle's 1.41x diagonal reach stopped being
+        # harmless. The footprint is rebuilt per band because its aspect
+        # ratio follows cos(latitude).
+        filtered = _footprint_maximum_filter(window, _disc_footprint(row_px, col_px))
         ridge_full[band_start:band_end, :] = filtered[pad_top: pad_top + (band_end - band_start), :]
 
     # LAND MASK, ON THE MOSAIC'S OWN GRID (30 arcsec, 1/120 deg) -- not

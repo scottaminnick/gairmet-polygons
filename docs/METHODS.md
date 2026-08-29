@@ -173,7 +173,8 @@ ceiling fields are AGL relative to whatever it considers the surface at
 that cell and cannot see a nearby ridge, so this needs terrain:
 
 - `ridge_elevation_ft` — highest point within `TERRAIN_RADIUS_NM`, from a
-  max filter, so it is already "the highest nearby peak", not this cell.
+  max filter over a **circular** footprint (§4.5), so it is already "the
+  highest nearby peak", not this cell.
 - `baseline_elevation_ft` — the ground here (§4.3).
 - `critical_ceiling_agl = ridge − baseline + clearance_margin_ft`, then
   NBM's five published ceiling-probability thresholds are interpolated to
@@ -261,8 +262,60 @@ covers the valley.
 **Consequence worth knowing:** the radius now smooths over *probability*
 gaps within mountainous terrain only — it can no longer merge two ranges
 across non-mountainous ground. Where probability is fairly uniform, the
-slider does very little for MTN OBSC. That is the requested behaviour, but
-it is a visible change: expect more, smaller polygons than 09Z produced.
+slider does very little for MTN OBSC. That is the requested behaviour
+(confirmed with the forecaster: areas should follow terrain rather than
+span valleys), but it is a visible change: expect more, smaller polygons
+than 09Z produced. §4.5 and §4.6 are the two follow-ons that fall out of
+it.
+
+### 4.5 The ridge search footprint is a circle
+
+`maximum_filter(size=...)` is a rectangle, so the search reached √2 ≈
+1.41× the nominal radius into its corners and 1.0× along the axes — a
+17 nm reach at a nominal 12 nm. That was a deliberate v1 simplification,
+over-generous in the safe direction for hazard detection, and it was
+invisible while the closing was bridging across valleys. With bridging
+suppressed it prints grid-aligned boxy edges directly onto
+terrain-following polygons: one peak just past the radius on the diagonal
+drags a square of cells up to ridge height.
+
+`_disc_footprint()` builds a boolean disc that is a circle **on the
+ground**, which is an ellipse in index space — a lon/lat cell is not
+square, and the aspect ratio follows cos(latitude), so the footprint is
+rebuilt per latitude band alongside the existing `_radius_deg()` call.
+
+A disc is not separable, and scipy's footprint path visits every one of
+its ~2,550 True cells per pixel. `_footprint_maximum_filter()`
+decomposes it into rows instead — one horizontal running max per distinct
+half-width, then a vertical max over the shifted results. Measured over
+the mosaic: **~9 s, against ~2 min through scipy's footprint path and
+~1 s for the rectangle**, all noise against the ~90 minute tile fetch.
+The decomposition is checked against `maximum_filter(footprint=...)` at
+six aspect ratios in `tests/test_fetch_terrain.py`.
+
+> **Baked in at fetch time.** Like `TERRAIN_RADIUS_NM`, the footprint
+> shape is applied when the terrain grid is built, so this only takes
+> effect on the next `Fetch Terrain Grid` run.
+
+### 4.6 The minimum-area filter is MTN OBSC's own
+
+`DEFAULT_MIN_AREA_SQ_MI` is now a separate constant from IFR's default,
+settable end to end (`MTN_OBSC_MIN_AREA_SQ_MI`, or the workflow input,
+both falling back to that one constant) without touching IFR.
+
+Its value is **still 3,000 sq mi and still a placeholder**, in the same
+sense as `MOUNTAINOUS_RELIEF_THRESHOLD_FT`. 3,000 is AIRMET/G-AIRMET's
+historical "widespread" criterion, adopted for IFR, and it was in place
+while the vector closing was inflating terrain into blobs. Terrain-
+following areas are long and thin — a 100 × 10 nm ridge is about 1,300
+sq mi, a 60 × 8 nm one about 640 — so at 3,000 the filter removes real
+ridges rather than noise.
+
+`scripts/mtn_obsc_area_sweep.py` reports the trade against the real
+cached terrain grid so the number can be chosen from evidence. Run it
+both ways: `uniform` probability isolates the terrain, `varying` adds a
+smooth synthetic field and shows the small-polygon population the filter
+actually meets.
 
 ---
 
@@ -347,9 +400,12 @@ with foreign navaids resolved US-first.
 
 - `MOUNTAINOUS_RELIEF_THRESHOLD_FT` and `TERRAIN_RADIUS_NM` are placeholders
   pending comparison against the legacy shapefile.
-- The terrain search footprint is rectangular, not a true circle —
-  over-generous at the corners, which is the safe direction for hazard
-  detection.
+- `DEFAULT_MIN_AREA_SQ_MI` is a placeholder awaiting a forecaster's
+  choice — see §4.6 and `scripts/mtn_obsc_area_sweep.py`.
+- The relief gate at 500 ft is permissive enough that, with uniform
+  probability, the western US comes out as a single area of over a
+  million square miles. That is `MOUNTAINOUS_RELIEF_THRESHOLD_FT`'s
+  placeholder status showing, not the area filter's.
 - Flat valley floors whose terrain search radius reaches into surrounding
   mountains (California's Central Valley) are not addressed by any
   elevation cutoff; that is a `TERRAIN_RADIUS_NM` question.

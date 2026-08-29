@@ -317,6 +317,22 @@ GAUSSIAN_SIGMA_CELLS = 0.6
 BOUNDARY_SMOOTHING_DEG = 0.02
 FINAL_SIMPLIFY_TOLERANCE_DEG = 0.05
 
+# MTN OBSC's own minimum-area filter, deliberately separate from IFR's.
+#
+# The value is still 3,000 sq mi -- AIRMET/G-AIRMET's historical
+# "widespread" criterion, which IFR uses -- but that number was never
+# chosen for this hazard, and it was set when the vector closing was
+# inflating terrain into blobs. Terrain-following areas are long and
+# thin: a 100 x 10 nm ridge is about 1,300 sq mi and does not survive
+# 3,000, so the filter is now removing real ridges rather than noise.
+#
+# THIS IS A PLACEHOLDER AWAITING A FORECASTER'S CHOICE, not a
+# meteorological judgement made here -- same status as
+# MOUNTAINOUS_RELIEF_THRESHOLD_FT. It is a separate constant so changing
+# it is one edit that cannot move IFR, and so the sweep in docs/METHODS.md
+# has something to point at.
+DEFAULT_MIN_AREA_SQ_MI = 3000.0
+
 # The forecaster's neighborhood radius, applied to the raster rather
 # than to the finished polygons. Flip to False for a one-line revert to
 # merge_nearby_polygons(), matching the pattern
@@ -701,7 +717,7 @@ def polygonize_mtn_obsc_grid(
     threshold_pct: float = 50.0,
     clearance_margin_ft: float = DEFAULT_CLEARANCE_MARGIN_FT,
     neighborhood_radius_nm: float = 50.0,
-    min_area_sq_mi: float = 3000.0,
+    min_area_sq_mi: float = DEFAULT_MIN_AREA_SQ_MI,
     terrain_radius_nm: float | None = None,
 ) -> dict:
     """
@@ -724,9 +740,13 @@ def polygonize_mtn_obsc_grid(
         One of CLEARANCE_MARGIN_OPTIONS_FT (0/500/1000/2000 ft) --
         added to the real terrain rise before interpolating probability.
         NEW parameter, not present for IFR.
-    neighborhood_radius_nm, min_area_sq_mi : float
-        Reused as-is from IFR -- same meaning, same defaults. NOT the
-        same thing as terrain_radius_nm (see module docstring).
+    neighborhood_radius_nm : float
+        Same meaning as IFR's. NOT the same thing as terrain_radius_nm
+        (see module docstring). Applied to the RASTER, with every gate
+        re-applied afterwards -- see the closing branch below.
+    min_area_sq_mi : float
+        Defaults to DEFAULT_MIN_AREA_SQ_MI, this hazard's own constant
+        rather than IFR's number -- see there for why they are separate.
     terrain_radius_nm : float, optional
         INFORMATIONAL ONLY -- whatever radius was baked into the loaded
         terrain grid at fetch time (see prepare_mtn_obsc_grid()'s
@@ -860,7 +880,7 @@ def generate_mtn_obsc_polygons(
     threshold_pct: float = 50.0,
     clearance_margin_ft: float = DEFAULT_CLEARANCE_MARGIN_FT,
     neighborhood_radius_nm: float = 50.0,
-    min_area_sq_mi: float = 3000.0,
+    min_area_sq_mi: float = DEFAULT_MIN_AREA_SQ_MI,
     terrain_grid_path: str = "data/terrain/terrain_grid.npz",
     target_resolution_deg: float = OUTPUT_RESOLUTION_DEG,
 ) -> dict:

@@ -16,6 +16,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.fetch_terrain import (
+    _disc_footprint,
+    _footprint_maximum_filter,
     _block_max_pool,
     _block_mean_pool,
     _parse_hgt_bytes,
@@ -135,6 +137,121 @@ def test_block_mean_pool_averages():
     assert pooled[0, 0] == 0.0
     assert pooled[0, 1] == 10.0  # uniform block -> mean == that value
     assert pooled[1, 0] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# The ridge search footprint.
+#
+# It used to be a rectangle -- maximum_filter(size=...) -- which reaches
+# sqrt(2) = 1.41x the nominal radius into its corners. That was a
+# deliberate v1 simplification, over-generous in the safe direction, and
+# it stopped being harmless once the raster closing stopped bridging
+# across valleys: a footprint that reaches further diagonally than
+# axially prints grid-aligned boxy edges onto terrain-following polygons.
+# ---------------------------------------------------------------------------
+
+def test_disc_footprint_is_symmetric_under_90_degree_rotation():
+    """
+    THE PROPERTY, stated the way it fails for a rectangle: rotate the
+    footprint by 90 degrees and it must be the same footprint. A square
+    grid cell is used here so "rotate by 90 degrees" is meaningful in
+    index space at all -- see the next test for the latitude-dependent
+    case, where the footprint is an ellipse in index space precisely so
+    that it stays a circle on the ground.
+
+    The rectangle it replaces passes this only when it happens to be
+    square, and fails as soon as the cell aspect ratio is not 1 -- which
+    over CONUS it never is.
+    """
+    disc = _disc_footprint(6, 6)
+    assert np.array_equal(np.rot90(disc), disc), "disc is not 90-degree rotation symmetric"
+    assert np.array_equal(disc, disc[::-1, :]), "disc is not symmetric north-south"
+    assert np.array_equal(disc, disc[:, ::-1]), "disc is not symmetric east-west"
+
+    # The control: the rectangle this replaced, at the same nominal
+    # radius but a realistic non-square cell, is NOT rotation symmetric.
+    rectangle = np.ones((2 * 6 + 1, 2 * 9 + 1), dtype=bool)
+    assert not np.array_equal(np.rot90(rectangle), rectangle), (
+        "the rectangle control is square, so it cannot demonstrate the failure this test is about"
+    )
+
+
+def test_disc_reaches_the_same_ground_distance_in_every_direction():
+    """
+    The real requirement, in ground units rather than cells: every cell
+    the footprint includes is within the nominal radius, and the reach is
+    the same in every direction to within one cell.
+
+    This is what the index-space ellipse buys -- at 45N a degree of
+    longitude is ~0.7 of a degree of latitude, so a footprint that is
+    circular in cells would be an ellipse on the ground.
+    """
+    row_px, col_px = 24, 34                     # ~12 nm at 45N on the 30 arcsec mosaic
+    disc = _disc_footprint(row_px, col_px)
+
+    rows, cols = np.nonzero(disc)
+    # Ground distance in units of the nominal radius: 1.0 is exactly on it.
+    reach = np.hypot((rows - row_px) / row_px, (cols - col_px) / col_px)
+    assert reach.max() <= 1.0 + 1e-9, f"disc reaches {reach.max():.3f}x the nominal radius"
+
+    # ...and it genuinely reaches the radius in every direction, rather
+    # than being a smaller circle inscribed in the box.
+    for name, (dr, dc) in {
+        "north": (-row_px, 0), "south": (row_px, 0),
+        "west": (0, -col_px), "east": (0, col_px),
+    }.items():
+        assert disc[row_px + dr, col_px + dc], f"disc does not reach the nominal radius {name}"
+
+    # The rectangle, measured the same way, reaches 1.41x on the diagonal.
+    rectangle_reach = np.hypot(1.0, 1.0)
+    assert rectangle_reach > 1.4, "sanity: the rectangle's corner reach is the thing being removed"
+
+
+def test_disc_filter_matches_scipy_footprint_filter():
+    """
+    _footprint_maximum_filter() decomposes the disc into rows for speed
+    (~9 s over the mosaic against ~2 min for scipy's footprint path). It
+    has to give scipy's answer exactly, at every aspect ratio, or the
+    speed is worthless.
+    """
+    from scipy.ndimage import maximum_filter
+
+    rng = np.random.default_rng(7)
+    values = (rng.random((60, 80)) * 1000).astype(np.float32)
+    for row_px, col_px in [(1, 1), (3, 3), (4, 7), (7, 4), (24, 34), (2, 9)]:
+        footprint = _disc_footprint(row_px, col_px)
+        assert np.array_equal(
+            _footprint_maximum_filter(values, footprint),
+            maximum_filter(values, footprint=footprint, mode="nearest"),
+        ), f"disc {row_px}x{col_px} disagrees with scipy"
+
+    # A rectangle goes through the same path unchanged, which is what
+    # makes the two comparable when explaining what changed.
+    rectangle = np.ones((9, 15), dtype=bool)
+    assert np.array_equal(
+        _footprint_maximum_filter(values, rectangle),
+        maximum_filter(values, footprint=rectangle, mode="nearest"),
+    )
+
+
+def test_disc_search_does_not_reach_a_peak_the_rectangle_grabbed_diagonally():
+    """
+    The behavioural consequence, end to end: a peak sitting just past the
+    radius on the diagonal is inside a rectangle's corner and outside a
+    disc. That single peak is what used to drag a square of cells up to
+    ridge height and print a boxy edge.
+    """
+    from scipy.ndimage import maximum_filter
+
+    row_px = col_px = 10
+    values = np.zeros((41, 41), dtype=np.float32)
+    values[10, 10] = 5000.0                      # 14.1 cells away on the diagonal from (20,20)
+
+    disc = _footprint_maximum_filter(values, _disc_footprint(row_px, col_px))
+    rectangle = maximum_filter(values, size=(2 * row_px + 1, 2 * col_px + 1), mode="nearest")
+
+    assert rectangle[20, 20] == 5000.0, "the rectangle should reach this peak diagonally"
+    assert disc[20, 20] == 0.0, "the disc should not reach a peak beyond its radius"
 
 
 def test_compute_output_grids_finds_synthetic_peak():

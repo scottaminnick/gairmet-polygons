@@ -58,6 +58,7 @@ from pipeline.gairmet_cycle import FORECAST_HOURS, NBM_LEAD_TIME_OFFSET_HOURS, f
 from pipeline.hazards.mtn_obsc import (
     CEILING_PROB_THRESHOLDS_FT,
     DEFAULT_CLEARANCE_MARGIN_FT,
+    DEFAULT_MIN_AREA_SQ_MI,
     polygonize_mtn_obsc_grid,
     prepare_mtn_obsc_grid,
 )
@@ -66,7 +67,11 @@ from pipeline.polygons import save_grid_cache
 THRESHOLD_PCT = float(os.environ.get("MTN_OBSC_THRESHOLD_PCT", "50.0"))
 CLEARANCE_MARGIN_FT = float(os.environ.get("MTN_OBSC_CLEARANCE_MARGIN_FT", str(DEFAULT_CLEARANCE_MARGIN_FT)))
 NEIGHBORHOOD_RADIUS_NM = float(os.environ.get("MTN_OBSC_NEIGHBORHOOD_RADIUS_NM", "50.0"))
-MIN_AREA_SQ_MI = float(os.environ.get("MTN_OBSC_MIN_AREA_SQ_MI", "3000.0"))
+# Empty string as well as unset falls back to the module default, so the
+# workflow can pass its input through raw and the default lives in exactly
+# one place (pipeline.hazards.mtn_obsc.DEFAULT_MIN_AREA_SQ_MI) rather than
+# being repeated in the YAML.
+MIN_AREA_SQ_MI = float(os.environ.get("MTN_OBSC_MIN_AREA_SQ_MI") or DEFAULT_MIN_AREA_SQ_MI)
 TERRAIN_GRID_PATH = os.environ.get("MTN_OBSC_TERRAIN_GRID_PATH", "data/terrain/terrain_grid.npz")
 
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
