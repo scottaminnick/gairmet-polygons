@@ -57,7 +57,7 @@ for name, s in AREAS.items():
     if ring[0] != ring[-1]: ring.append(ring[0])
     audit[name] = notes
     feats.append({'type':'Feature',
-                  'properties':{'area':name,'source':'legacy NMAP MTN OBSC boundary',
+                  'properties':{'name':name,'source':'legacy NMAP MTN OBSC boundary',
                                 'bearing_datum':'TRUE (unverified - see notes)'},
                   'geometry':{'type':'Polygon','coordinates':[ring]}})
 
