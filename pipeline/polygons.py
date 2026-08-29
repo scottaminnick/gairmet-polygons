@@ -93,6 +93,7 @@ NM_TO_METERS = 1852.0
 # radius in nautical miles.
 KM_PER_DEG_LAT = 111.32
 KM_PER_NM = 1.852
+SQ_MI_PER_SQ_KM = 0.386102
 
 
 def cell_dimensions_km(grid_spec: GridSpec, shape: tuple) -> tuple[float, float]:
@@ -115,6 +116,30 @@ def cell_dimensions_km(grid_spec: GridSpec, shape: tuple) -> tuple[float, float]
     dx_km = KM_PER_DEG_LAT * math.cos(math.radians(mid_lat)) * grid_spec.dx
     dy_km = KM_PER_DEG_LAT * abs(grid_spec.dy)
     return dy_km, dx_km
+
+
+def cell_areas_sq_mi(grid_spec: GridSpec, shape: tuple) -> np.ndarray:
+    """
+    Area of one grid cell in square miles, per ROW (shape (rows, 1), so it
+    broadcasts across columns) -- cells shrink toward the poles, and an
+    area measured without that is ~30% wrong across a CONUS domain's
+    latitude range.
+
+    Deliberately a cos(lat) sum rather than pyproj's geodesic area (what
+    geodesic_area_sq_mi above uses): here we are measuring a set of
+    CELLS, not a ring, and summing per-cell areas is both the natural
+    operation and the one that stays consistent when the same set is
+    later split between regions.
+
+    Unlike the radius in cell_dimensions_km(), this is evaluated per row
+    rather than once at the domain's middle latitude -- an error in a
+    cell area accumulates over millions of cells, where a radius error is
+    a one-off fuzz.
+    """
+    lats = grid_spec.north + np.arange(shape[0]) * grid_spec.dy
+    width_km = KM_PER_DEG_LAT * np.cos(np.radians(lats)) * grid_spec.dx
+    height_km = KM_PER_DEG_LAT * abs(grid_spec.dy)
+    return (width_km * height_km * SQ_MI_PER_SQ_KM)[:, None]
 
 
 def close_mask(

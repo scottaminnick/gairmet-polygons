@@ -322,6 +322,7 @@ const IFR_FIELDS = [
 
 const MTN_FIELDS = [
   { key: 'threshold', slider: 'adjust-mtn-threshold', label: 'adjust-mtn-threshold-val', prop: 'threshold_pct' },
+  { key: 'relief', slider: 'adjust-mtn-relief', label: 'adjust-mtn-relief-val', prop: 'mountainous_relief_ft' },
   { key: 'clearance', slider: 'adjust-mtn-clearance', label: 'adjust-mtn-clearance-val', prop: 'clearance_margin_ft' },
   { key: 'radius', slider: 'adjust-mtn-radius', label: 'adjust-mtn-radius-val', prop: 'neighborhood_radius_nm' },
   { key: 'minArea', slider: 'adjust-mtn-minarea', label: 'adjust-mtn-minarea-val', prop: 'min_area_sq_mi' },
@@ -350,12 +351,23 @@ function makeHourStore(fields) {
     },
 
     // Starting settings for an hour, from its scheduled snapshot's
-    // properties, falling back to the sliders for anything absent.
+    // properties.
+    //
+    // A property the snapshot does not carry falls back to the slider's
+    // DEFAULT, not to where the slider currently sits. This path is also
+    // what RESET runs through, and resetting to "wherever you left it" is
+    // not a reset. It matters for any parameter added after a snapshot was
+    // written -- mountainous_relief_ft is the first -- where every cached
+    // file predates the property and the fallback is the only branch taken.
+    // The markup's default value is the pipeline default, so this restores
+    // exactly what the scheduled run would have used.
     fromProps(props) {
       if (!props) return null;
-      const current = this.read();
       const out = {};
-      fields.forEach((f) => { out[f.key] = props[f.prop] ?? current[f.key]; });
+      fields.forEach((f) => {
+        const el = document.getElementById(f.slider);
+        out[f.key] = props[f.prop] ?? Number(el.defaultValue);
+      });
       return out;
     },
 
@@ -429,19 +441,45 @@ const debouncedRecompute = debounce(recomputeCurrentSnapshot, 300);
 //     (clearance_margin_ft), and the two hazards are genuinely tuned
 //     independently -- a forecaster dialing in an IFR threshold
 //     shouldn't silently move the mountain obscuration boundaries too. ---
+// --- The mountainous-area readout under the RELIEF slider.
+//
+//     The figure is a FeatureCollection foreign member rather than a
+//     feature property, because it describes the mask the polygons were
+//     cut from, not any one polygon -- at a relief threshold high enough
+//     to leave no mountains at all there are no features to hang it on,
+//     and that is exactly the case worth showing.
+//
+//     Absent means "this snapshot predates the measurement" (a scheduled
+//     file written by an older pipeline run), not "zero". Those are very
+//     different numbers, so an absent member shows as -- and a real zero
+//     shows as 0.
+function setMountainousArea(geojson) {
+  const el = document.getElementById('adjust-mtn-relief-area');
+  const sqMi = geojson?.mountainous_area_sq_mi;
+  if (sqMi == null) {
+    el.textContent = '--';
+    el.title = 'not measured in this snapshot -- move a slider to recompute';
+    return;
+  }
+  el.textContent = sqMi >= 1e6
+    ? `${(sqMi / 1e6).toFixed(2)}M mi\u00b2`
+    : `${Math.round(sqMi).toLocaleString()} mi\u00b2`;
+  el.title = `${Math.round(sqMi).toLocaleString()} sq mi of the grid is mountainous at this relief threshold`;
+}
+
 async function recomputeCurrentMtnSnapshot(settings = null) {
   if (currentFxx == null || !liveAdjustAvailable) return;
 
   // Slider-driven calls pass nothing and read the DOM; hour switches pass
   // that hour's stored settings explicitly.
-  const { threshold, clearance, radius, minArea } = settings || mtnHours.read();
+  const { threshold, relief, clearance, radius, minArea } = settings || mtnHours.read();
   const statusEl = document.getElementById('adjust-mtn-status');
   const fxxStr = String(currentFxx).padStart(2, '0');
 
   statusEl.textContent = 'computing...';
   try {
     const url = `/api/hazards/mtn_obsc/${fxxStr}/recompute?threshold_pct=${threshold}` +
-      `&clearance_margin_ft=${clearance}&neighborhood_radius_nm=${radius}&min_area_sq_mi=${minArea}`;
+      `&mountainous_relief_ft=${relief}&clearance_margin_ft=${clearance}&neighborhood_radius_nm=${radius}&min_area_sq_mi=${minArea}`;
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(`MTN OBSC recompute failed (${resp.status})`);
     const geojson = await resp.json();
@@ -449,6 +487,7 @@ async function recomputeCurrentMtnSnapshot(settings = null) {
     layers.mtn.clearLayers();
     layers.mtn.addData(geojson);
     document.getElementById('legend-mtn-threshold').textContent = threshold;
+    setMountainousArea(geojson);
     statusEl.textContent = '';
   } catch (err) {
     console.error('MTN OBSC recompute failed:', err);
@@ -481,6 +520,7 @@ document.getElementById('adjust-minarea').addEventListener('input', (e) => {
 //     label update, debounced recompute). ---
 [
   ['adjust-mtn-threshold', 'adjust-mtn-threshold-val'],
+  ['adjust-mtn-relief', 'adjust-mtn-relief-val'],
   ['adjust-mtn-clearance', 'adjust-mtn-clearance-val'],
   ['adjust-mtn-radius', 'adjust-mtn-radius-val'],
   ['adjust-mtn-minarea', 'adjust-mtn-minarea-val'],
@@ -590,15 +630,16 @@ async function generateMtnFiles(statusEl) {
   if (currentFxx == null || !liveAdjustAvailable) return;
 
   const threshold = document.getElementById('adjust-mtn-threshold').value;
+  const relief = document.getElementById('adjust-mtn-relief').value;
   const clearance = document.getElementById('adjust-mtn-clearance').value;
   const radius = document.getElementById('adjust-mtn-radius').value;
   const minArea = document.getElementById('adjust-mtn-minarea').value;
   const fxxStr = String(currentFxx).padStart(2, '0');
-  const baseName = `mtn_obsc_f${fxxStr}_t${threshold}_c${clearance}_r${radius}_a${minArea}`;
+  const baseName = `mtn_obsc_f${fxxStr}_t${threshold}_e${relief}_c${clearance}_r${radius}_a${minArea}`;
 
   try {
     const baseUrl = `/api/hazards/mtn_obsc/${fxxStr}/recompute?threshold_pct=${threshold}` +
-      `&clearance_margin_ft=${clearance}&neighborhood_radius_nm=${radius}&min_area_sq_mi=${minArea}`;
+      `&mountainous_relief_ft=${relief}&clearance_margin_ft=${clearance}&neighborhood_radius_nm=${radius}&min_area_sq_mi=${minArea}`;
 
     const geojsonResp = await fetch(baseUrl);
     if (!geojsonResp.ok) throw new Error(`GeoJSON fetch failed (${geojsonResp.status})`);
@@ -788,6 +829,7 @@ async function loadMtnObscSnapshot(requestedFxx) {
     const firstProps = geojson.features?.[0]?.properties;
     document.getElementById('legend-mtn-threshold').textContent =
       firstProps?.threshold_pct ?? '--';
+    setMountainousArea(geojson);
 
     // First visit to this hour (or a reset): seed its settings from the
     // scheduled snapshot and sync the sliders to what's actually on
@@ -802,6 +844,7 @@ async function loadMtnObscSnapshot(requestedFxx) {
     console.warn('Mountain Obscuration layer unavailable:', err);
     layers.mtn.clearLayers();
     document.getElementById('legend-mtn-threshold').textContent = '--';
+    setMountainousArea(null);
   }
 }
 

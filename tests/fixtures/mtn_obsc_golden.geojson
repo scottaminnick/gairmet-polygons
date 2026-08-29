@@ -1,75 +1,77 @@
 {
- "features": [
-  {
-   "geometry": {
-    "coordinates": [
-     [
-      [
-       -122.0,
-       44.483553
-      ],
-      [
-       -124.066447,
-       44.5
-      ],
-      [
-       -123.916447,
-       45.55
-      ],
-      [
-       -123.966447,
-       46.05
-      ],
-      [
-       -123.566447,
-       46.25
-      ],
-      [
-       -123.85,
-       46.233553
-      ],
-      [
-       -124.066447,
-       46.35
-      ],
-      [
-       -123.916447,
-       46.55
-      ],
-      [
-       -124.116447,
-       46.75
-      ],
-      [
-       -124.15,
-       47.016447
-      ],
-      [
-       -121.983553,
-       47.0
-      ],
-      [
-       -122.0,
-       44.483553
-      ]
-     ]
-    ],
-    "type": "Polygon"
-   },
-   "properties": {
-    "clearance_margin_ft": 500.0,
-    "forecast_hour": 6,
-    "hazard": "MTN_OBSC",
-    "min_area_sq_mi": 0.0,
-    "model_cycle": "2026-07-16T12:00:00Z",
-    "neighborhood_radius_nm": 0.0,
-    "terrain_radius_nm": null,
-    "threshold_pct": 50.0,
-    "valid_time": "2026-07-16T18:00:00Z",
-    "weather_type": "CLDS"
-   },
-   "type": "Feature"
-  }
- ],
- "type": "FeatureCollection"
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -122.0,
+              44.483553
+            ],
+            [
+              -124.066447,
+              44.5
+            ],
+            [
+              -123.916447,
+              45.55
+            ],
+            [
+              -123.966447,
+              46.05
+            ],
+            [
+              -123.566447,
+              46.25
+            ],
+            [
+              -123.85,
+              46.233553
+            ],
+            [
+              -124.066447,
+              46.35
+            ],
+            [
+              -123.916447,
+              46.55
+            ],
+            [
+              -124.116447,
+              46.75
+            ],
+            [
+              -124.15,
+              47.016447
+            ],
+            [
+              -121.983553,
+              47.0
+            ],
+            [
+              -122.0,
+              44.483553
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "hazard": "MTN_OBSC",
+        "threshold_pct": 50.0,
+        "mountainous_relief_ft": 500.0,
+        "clearance_margin_ft": 500.0,
+        "neighborhood_radius_nm": 0.0,
+        "min_area_sq_mi": 0.0,
+        "terrain_radius_nm": null,
+        "valid_time": "2026-07-16T18:00:00Z",
+        "model_cycle": "2026-07-16T12:00:00Z",
+        "forecast_hour": 6,
+        "weather_type": "CLDS"
+      }
+    }
+  ],
+  "mountainous_area_sq_mi": 17251
 }

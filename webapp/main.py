@@ -49,6 +49,13 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+
+# Imported at module level, unlike the heavy polygonize call inside the
+# endpoint: it is the DEFAULT of a query parameter, which FastAPI
+# evaluates when the route is declared. mtn_obsc.py's module-level
+# imports are all in the light dependency set, so this costs nothing the
+# app doesn't already pay.
+from pipeline.hazards.mtn_obsc import MOUNTAINOUS_RELIEF_THRESHOLD_FT
 from pydantic import BaseModel
 
 from webapp import artifacts
@@ -327,6 +334,7 @@ def get_mtn_obsc_manifest():
 def recompute_mtn_obsc_snapshot(
     fxx: str,
     threshold_pct: float = 50.0,
+    mountainous_relief_ft: float = MOUNTAINOUS_RELIEF_THRESHOLD_FT,
     clearance_margin_ft: float = 500.0,
     neighborhood_radius_nm: float = 50.0,
     min_area_sq_mi: float = 3000.0,
@@ -416,6 +424,7 @@ def recompute_mtn_obsc_snapshot(
         model_cycle,
         forecast_hour,
         threshold_pct=threshold_pct,
+        mountainous_relief_ft=mountainous_relief_ft,
         clearance_margin_ft=clearance_margin_ft,
         neighborhood_radius_nm=neighborhood_radius_nm,
         min_area_sq_mi=min_area_sq_mi,
@@ -473,6 +482,7 @@ class PgenHourSettings(BaseModel):
     min_area_sq_mi: float = 3000.0
     # Mountain Obscuration only; ignored for IFR.
     clearance_margin_ft: float = 500.0
+    mountainous_relief_ft: float = MOUNTAINOUS_RELIEF_THRESHOLD_FT
 
 
 class PgenRequest(BaseModel):
@@ -595,6 +605,7 @@ def export_mtn_obsc_pgen(request: PgenRequest):
         fc = recompute_mtn_obsc_snapshot(
             fxx="%02d" % spec.forecast_hour,
             threshold_pct=spec.threshold_pct,
+            mountainous_relief_ft=spec.mountainous_relief_ft,
             clearance_margin_ft=spec.clearance_margin_ft,
             neighborhood_radius_nm=spec.neighborhood_radius_nm,
             min_area_sq_mi=spec.min_area_sq_mi,
@@ -604,6 +615,7 @@ def export_mtn_obsc_pgen(request: PgenRequest):
             "forecast_hour": spec.forecast_hour,
             "settings": {
                 "threshold_pct": spec.threshold_pct,
+                "mountainous_relief_ft": spec.mountainous_relief_ft,
                 "clearance_margin_ft": spec.clearance_margin_ft,
                 "neighborhood_radius_nm": spec.neighborhood_radius_nm,
                 "min_area_sq_mi": spec.min_area_sq_mi,

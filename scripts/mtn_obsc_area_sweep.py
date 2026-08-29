@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-mtn_obsc_area_sweep.py -- what MTN OBSC output looks like at several
-min_area_sq_mi values, so the number can be chosen from evidence rather
-than inherited from IFR.
+mtn_obsc_area_sweep.py -- what MTN OBSC output looks like across the two
+numbers nobody has yet chosen on evidence: the minimum-area filter
+(--sweep area, the default) and the mountainous relief threshold
+(--sweep relief). Both are meteorological judgments; this script reports,
+it does not recommend.
 
 WHY THIS EXISTS: DEFAULT_MIN_AREA_SQ_MI is still 3,000 sq mi, which is
 AIRMET/G-AIRMET's historical "widespread" criterion and IFR's default. It
@@ -29,9 +31,26 @@ WHAT IS REAL HERE AND WHAT IS NOT:
     relief), so real post-regeneration counts will run a little lower
     than these.
 
+THE RELIEF SWEEP (--sweep relief): MOUNTAINOUS_RELIEF_THRESHOLD_FT is
+500 ft of ridge-minus-baseline relief, which is a low bar -- it admits
+river bluffs and the Ozark and Appalachian foothills, not just the
+terrain a pilot would call mountainous. Raising it shrinks the mask
+everywhere at once, so the whole hazard moves, which is why it gets its
+own sweep rather than a line in the area table. The mountainous-mask area
+is reported alongside the polygon numbers because it is the part that
+depends only on terrain: at --probability uniform the mask IS the output
+before the area filter, so the two columns diverge by exactly what the
+filter removes.
+
+  Reference points for the mask column: the legacy broad-brush MTN OBSC
+  areas total about 1.20M sq mi, and CONUS land is about 3.12M. A relief
+  threshold that calls 2.5M sq mi mountainous is not describing mountains.
+
 Example:
     python scripts/mtn_obsc_area_sweep.py
     python scripts/mtn_obsc_area_sweep.py --areas 250 500 1000 --radius-nm 0
+    python scripts/mtn_obsc_area_sweep.py --sweep relief
+    python scripts/mtn_obsc_area_sweep.py --sweep relief --probability varying
 """
 import argparse
 import sys
@@ -48,6 +67,7 @@ from pipeline.fetch_terrain import load_terrain_grid  # noqa: E402
 from pipeline.hazards.mtn_obsc import (  # noqa: E402
     CEILING_PROB_THRESHOLDS_FT,
     DEFAULT_MIN_AREA_SQ_MI,
+    MOUNTAINOUS_RELIEF_THRESHOLD_FT,
     polygonize_mtn_obsc_grid,
 )
 from pipeline.polygons import geodesic_area_sq_mi  # noqa: E402
@@ -56,7 +76,15 @@ from pipeline.polygons import geodesic_area_sq_mi  # noqa: E402
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--terrain", default=str(REPO_ROOT / "data" / "terrain" / "terrain_grid.npz"))
+    parser.add_argument("--sweep", choices=["area", "relief"], default="area",
+                        help="which parameter to vary: the min-area filter or the "
+                             "mountainous relief threshold")
     parser.add_argument("--areas", type=float, nargs="+", default=[500, 1000, 2000, 3000])
+    parser.add_argument("--relief-ft", type=float, nargs="+",
+                        default=[500, 1000, 1500, 2000, 3000],
+                        help="--sweep relief: the relief thresholds to report")
+    parser.add_argument("--min-area-sq-mi", type=float, default=DEFAULT_MIN_AREA_SQ_MI,
+                        help="--sweep relief: the area filter held fixed across the sweep")
     parser.add_argument("--threshold-pct", type=float, default=50.0)
     parser.add_argument("--radius-nm", type=float, default=50.0)
     parser.add_argument("--clearance-ft", type=float, default=500.0)
@@ -85,6 +113,8 @@ def main():
         print(f"probability: synthetic varying field (seed {args.seed}) -- realistic structure, not a forecast")
     print(f"settings   : threshold {args.threshold_pct:.0f}%, radius {args.radius_nm:.0f} nm, "
           f"clearance {args.clearance_ft:.0f} ft")
+    if args.sweep == "relief":
+        print(f"sweeping   : mountainous relief, min area held at {args.min_area_sq_mi:,.0f} sq mi")
     print()
 
     if args.probability == "uniform":
@@ -107,22 +137,51 @@ def main():
         }
     zeros = np.zeros(shape, dtype=np.float32)
 
-    # Polygonized once at the smallest area, then re-filtered: the filter
-    # is the last step and applies per polygon, so running the expensive
-    # part once and filtering the result gives identical answers to
-    # running the whole thing per threshold.
-    smallest = min(args.areas)
-    fc = polygonize_mtn_obsc_grid(
-        ceiling_probs, zeros, zeros, zeros, baseline, ridge, grid_spec,
-        datetime(2026, 7, 16, 12), 0,
-        threshold_pct=args.threshold_pct,
-        clearance_margin_ft=args.clearance_ft,
-        neighborhood_radius_nm=args.radius_nm,
-        min_area_sq_mi=smallest,
-    )
-    areas = sorted(
-        (geodesic_area_sq_mi(shapely_shape(f["geometry"])) for f in fc["features"]), reverse=True
-    )
+    def run(relief_ft, min_area):
+        fc = polygonize_mtn_obsc_grid(
+            ceiling_probs, zeros, zeros, zeros, baseline, ridge, grid_spec,
+            datetime(2026, 7, 16, 12), 0,
+            threshold_pct=args.threshold_pct,
+            mountainous_relief_ft=relief_ft,
+            clearance_margin_ft=args.clearance_ft,
+            neighborhood_radius_nm=args.radius_nm,
+            min_area_sq_mi=min_area,
+        )
+        polygon_areas = sorted(
+            (geodesic_area_sq_mi(shapely_shape(f["geometry"])) for f in fc["features"]),
+            reverse=True,
+        )
+        return polygon_areas, fc.get("mountainous_area_sq_mi")
+
+    if args.sweep == "relief":
+        # No shortcut here, unlike the area sweep below: relief changes the
+        # mountainous MASK, so every threshold is a different polygonization
+        # rather than a different filter over one result.
+        header = (f"{'relief':>9} {'mountainous':>13} {'polygons':>9} {'total sq mi':>13} "
+                  f"{'median':>9} {'largest':>10}")
+        print(header)
+        print("-" * len(header))
+        for relief_ft in sorted(args.relief_ft):
+            kept, mask_area = run(relief_ft, args.min_area_sq_mi)
+            marker = "  <- current default" if relief_ft == MOUNTAINOUS_RELIEF_THRESHOLD_FT else ""
+            mask_str = f"{mask_area:,.0f}" if mask_area is not None else "-"
+            if not kept:
+                print(f"{relief_ft:>8,.0f}f {mask_str:>13} {0:>9} {0:>13} {'-':>9} {'-':>10}{marker}")
+                continue
+            print(
+                f"{relief_ft:>8,.0f}f {mask_str:>13} {len(kept):>9} {sum(kept):>13,.0f} "
+                f"{np.median(kept):>9,.0f} {max(kept):>10,.0f}{marker}"
+            )
+        print()
+        print("'mountainous' is the mask area before the min-area filter; 'total sq mi' is")
+        print("after it. Legacy broad-brush MTN OBSC is ~1,200,000 sq mi; CONUS land ~3,120,000.")
+        return
+
+    # Area sweep: polygonized once at the smallest area, then re-filtered.
+    # The filter is the last step and applies per polygon, so running the
+    # expensive part once and filtering the result gives identical answers
+    # to running the whole thing per threshold.
+    areas, _ = run(MOUNTAINOUS_RELIEF_THRESHOLD_FT, min(args.areas))
 
     header = f"{'min area':>10} {'polygons':>9} {'total sq mi':>13} {'median':>9} {'largest':>10} {'smallest':>10}"
     print(header)

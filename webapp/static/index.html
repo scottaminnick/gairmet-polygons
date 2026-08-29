@@ -102,6 +102,23 @@
             <span class="mono adjust-value"><span id="adjust-mtn-threshold-val">50</span>%</span>
           </div>
           <div class="adjust-row">
+            <span class="mono adjust-label">RELIEF</span>
+            <input type="range" id="adjust-mtn-relief" min="500" max="5000" step="250" value="500"
+                   title="Ridge-minus-baseline relief a cell must have to count as mountainous." />
+            <span class="mono adjust-value"><span id="adjust-mtn-relief-val">500</span>ft</span>
+          </div>
+          <!-- How much of the CONUS the RELIEF threshold currently calls
+               mountainous. Sits under its slider rather than in the legend
+               because it is what the slider is being judged against: the
+               legacy broad-brush mountainous area is ~1.20M sq mi and CONUS
+               land is ~3.12M, so a forecaster can see immediately whether a
+               threshold is in the neighbourhood of the old product or is
+               claiming half the country. -->
+          <div class="adjust-note mono" id="adjust-mtn-relief-area-row">
+            mountainous: <span id="adjust-mtn-relief-area">--</span>
+            <span class="adjust-note-ref">legacy ~1.20M &middot; CONUS land ~3.12M</span>
+          </div>
+          <div class="adjust-row">
             <span class="mono adjust-label">CLEARANCE</span>
             <input type="range" id="adjust-mtn-clearance" min="0" max="2000" step="500" value="500" />
             <span class="mono adjust-value"><span id="adjust-mtn-clearance-val">500</span>ft</span>

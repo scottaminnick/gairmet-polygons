@@ -185,8 +185,10 @@ that cell and cannot see a nearby ridge, so this needs terrain:
 
 A cell participates only if all of these hold:
 
-1. **Relief** ≥ `MOUNTAINOUS_RELIEF_THRESHOLD_FT` (500 ft, a placeholder
-   pending comparison against the legacy shapefile).
+1. **Relief** ≥ `mountainous_relief_ft`, defaulting to
+   `MOUNTAINOUS_RELIEF_THRESHOLD_FT` (500 ft, still a placeholder — see
+   §4.7, where it is now a forecaster-settable input rather than a fixed
+   rule).
 2. **Land** — `data/boundaries/us_states.json`, a real coastline. This is
    the primary water exclusion and has to be polygon-based: smoothing
    bleeds coastal peak elevations into adjacent ocean cells, so those cells
@@ -316,6 +318,52 @@ cached terrain grid so the number can be chosen from evidence. Run it
 both ways: `uniform` probability isolates the terrain, `varying` adds a
 smooth synthetic field and shows the small-polygon population the filter
 actually meets.
+
+### 4.7 The relief threshold is forecaster-settable, and reported
+
+The relief gate decides how much ground the hazard may claim *before any
+weather is consulted*, so it sits upstream of clearance, radius and
+min-area — all three act only on terrain it has already admitted. At 500
+ft it admits river bluffs and the Ozark and Appalachian foothills, not
+just terrain a pilot would call mountainous, which is why the western US
+comes out as one million-plus-square-mile area under uniform probability.
+
+It is applied **at recompute time**, once, in `polygonize_mtn_obsc_grid`,
+against `ridge − baseline` from the cached grid. `fetch_terrain.py` never
+reads it. That separation is what makes it adjustable live at all: the
+cached grid stores ridge and baseline *elevations*, not a pre-computed
+mountainous mask, so moving the threshold does not require re-fetching
+terrain. (Contrast `TERRAIN_RADIUS_NM`, which *is* baked in at fetch time
+and therefore cannot be a slider.) `tests/test_mtn_obsc_relief.py` pins
+that, because a later change moving the gate upstream would break the
+slider with no visible symptom — the control would still move and the map
+would simply stop responding.
+
+The viewer carries it as a RELIEF slider (500–5,000 ft, 250 ft steps)
+directly above CLEARANCE, with the same per-hour state and reset
+semantics as every other slider. Beside it is the **mountainous area at
+the current threshold**, in square miles, measured after all four gates
+and returned as a `mountainous_area_sq_mi` foreign member on the
+FeatureCollection. It is a collection member rather than a feature
+property because it describes the mask the polygons were cut from: at a
+threshold high enough to leave no mountains there are no features to hang
+it on, and that is exactly the reading worth showing.
+
+Two reference points make the figure legible: the legacy broad-brush
+MTN OBSC areas total about **1.20M sq mi**, and CONUS land is about
+**3.12M**. Both appear next to the number in the panel.
+
+`scripts/mtn_obsc_area_sweep.py --sweep relief` reports mask area,
+polygon count, total area, median and largest across a range of
+thresholds. **Choosing the value is a meteorological judgment and is
+deliberately left open.**
+
+One consequence worth knowing: no snapshot written before this change
+carries `mountainous_relief_ft`, and the viewer re-seeds an hour's
+sliders from its snapshot's properties. `makeHourStore.fromProps` now
+falls back to the slider's *default* rather than its current value for an
+absent property, so RESET restores 500 ft instead of silently leaving the
+slider where the forecaster put it.
 
 ---
 
@@ -457,13 +505,16 @@ contract a restructure breaks quietest.
 ## 9. Known limits
 
 - `MOUNTAINOUS_RELIEF_THRESHOLD_FT` and `TERRAIN_RADIUS_NM` are placeholders
-  pending comparison against the legacy shapefile.
+  pending comparison against the legacy shapefile. Relief is now at least
+  visible and adjustable (§4.7); `TERRAIN_RADIUS_NM` is not, being baked
+  into the cached grid at fetch time.
 - `DEFAULT_MIN_AREA_SQ_MI` is a placeholder awaiting a forecaster's
   choice — see §4.6 and `scripts/mtn_obsc_area_sweep.py`.
 - The relief gate at 500 ft is permissive enough that, with uniform
   probability, the western US comes out as a single area of over a
   million square miles. That is `MOUNTAINOUS_RELIEF_THRESHOLD_FT`'s
-  placeholder status showing, not the area filter's.
+  placeholder status showing, not the area filter's — see §4.7 for the
+  slider and the numbers now available for choosing it.
 - Flat valley floors whose terrain search radius reaches into surrounding
   mountains (California's Central Valley) are not addressed by any
   elevation cutoff; that is a `TERRAIN_RADIUS_NM` question.

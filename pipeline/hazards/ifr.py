@@ -144,6 +144,7 @@ from pipeline.polygons import (
     GridSpec,
     KM_PER_DEG_LAT,
     KM_PER_NM,
+    cell_areas_sq_mi,
     cell_dimensions_km,
     close_mask,
     filter_polygons_by_area,
@@ -307,10 +308,8 @@ CONTOUR_RESOLUTION_DEG = 0.1
 # a sliver is a real geometry defect of its own, just a less visible one.
 ADJACENT_REGION_EROSION_DEG = 0.0
 
-# KM_PER_DEG_LAT / KM_PER_NM are imported from pipeline.polygons, which
-# is where the cell sizing and the raster closing that use them now live
-# (shared with MTN OBSC).
-SQ_MI_PER_SQ_KM = 0.386102
+# KM_PER_DEG_LAT / KM_PER_NM and the cell sizing and area helpers that use
+# them live in pipeline.polygons, shared with MTN OBSC.
 
 
 def fetch_probability_grid(
@@ -719,23 +718,9 @@ def _build_class_grid(
 _cell_dimensions_km = cell_dimensions_km
 
 
-def _cell_areas_sq_mi(grid_spec, shape: tuple) -> np.ndarray:
-    """
-    Area of one grid cell in square miles, per ROW (shape (rows, 1), so
-    it broadcasts across columns) -- cells shrink toward the poles, and
-    an area filter that ignored that would be ~30% wrong across a CONUS
-    domain's latitude range.
-
-    Deliberately a cos(lat) sum rather than pyproj's geodesic area (what
-    pipeline.polygons.geodesic_area_sq_mi uses for v1): here we're
-    measuring a set of CELLS, not a ring, and summing per-cell areas is
-    both the natural operation and the one that stays consistent when
-    the same set is later split between regions.
-    """
-    lats = grid_spec.north + np.arange(shape[0]) * grid_spec.dy
-    width_km = KM_PER_DEG_LAT * np.cos(np.radians(lats)) * grid_spec.dx
-    height_km = KM_PER_DEG_LAT * abs(grid_spec.dy)
-    return (width_km * height_km * SQ_MI_PER_SQ_KM)[:, None]
+# Moved to pipeline.polygons alongside the closing and the cell sizing --
+# MTN OBSC needs the same areas to report its mountainous-mask total.
+_cell_areas_sq_mi = cell_areas_sq_mi
 
 
 def _close_envelope(

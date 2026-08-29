@@ -340,6 +340,31 @@ html, body {
   text-align: right;
 }
 
+/* The mountainous-area readout under RELIEF. Indented to the slider
+   column so it reads as belonging to that row rather than as a new
+   control, and pulled up against it since the row above owns the
+   bottom margin. */
+.adjust-note {
+  /* Tied to the slider above by a rule rather than by indentation: the
+     rail is ~230px wide and a 70px indent wrapped the reference line
+     three ways. */
+  margin: -4px 0 10px 0;
+  padding-left: 6px;
+  border-left: 2px solid var(--panel-border);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.adjust-note #adjust-mtn-relief-area {
+  color: var(--accent-ifr);
+}
+
+.adjust-note-ref {
+  display: block;
+  font-size: 9px;
+  opacity: 0.7;
+}
+
 .adjust-row input[type="range"] {
   width: 100%;
   accent-color: var(--accent-ifr);

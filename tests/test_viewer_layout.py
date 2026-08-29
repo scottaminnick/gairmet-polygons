@@ -64,6 +64,7 @@ def test_slider_and_reset_ids_survived_the_restructure():
         "adjust-minarea", "adjust-minarea-val",
         # MTN_FIELDS
         "adjust-mtn-threshold", "adjust-mtn-threshold-val",
+        "adjust-mtn-relief", "adjust-mtn-relief-val", "adjust-mtn-relief-area",
         "adjust-mtn-clearance", "adjust-mtn-clearance-val",
         "adjust-mtn-radius", "adjust-mtn-radius-val",
         "adjust-mtn-minarea", "adjust-mtn-minarea-val",
@@ -207,7 +208,149 @@ def test_panel_structure_is_documented_for_the_next_five_hazards():
     assert "HAZARD_PANELS" in methods, "docs/METHODS.md should name the list a new hazard is added to"
 
 
+# --- The mountainous relief threshold -------------------------------------
+#     A slider like the others, but the only one whose effect a forecaster
+#     cannot judge from the map alone -- it changes how much of the CONUS
+#     the hazard is allowed to claim before any weather is consulted -- so
+#     the panel carries a live figure next to it.
+
+def test_relief_slider_covers_the_requested_range_at_its_current_default():
+    slider = re.search(r'<input type="range" id="adjust-mtn-relief"[^>]*>', HTML)
+    assert slider, "the RELIEF slider is missing from the MTN OBSC adjustor"
+    attrs = dict(re.findall(r'(\w+)="([^"]+)"', slider.group(0)))
+    assert (attrs["min"], attrs["max"], attrs["step"]) == ("500", "5000", "250")
+    assert attrs["value"] == "500", (
+        "RELIEF must default to the pipeline's current 500 ft so nothing moves "
+        "until a forecaster moves it"
+    )
+
+
+def test_relief_sits_directly_above_clearance():
+    """
+    Panel order is upstream-first: relief decides what counts as
+    mountainous at all, and clearance, radius and min-area act on what it
+    admits. Reading them out of that order invites tuning clearance
+    against a mask that is itself wrong.
+    """
+    body = _hazard_body("mtn")
+    order = re.findall(r'id="adjust-mtn-(threshold|relief|clearance|radius|minarea)"', body)
+    assert order == ["threshold", "relief", "clearance", "radius", "minarea"], order
+
+
+def test_the_mountainous_area_figure_is_next_to_the_slider_with_its_references():
+    """
+    The number is meaningless without something to compare it against, so
+    the legacy broad-brush total and CONUS land area travel with it.
+    """
+    body = _hazard_body("mtn")
+    relief_row = body.index('id="adjust-mtn-relief"')
+    area_row = body.index('id="adjust-mtn-relief-area"')
+    clearance_row = body.index('id="adjust-mtn-clearance"')
+    assert relief_row < area_row < clearance_row, "the area figure is not attached to RELIEF"
+    assert "1.20M" in body and "3.12M" in body, (
+        "the area figure should carry its reference points (legacy ~1.20M, CONUS land ~3.12M)"
+    )
+
+
+def test_relief_is_wired_through_the_same_machinery_as_every_other_slider():
+    """
+    Per-hour state, live recompute and both resets are all driven off
+    MTN_FIELDS and the shared slider wiring, so being in those two lists
+    IS being wired up -- there is no separate path to forget.
+    """
+    fields = _slice_between(JS, "const MTN_FIELDS = [", "];")
+    assert "'adjust-mtn-relief'" in fields, "RELIEF is not in MTN_FIELDS (no per-hour state, no reset)"
+    assert "'mountainous_relief_ft'" in fields, "RELIEF is not mapped to its GeoJSON property"
+    assert "['adjust-mtn-relief', 'adjust-mtn-relief-val']" in JS, "the RELIEF slider has no input handler"
+    assert "mountainous_relief_ft=${relief}" in JS, "recompute does not send the relief threshold"
+
+
+def test_an_absent_property_resets_to_the_default_not_to_the_current_slider():
+    """
+    fromProps is the reset path. Every cached snapshot predates
+    mountainous_relief_ft, so its fallback branch is the only one relief
+    takes -- and falling back to the slider's current value would make
+    RESET a no-op for it.
+    """
+    from_props = _slice_between(JS, "fromProps(props) {", "\n    },")
+    assert "defaultValue" in from_props, (
+        "fromProps falls back to the live slider value, so RESET cannot restore a "
+        "parameter the snapshot does not carry"
+    )
+    assert "this.read()" not in from_props
+
+
+def test_markup_defaults_match_the_route_defaults_that_reset_relies_on():
+    """
+    fromProps resets to the markup's default value, which is only correct
+    while that value IS the pipeline default. Read out of webapp/main.py's
+    source rather than by importing it, so the check does not drag FastAPI
+    into the test run.
+    """
+    import ast
+
+    repo_root = Path(__file__).resolve().parent.parent
+    main_py = (repo_root / "webapp" / "main.py").read_text()
+    tree = ast.parse(main_py)
+
+    # A route default may be a literal or an imported pipeline constant
+    # (mountainous_relief_ft is the latter). Resolve names against the
+    # module they come from, so the check follows the value rather than
+    # quietly skipping the one parameter that is not a literal.
+    def resolve(node):
+        if isinstance(node, ast.Constant):
+            return float(node.value) if isinstance(node.value, (int, float)) else None
+        if isinstance(node, ast.Name):
+            return _module_constant(repo_root, node.id)
+        return None
+
+    routes = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name not in ("recompute_ifr_snapshot", "recompute_mtn_obsc_snapshot"):
+            continue
+        args = node.args
+        positional = args.posonlyargs + args.args
+        pairs = list(zip(positional[len(positional) - len(args.defaults):], args.defaults))
+        pairs += [(a, d) for a, d in zip(args.kwonlyargs, args.kw_defaults) if d is not None]
+        routes[node.name] = {arg.arg: resolve(default) for arg, default in pairs}
+
+    markup = {
+        re.search(r'id="([^"]+)"', tag).group(1): float(re.search(r'value="([^"]+)"', tag).group(1))
+        for tag in re.findall(r'<input type="range"[^>]*>', HTML)
+    }
+    expected = {
+        "recompute_ifr_snapshot": {
+            "adjust-threshold": "threshold_pct", "adjust-radius": "neighborhood_radius_nm",
+            "adjust-minarea": "min_area_sq_mi"},
+        "recompute_mtn_obsc_snapshot": {
+            "adjust-mtn-threshold": "threshold_pct", "adjust-mtn-relief": "mountainous_relief_ft",
+            "adjust-mtn-clearance": "clearance_margin_ft",
+            "adjust-mtn-radius": "neighborhood_radius_nm", "adjust-mtn-minarea": "min_area_sq_mi"},
+    }
+    for route, mapping in expected.items():
+        for slider, param in mapping.items():
+            assert param in routes[route], f"{route} lost {param}"
+            assert markup[slider] == routes[route][param], (
+                f"{slider} defaults to {markup[slider]} but {route}'s {param} "
+                f"defaults to {routes[route][param]}; RESET would restore the wrong value"
+            )
+
+
 # --- helpers ---------------------------------------------------------------
+
+def _module_constant(repo_root, name):
+    """The value of a module-level `NAME = <number>` anywhere in pipeline/."""
+    import ast
+
+    for path in (repo_root / "pipeline").rglob("*.py"):
+        tree = ast.parse(path.read_text())
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+                if any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+                    return float(node.value.value)
+    raise AssertionError(f"could not resolve the constant {name}")
 
 def _slice_between(text, start_marker, end_marker):
     start = text.index(start_marker)

@@ -221,6 +221,7 @@ from pipeline.hazards.ifr import (
 )
 from pipeline.polygons import (
     GridSpec,
+    cell_areas_sq_mi,
     cell_dimensions_km,
     close_mask,
     filter_polygons_by_area,
@@ -715,6 +716,7 @@ def polygonize_mtn_obsc_grid(
     date: datetime,
     fxx: int,
     threshold_pct: float = 50.0,
+    mountainous_relief_ft: float = MOUNTAINOUS_RELIEF_THRESHOLD_FT,
     clearance_margin_ft: float = DEFAULT_CLEARANCE_MARGIN_FT,
     neighborhood_radius_nm: float = 50.0,
     min_area_sq_mi: float = DEFAULT_MIN_AREA_SQ_MI,
@@ -736,6 +738,17 @@ def polygonize_mtn_obsc_grid(
     threshold_pct : float
         Probability (0-100) above which a cell counts as "hazard
         present." Forecaster-adjustable, same meaning as IFR's.
+    mountainous_relief_ft : float
+        Local relief (ridge minus baseline) at or above which a cell
+        counts as mountainous. Defaults to
+        MOUNTAINOUS_RELIEF_THRESHOLD_FT; a forecaster-adjustable input
+        rather than a fixed rule, because this is THE binding constraint
+        on how much ground the hazard claims and it has never been
+        calibrated -- see that constant's docstring.
+
+        Applied here at recompute time against the cached terrain grid,
+        NOT baked in at fetch time like terrain_radius_nm, which is what
+        makes it adjustable live at all.
     clearance_margin_ft : float
         One of CLEARANCE_MARGIN_OPTIONS_FT (0/500/1000/2000 ft) --
         added to the real terrain rise before interpolating probability.
@@ -759,7 +772,7 @@ def polygonize_mtn_obsc_grid(
     dict (GeoJSON FeatureCollection)
     """
     terrain_relief_ft = ridge_elevation_ft - baseline_elevation_ft
-    mountainous_mask = terrain_relief_ft >= MOUNTAINOUS_RELIEF_THRESHOLD_FT
+    mountainous_mask = terrain_relief_ft >= mountainous_relief_ft
 
     # THE water exclusion: a real land polygon following the actual
     # coastline. Necessary because the relief check alone can't tell
@@ -793,6 +806,16 @@ def polygonize_mtn_obsc_grid(
     # point of using NaN rather than a substituted elevation -- so the
     # only thing left to do is keep the NaN from travelling into the
     # interpolation, whose result for them is discarded anyway.
+    # THE NUMBER CALIBRATION NEEDS. mountainous_relief_ft decides how much
+    # of CONUS this hazard can claim before any weather is consulted, and
+    # without seeing the total there is no way to judge a threshold except
+    # by eye. Measured AFTER every gate, because that is the ground that
+    # actually reaches the polygonizer. Reported on the FeatureCollection
+    # (see below) so the viewer can show it beside the slider.
+    mountainous_area_sq_mi = float(
+        (cell_areas_sq_mi(grid_spec, mountainous_mask.shape) * mountainous_mask).sum()
+    )
+
     critical_ceiling_agl = np.nan_to_num(terrain_relief_ft, nan=0.0) + clearance_margin_ft
     derived_probability, _is_extrapolated = interpolate_terrain_relative_probability(
         critical_ceiling_agl, ceiling_prob_grids
@@ -857,11 +880,12 @@ def polygonize_mtn_obsc_grid(
         all_per_polygon_properties.append({"weather_type": weather_type})
 
     valid_time = date + timedelta(hours=fxx)
-    return polygons_to_feature_collection(
+    feature_collection = polygons_to_feature_collection(
         polygons,
         properties={
             "hazard": "MTN_OBSC",
             "threshold_pct": threshold_pct,
+            "mountainous_relief_ft": mountainous_relief_ft,
             "clearance_margin_ft": clearance_margin_ft,
             "neighborhood_radius_nm": neighborhood_radius_nm,
             "min_area_sq_mi": min_area_sq_mi,
@@ -873,11 +897,19 @@ def polygonize_mtn_obsc_grid(
         per_polygon_properties=all_per_polygon_properties,
     )
 
+    # A GeoJSON foreign member rather than a per-feature property: it
+    # describes the whole mask, not any one polygon, and it has to survive
+    # a quiet cycle that produces no features at all -- which is exactly
+    # when a forecaster raising the threshold most wants to see it.
+    feature_collection["mountainous_area_sq_mi"] = round(mountainous_area_sq_mi)
+    return feature_collection
+
 
 def generate_mtn_obsc_polygons(
     date: datetime,
     fxx: int,
     threshold_pct: float = 50.0,
+    mountainous_relief_ft: float = MOUNTAINOUS_RELIEF_THRESHOLD_FT,
     clearance_margin_ft: float = DEFAULT_CLEARANCE_MARGIN_FT,
     neighborhood_radius_nm: float = 50.0,
     min_area_sq_mi: float = DEFAULT_MIN_AREA_SQ_MI,
@@ -902,6 +934,7 @@ def generate_mtn_obsc_polygons(
         date,
         fxx,
         threshold_pct=threshold_pct,
+        mountainous_relief_ft=mountainous_relief_ft,
         clearance_margin_ft=clearance_margin_ft,
         neighborhood_radius_nm=neighborhood_radius_nm,
         min_area_sq_mi=min_area_sq_mi,
