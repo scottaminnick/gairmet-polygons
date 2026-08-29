@@ -9,8 +9,8 @@ untracked now and is empty in CI.
 
 Deliberately no fastapi TestClient: that needs httpx, which is NOT in
 requirements.txt, and this suite installs only the deployed (light) set
--- see tests.yml. These call the fetch layer directly instead, which is
-where all the logic worth protecting lives anyway.
+-- see .github/workflows/tests.yml. These call the fetch layer directly
+instead, which is where all the logic worth protecting lives anyway.
 """
 import http.server
 import importlib
