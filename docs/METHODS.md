@@ -396,7 +396,65 @@ with foreign navaids resolved US-first.
 
 ---
 
-## 8. Known limits
+## 8. Viewer panel structure
+
+The right rail is `webapp/static/index.html` plus the accordion and export
+wiring in `map.js`. It is written for **seven hazards, not two** — icing,
+turbulence, LLWS, surface winds and freezing levels are planned — so the
+shape matters more than it would for a two-panel rail.
+
+```
+LAYERS
+  [x] IFR CIG/VIS        ▸     hazard row: expandable
+        ADJUST (LIVE)          ← sliders + RESET THIS HOUR / RESET ALL HOURS
+  [x] MTN OBSC           ▸
+  [x] STATE BOUNDARIES         non-hazard row: no adjustors, no disclosure
+  [ ] ARTCC BOUNDARIES
+  [ ] LEGACY MTN OBSC
+EXPORT
+  hazards: [x] IFR  [x] MTN OBSC
+  fcst hrs: F00..F12           (disabled — per-hour split not built)
+  GENERATE GEOJSON + XML (THIS HOUR)
+  DOWNLOAD PGEN (ALL HOURS)
+```
+
+**Adding a hazard** is a row in `index.html` and an entry in
+`HAZARD_PANELS` (accordion) and `EXPORT_HAZARDS` (export panel) in
+`map.js`. Nothing else in the rail is per-hazard.
+
+Four rules the structure depends on:
+
+- **The checkbox and the expander are siblings**, never nested. The
+  checkbox is visibility only and the expander is expansion only, so a
+  hazard can be visible and collapsed or hidden and expanded. Nesting an
+  `<input>` inside the expander button would make one click do both, and
+  is invalid HTML besides.
+- **One row open at a time.** With seven hazards, several open adjustors
+  would put the rail back to occupying a third of the screen, which is
+  what this replaced. All collapsed on load.
+- **Only hazard rows get a disclosure triangle**, so "this row has
+  adjustors" is visible without clicking.
+- **Exports are panel scope, resets are adjustor scope.** RESET THIS HOUR
+  and RESET ALL HOURS undo what the sliders above them did, so they stay
+  in the row; GENERATE and PGEN act on the cycle, so they live once in
+  EXPORT rather than repeated per hazard.
+
+The hour checkboxes are present but **disabled**: per-hour file splitting
+isn't built, GENERATE exports the hour on screen and PGEN covers all five,
+exactly as they did before. A control that silently ignored its own state
+would be worse than one that says it isn't ready.
+
+The whole rail collapses to an icon strip. That state is **session-only
+and lives in the DOM** — this environment has no `localStorage`, so a
+reload comes back expanded, deliberately.
+
+`tests/test_viewer_layout.py` pins all of this without a browser: chiefly
+that every id `map.js` reaches for exists in the markup, which is the
+contract a restructure breaks quietest.
+
+---
+
+## 9. Known limits
 
 - `MOUNTAINOUS_RELIEF_THRESHOLD_FT` and `TERRAIN_RADIUS_NM` are placeholders
   pending comparison against the legacy shapefile.

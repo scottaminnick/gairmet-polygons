@@ -26,89 +26,158 @@
   </div>
 </div>
 
-<div class="panel-stack panel-stack-top-right">
-  <div class="panel">
-    <div class="panel-title">LAYERS</div>
-    <label class="layer-toggle">
-      <input type="checkbox" id="toggle-ifr" checked />
-      <span class="swatch swatch-ifr"></span>
-      <span class="mono">IFR CIG/VIS</span>
-    </label>
-    <label class="layer-toggle">
-      <input type="checkbox" id="toggle-mtn" checked />
-      <span class="swatch swatch-mtn"></span>
-      <span class="mono">MTN OBSC</span>
-    </label>
-    <label class="layer-toggle">
-      <input type="checkbox" id="toggle-states" checked />
-      <span class="swatch swatch-states"></span>
-      <span class="mono">STATE BOUNDARIES</span>
-    </label>
-    <label class="layer-toggle">
-      <input type="checkbox" id="toggle-artcc" />
-      <span class="swatch swatch-artcc"></span>
-      <span class="mono">ARTCC BOUNDARIES</span>
-    </label>
-    <!-- Comparison overlay, off by default. Display only: it feeds no
-         gate, mask or filter -- see data/boundaries/LEGACY_MTNOBSC.md. -->
-    <label class="layer-toggle">
-      <input type="checkbox" id="toggle-legacy-mtnobsc" />
-      <span class="swatch swatch-legacy"></span>
-      <span class="mono">LEGACY MTN OBSC</span>
-    </label>
+<!-- RIGHT RAIL.
+     One accordion row per hazard inside LAYERS, plus a single EXPORT
+     panel. The pattern is meant to hold seven hazards, not two: adding
+     one is a row here and an entry in HAZARD_PANELS in map.js. See
+     docs/METHODS.md section 9. -->
+<div class="panel-stack panel-stack-top-right" id="right-rail">
+
+  <!-- Collapsed, this strip is all that remains of the rail. -->
+  <div class="rail-strip" id="rail-strip" hidden>
+    <button type="button" class="rail-btn" id="rail-expand" title="Show panels" aria-label="Show panels">&#9668;</button>
+    <button type="button" class="rail-btn rail-icon" data-scroll-to="layers-panel" title="Layers">&#9776;</button>
+    <button type="button" class="rail-btn rail-icon" data-scroll-to="export-panel" title="Export">&#8595;</button>
   </div>
 
-  <div class="panel" id="adjust-panel">
-    <div class="panel-title">ADJUST IFR (LIVE) <span id="adjust-status" class="mono"></span></div>
-    <div class="adjust-row">
-      <span class="mono adjust-label">THRESH</span>
-      <input type="range" id="adjust-threshold" min="10" max="90" step="5" value="50" />
-      <span class="mono adjust-value"><span id="adjust-threshold-val">50</span>%</span>
-    </div>
-    <div class="adjust-row">
-      <span class="mono adjust-label">RADIUS</span>
-      <input type="range" id="adjust-radius" min="0" max="150" step="5" value="50" />
-      <span class="mono adjust-value"><span id="adjust-radius-val">50</span>nm</span>
-    </div>
-    <div class="adjust-row">
-      <span class="mono adjust-label">MIN AREA</span>
-      <input type="range" id="adjust-minarea" min="0" max="10000" step="250" value="3000" />
-      <span class="mono adjust-value"><span id="adjust-minarea-val">3000</span>mi&sup2;</span>
-    </div>
-    <button id="adjust-reset" class="fxx-btn adjust-reset-btn">RESET THIS HOUR</button>
-    <button id="adjust-reset-all" class="fxx-btn adjust-reset-btn">RESET ALL HOURS</button>
-    <button id="adjust-generate" class="fxx-btn adjust-generate-btn">GENERATE GEOJSON + XML</button>
-    <button id="adjust-pgen" class="fxx-btn adjust-pgen-btn">DOWNLOAD PGEN (ALL HOURS)</button>
-    <span id="generate-status" class="mono generate-status"></span>
-  </div>
+  <div class="rail-panels" id="rail-panels">
+    <div class="panel" id="layers-panel">
+      <div class="panel-title">
+        LAYERS
+        <button type="button" class="rail-btn rail-collapse" id="rail-collapse" title="Collapse panels" aria-label="Collapse panels">&#9658;</button>
+      </div>
 
-  <div class="panel" id="adjust-mtn-panel">
-    <div class="panel-title">ADJUST MTN OBSC (LIVE) <span id="adjust-mtn-status" class="mono"></span></div>
-    <div class="adjust-row">
-      <span class="mono adjust-label">THRESH</span>
-      <input type="range" id="adjust-mtn-threshold" min="10" max="90" step="5" value="50" />
-      <span class="mono adjust-value"><span id="adjust-mtn-threshold-val">50</span>%</span>
+      <!-- HAZARD ROW: expandable. The checkbox is a sibling of the
+           expander, not inside it, so toggling visibility never expands
+           and expanding never toggles visibility. -->
+      <div class="layer-row" data-hazard="ifr">
+        <div class="layer-head">
+          <input type="checkbox" id="toggle-ifr" checked aria-label="Show IFR layer" />
+          <button type="button" class="layer-expand" id="expand-ifr"
+                  aria-expanded="false" aria-controls="adjust-ifr-body">
+            <span class="swatch swatch-ifr"></span>
+            <span class="mono">IFR CIG/VIS</span>
+            <span class="disclosure" aria-hidden="true">&#9656;</span>
+          </button>
+        </div>
+        <div class="layer-body" id="adjust-ifr-body" hidden>
+          <div class="body-title">ADJUST (LIVE) <span id="adjust-status" class="mono"></span></div>
+          <div class="adjust-row">
+            <span class="mono adjust-label">THRESH</span>
+            <input type="range" id="adjust-threshold" min="10" max="90" step="5" value="50" />
+            <span class="mono adjust-value"><span id="adjust-threshold-val">50</span>%</span>
+          </div>
+          <div class="adjust-row">
+            <span class="mono adjust-label">RADIUS</span>
+            <input type="range" id="adjust-radius" min="0" max="150" step="5" value="50" />
+            <span class="mono adjust-value"><span id="adjust-radius-val">50</span>nm</span>
+          </div>
+          <div class="adjust-row">
+            <span class="mono adjust-label">MIN AREA</span>
+            <input type="range" id="adjust-minarea" min="0" max="10000" step="250" value="3000" />
+            <span class="mono adjust-value"><span id="adjust-minarea-val">3000</span>mi&sup2;</span>
+          </div>
+          <!-- Resets are adjustor scope, not export scope: they undo what
+               these sliders did, so they stay with the sliders. -->
+          <button id="adjust-reset" class="fxx-btn adjust-reset-btn">RESET THIS HOUR</button>
+          <button id="adjust-reset-all" class="fxx-btn adjust-reset-btn">RESET ALL HOURS</button>
+        </div>
+      </div>
+
+      <div class="layer-row" data-hazard="mtn">
+        <div class="layer-head">
+          <input type="checkbox" id="toggle-mtn" checked aria-label="Show MTN OBSC layer" />
+          <button type="button" class="layer-expand" id="expand-mtn"
+                  aria-expanded="false" aria-controls="adjust-mtn-body">
+            <span class="swatch swatch-mtn"></span>
+            <span class="mono">MTN OBSC</span>
+            <span class="disclosure" aria-hidden="true">&#9656;</span>
+          </button>
+        </div>
+        <div class="layer-body" id="adjust-mtn-body" hidden>
+          <div class="body-title">ADJUST (LIVE) <span id="adjust-mtn-status" class="mono"></span></div>
+          <div class="adjust-row">
+            <span class="mono adjust-label">THRESH</span>
+            <input type="range" id="adjust-mtn-threshold" min="10" max="90" step="5" value="50" />
+            <span class="mono adjust-value"><span id="adjust-mtn-threshold-val">50</span>%</span>
+          </div>
+          <div class="adjust-row">
+            <span class="mono adjust-label">CLEARANCE</span>
+            <input type="range" id="adjust-mtn-clearance" min="0" max="2000" step="500" value="500" />
+            <span class="mono adjust-value"><span id="adjust-mtn-clearance-val">500</span>ft</span>
+          </div>
+          <div class="adjust-row">
+            <span class="mono adjust-label">RADIUS</span>
+            <input type="range" id="adjust-mtn-radius" min="0" max="150" step="5" value="50" />
+            <span class="mono adjust-value"><span id="adjust-mtn-radius-val">50</span>nm</span>
+          </div>
+          <div class="adjust-row">
+            <span class="mono adjust-label">MIN AREA</span>
+            <input type="range" id="adjust-mtn-minarea" min="0" max="10000" step="250" value="3000" />
+            <span class="mono adjust-value"><span id="adjust-mtn-minarea-val">3000</span>mi&sup2;</span>
+          </div>
+          <button id="adjust-mtn-reset" class="fxx-btn adjust-reset-btn">RESET THIS HOUR</button>
+          <button id="adjust-mtn-reset-all" class="fxx-btn adjust-reset-btn">RESET ALL HOURS</button>
+        </div>
+      </div>
+
+      <!-- NON-HAZARD ROWS: no adjustors, so no disclosure and no
+           expansion. Still plain labels, so a click anywhere on the row
+           toggles visibility exactly as it always has. -->
+      <label class="layer-row layer-row-static layer-toggle">
+        <input type="checkbox" id="toggle-states" checked />
+        <span class="swatch swatch-states"></span>
+        <span class="mono">STATE BOUNDARIES</span>
+      </label>
+      <label class="layer-row layer-row-static layer-toggle">
+        <input type="checkbox" id="toggle-artcc" />
+        <span class="swatch swatch-artcc"></span>
+        <span class="mono">ARTCC BOUNDARIES</span>
+      </label>
+      <!-- Comparison overlay, off by default. Display only: it feeds no
+           gate, mask or filter -- see data/boundaries/LEGACY_MTNOBSC.md. -->
+      <label class="layer-row layer-row-static layer-toggle">
+        <input type="checkbox" id="toggle-legacy-mtnobsc" />
+        <span class="swatch swatch-legacy"></span>
+        <span class="mono">LEGACY MTN OBSC</span>
+      </label>
     </div>
-    <div class="adjust-row">
-      <span class="mono adjust-label">CLEARANCE</span>
-      <input type="range" id="adjust-mtn-clearance" min="0" max="2000" step="500" value="500" />
-      <span class="mono adjust-value"><span id="adjust-mtn-clearance-val">500</span>ft</span>
+
+    <!-- EXPORT: one panel for every hazard, rather than a pair of buttons
+         repeated inside each adjustor. -->
+    <div class="panel" id="export-panel">
+      <div class="panel-title">EXPORT <span id="export-status" class="mono"></span></div>
+
+      <div class="export-group">
+        <div class="export-group-title mono">HAZARDS</div>
+        <label class="export-check"><input type="checkbox" id="export-hazard-ifr" checked /><span class="mono">IFR</span></label>
+        <label class="export-check"><input type="checkbox" id="export-hazard-mtn" checked /><span class="mono">MTN OBSC</span></label>
+      </div>
+
+      <!-- Present but DISABLED: per-hour file splitting is not built, and
+           a checkbox whose state is silently ignored is worse than one
+           that says it isn't ready. GENERATE exports the hour on screen;
+           PGEN covers all five, as they both already did. -->
+      <div class="export-group" id="export-hours-group"
+           title="Per-hour export is coming -- GENERATE exports the hour on screen, PGEN covers all five">
+        <div class="export-group-title mono">
+          FCST HRS
+          <button type="button" class="export-all-toggle mono" id="export-hours-all" disabled>ALL/NONE</button>
+        </div>
+        <div class="export-hours" id="export-hours">
+          <label class="export-check"><input type="checkbox" class="export-hour" value="0" checked disabled /><span class="mono">F00</span></label>
+          <label class="export-check"><input type="checkbox" class="export-hour" value="3" checked disabled /><span class="mono">F03</span></label>
+          <label class="export-check"><input type="checkbox" class="export-hour" value="6" checked disabled /><span class="mono">F06</span></label>
+          <label class="export-check"><input type="checkbox" class="export-hour" value="9" checked disabled /><span class="mono">F09</span></label>
+          <label class="export-check"><input type="checkbox" class="export-hour" value="12" checked disabled /><span class="mono">F12</span></label>
+        </div>
+        <div class="export-note mono">per-hour split coming</div>
+      </div>
+
+      <button id="export-generate" class="fxx-btn adjust-generate-btn">GENERATE GEOJSON + XML</button>
+      <button id="export-pgen" class="fxx-btn adjust-pgen-btn">DOWNLOAD PGEN (ALL HOURS)</button>
+      <div class="export-note mono">generate: hour on screen &middot; pgen: all hours</div>
     </div>
-    <div class="adjust-row">
-      <span class="mono adjust-label">RADIUS</span>
-      <input type="range" id="adjust-mtn-radius" min="0" max="150" step="5" value="50" />
-      <span class="mono adjust-value"><span id="adjust-mtn-radius-val">50</span>nm</span>
-    </div>
-    <div class="adjust-row">
-      <span class="mono adjust-label">MIN AREA</span>
-      <input type="range" id="adjust-mtn-minarea" min="0" max="10000" step="250" value="3000" />
-      <span class="mono adjust-value"><span id="adjust-mtn-minarea-val">3000</span>mi&sup2;</span>
-    </div>
-    <button id="adjust-mtn-reset" class="fxx-btn adjust-reset-btn">RESET THIS HOUR</button>
-    <button id="adjust-mtn-reset-all" class="fxx-btn adjust-reset-btn">RESET ALL HOURS</button>
-    <button id="adjust-mtn-generate" class="fxx-btn adjust-generate-btn">GENERATE GEOJSON + XML</button>
-    <button id="adjust-mtn-pgen" class="fxx-btn adjust-pgen-btn">DOWNLOAD PGEN (ALL HOURS)</button>
-    <span id="generate-mtn-status" class="mono generate-status"></span>
   </div>
 </div>
 

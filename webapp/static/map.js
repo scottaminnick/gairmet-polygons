@@ -192,12 +192,102 @@ function debounce(fn, delay) {
   };
 }
 
+// --- RIGHT-RAIL ACCORDION ---
+//     Each hazard row in LAYERS owns its adjustors, expanded inline
+//     beneath it. One open at a time: opening a row closes whatever was
+//     open, which is what keeps the rail from growing back into a third
+//     of the screen once there are seven hazards instead of two.
+//
+//     The checkbox and the expander are siblings in the markup, so
+//     visibility and expansion never interfere: a hazard can be visible
+//     and collapsed, or hidden and expanded. Rows without adjustors
+//     (STATE, ARTCC, LEGACY MTN OBSC) are plain labels with no expander
+//     and no disclosure triangle, so the difference is visible before
+//     anyone clicks.
+//
+//     Adding a hazard is one entry here plus its row in index.html.
+const HAZARD_PANELS = [
+  { hazard: 'ifr', expander: 'expand-ifr', body: 'adjust-ifr-body' },
+  { hazard: 'mtn', expander: 'expand-mtn', body: 'adjust-mtn-body' },
+];
+
+function setHazardExpanded(panel, expanded) {
+  const expander = document.getElementById(panel.expander);
+  const body = document.getElementById(panel.body);
+  if (!expander || !body) return;
+  body.hidden = !expanded;
+  expander.setAttribute('aria-expanded', String(expanded));
+  expander.closest('.layer-row').classList.toggle('layer-row-open', expanded);
+}
+
+HAZARD_PANELS.forEach((panel) => {
+  const expander = document.getElementById(panel.expander);
+  if (!expander) return;
+  expander.addEventListener('click', () => {
+    const body = document.getElementById(panel.body);
+    const willOpen = body.hidden;
+    HAZARD_PANELS.forEach((other) => setHazardExpanded(other, false));
+    if (willOpen) setHazardExpanded(panel, true);
+  });
+});
+
+// Default state on load: everything collapsed.
+HAZARD_PANELS.forEach((panel) => setHazardExpanded(panel, false));
+
+// --- WHOLE-RAIL COLLAPSE ---
+//     Collapses to a narrow icon strip so the map can go full width.
+//     Session-only by design: this environment has no localStorage, so
+//     the state lives in the DOM for as long as the page does and a
+//     reload comes back expanded.
+function setRailCollapsed(collapsed) {
+  const panels = document.getElementById('rail-panels');
+  const strip = document.getElementById('rail-strip');
+  if (!panels || !strip) return;
+  panels.hidden = collapsed;
+  strip.hidden = !collapsed;
+  document.getElementById('right-rail').classList.toggle('rail-is-collapsed', collapsed);
+}
+
+document.getElementById('rail-collapse').addEventListener('click', () => setRailCollapsed(true));
+document.getElementById('rail-expand').addEventListener('click', () => setRailCollapsed(false));
+
+// The strip's icons re-open the rail and scroll the panel they name into
+// view -- with seven hazards the rail may well be taller than the window.
+document.querySelectorAll('.rail-icon').forEach((button) => {
+  button.addEventListener('click', () => {
+    setRailCollapsed(false);
+    const target = document.getElementById(button.dataset.scrollTo);
+    if (target) target.scrollIntoView({ block: 'nearest' });
+  });
+});
+
+setRailCollapsed(false);
+
+// Called when there is no cached grid behind this cycle: recompute and
+// export both depend on one, so the controls that drive them are
+// collapsed, disabled and labelled rather than left looking operable.
+function disableLiveAdjust(reason) {
+  HAZARD_PANELS.forEach((panel) => {
+    setHazardExpanded(panel, false);
+    const expander = document.getElementById(panel.expander);
+    expander.disabled = true;
+    expander.title = reason;
+    expander.closest('.layer-row').classList.add('layer-row-disabled');
+  });
+
+  const exportPanel = document.getElementById('export-panel');
+  exportPanel.classList.add('panel-disabled');
+  exportPanel.title = reason;
+  exportPanel.querySelectorAll('button, input').forEach((control) => { control.disabled = true; });
+  document.getElementById('export-status').textContent = 'unavailable';
+}
+
 function disableLegacyToggle(reason) {
   const toggle = document.getElementById('toggle-legacy-mtnobsc');
   if (!toggle) return;
   toggle.checked = false;
   toggle.disabled = true;
-  const row = toggle.closest('.layer-toggle');
+  const row = toggle.closest('.layer-row');
   if (row) {
     row.classList.add('layer-toggle-disabled');
     row.title = reason;
@@ -447,17 +537,15 @@ function downloadTextFile(content, filename, mimeType) {
 //     sliders currently say -- lets a forecaster dial in thresholds,
 //     review the result, then hand off exactly that draft rather than
 //     only ever being able to export the default scheduled version. ---
-document.getElementById('adjust-generate').addEventListener('click', async () => {
+async function generateIfrFiles(statusEl) {
   if (currentFxx == null || !liveAdjustAvailable) return;
 
   const threshold = document.getElementById('adjust-threshold').value;
   const radius = document.getElementById('adjust-radius').value;
   const minArea = document.getElementById('adjust-minarea').value;
   const fxxStr = String(currentFxx).padStart(2, '0');
-  const statusEl = document.getElementById('generate-status');
   const baseName = `ifr_f${fxxStr}_t${threshold}_r${radius}_a${minArea}`;
 
-  statusEl.textContent = 'generating...';
   try {
     const baseUrl = `/api/hazards/ifr/${fxxStr}/recompute?threshold_pct=${threshold}&neighborhood_radius_nm=${radius}&min_area_sq_mi=${minArea}`;
 
@@ -471,14 +559,12 @@ document.getElementById('adjust-generate').addEventListener('click', async () =>
 
     downloadTextFile(geojsonText, `${baseName}.geojson`, 'application/geo+json');
     downloadTextFile(xmlText, `${baseName}.xml`, 'application/xml');
-
-    statusEl.textContent = 'downloaded';
-    setTimeout(() => { statusEl.textContent = ''; }, 3000);
   } catch (err) {
     console.error('Generate failed:', err);
-    statusEl.textContent = 'error (see console)';
+    statusEl.textContent = 'IFR error (see console)';
+    throw err;
   }
-});
+}
 
 // --- MTN OBSC reset: drops THIS hour's saved settings and reloads its
 //     original scheduled snapshot. Other hours keep their adjustments.
@@ -500,7 +586,7 @@ document.getElementById('adjust-mtn-reset-all').addEventListener('click', async 
 
 // --- MTN OBSC generate: downloads GeoJSON + XML for whatever the MTN
 //     sliders currently say, same as the IFR generate button. ---
-document.getElementById('adjust-mtn-generate').addEventListener('click', async () => {
+async function generateMtnFiles(statusEl) {
   if (currentFxx == null || !liveAdjustAvailable) return;
 
   const threshold = document.getElementById('adjust-mtn-threshold').value;
@@ -508,10 +594,8 @@ document.getElementById('adjust-mtn-generate').addEventListener('click', async (
   const radius = document.getElementById('adjust-mtn-radius').value;
   const minArea = document.getElementById('adjust-mtn-minarea').value;
   const fxxStr = String(currentFxx).padStart(2, '0');
-  const statusEl = document.getElementById('generate-mtn-status');
   const baseName = `mtn_obsc_f${fxxStr}_t${threshold}_c${clearance}_r${radius}_a${minArea}`;
 
-  statusEl.textContent = 'generating...';
   try {
     const baseUrl = `/api/hazards/mtn_obsc/${fxxStr}/recompute?threshold_pct=${threshold}` +
       `&clearance_margin_ft=${clearance}&neighborhood_radius_nm=${radius}&min_area_sq_mi=${minArea}`;
@@ -526,14 +610,12 @@ document.getElementById('adjust-mtn-generate').addEventListener('click', async (
 
     downloadTextFile(geojsonText, `${baseName}.geojson`, 'application/geo+json');
     downloadTextFile(xmlText, `${baseName}.xml`, 'application/xml');
-
-    statusEl.textContent = 'downloaded';
-    setTimeout(() => { statusEl.textContent = ''; }, 3000);
   } catch (err) {
     console.error('MTN OBSC generate failed:', err);
-    statusEl.textContent = 'error (see console)';
+    statusEl.textContent = 'MTN OBSC error (see console)';
+    throw err;
   }
-});
+}
 
 // --- COMBINED PGEN EXPORT ---
 //     Downloads ONE PGEN XML document holding all five forecast hours,
@@ -559,8 +641,8 @@ function pgenHoursPayload(store) {
   });
 }
 
-async function downloadPgen(hazardPath, store, statusEl) {
-  statusEl.textContent = 'building all hours...';
+async function downloadPgen(hazardPath, store, statusEl, label = hazardPath) {
+  statusEl.textContent = `building ${label} (all hours)...`;
   try {
     const resp = await fetch(`/api/hazards/${hazardPath}/pgen`, {
       method: 'POST',
@@ -577,22 +659,75 @@ async function downloadPgen(hazardPath, store, statusEl) {
     downloadTextFile(JSON.stringify(data.sidecar, null, 2),
                      data.sidecar_filename, 'application/json');
 
-    statusEl.textContent = `${data.sidecar.total_gfa_elements} elements downloaded`;
+    statusEl.textContent = `${label}: ${data.sidecar.total_gfa_elements} elements`;
     setTimeout(() => { statusEl.textContent = ''; }, 4000);
   } catch (err) {
     console.error('PGEN export failed:', err);
-    statusEl.textContent = 'error (see console)';
+    statusEl.textContent = `${label} error (see console)`;
   }
 }
 
-document.getElementById('adjust-pgen').addEventListener('click', () => {
-  if (!liveAdjustAvailable) return;
-  downloadPgen('ifr', ifrHours, document.getElementById('generate-status'));
+// --- EXPORT PANEL ---
+//     One panel driving both hazards, replacing the pair of export
+//     buttons that used to sit inside each adjustor. The requests and
+//     the routes behind them are unchanged -- this only decides which
+//     hazards each click covers.
+//
+//     The hazard checkboxes FOLLOW layer visibility until someone edits
+//     them, which is what "default to whichever layers are visible"
+//     means once visibility can change after load. Editing one pins it,
+//     because at that point it is a deliberate choice rather than a
+//     default.
+const EXPORT_HAZARDS = [
+  { checkbox: 'export-hazard-ifr', visibility: 'toggle-ifr', hazardPath: 'ifr', label: 'IFR',
+    store: () => ifrHours, generate: generateIfrFiles },
+  { checkbox: 'export-hazard-mtn', visibility: 'toggle-mtn', hazardPath: 'mtn_obsc', label: 'MTN OBSC',
+    store: () => mtnHours, generate: generateMtnFiles },
+];
+
+EXPORT_HAZARDS.forEach((entry) => {
+  const box = document.getElementById(entry.checkbox);
+  const visibility = document.getElementById(entry.visibility);
+  box.checked = visibility.checked;
+  box.addEventListener('change', () => { box.dataset.userSet = 'true'; });
+  visibility.addEventListener('change', () => {
+    if (box.dataset.userSet !== 'true') box.checked = visibility.checked;
+  });
 });
 
-document.getElementById('adjust-mtn-pgen').addEventListener('click', () => {
-  if (!liveAdjustAvailable) return;
-  downloadPgen('mtn_obsc', mtnHours, document.getElementById('generate-mtn-status'));
+function selectedExportHazards() {
+  return EXPORT_HAZARDS.filter((entry) => document.getElementById(entry.checkbox).checked);
+}
+
+document.getElementById('export-generate').addEventListener('click', async () => {
+  const statusEl = document.getElementById('export-status');
+  const selected = selectedExportHazards();
+  if (!selected.length) { statusEl.textContent = 'pick a hazard'; return; }
+  if (!liveAdjustAvailable) { statusEl.textContent = 'no cached grid to export'; return; }
+
+  statusEl.textContent = 'generating...';
+  try {
+    // Sequential rather than parallel: each hazard fires two downloads,
+    // and browsers throttle simultaneous ones from a single gesture.
+    for (const entry of selected) {
+      await entry.generate(statusEl);
+    }
+    statusEl.textContent = 'downloaded';
+    setTimeout(() => { statusEl.textContent = ''; }, 3000);
+  } catch (err) {
+    // generate* already wrote the specific message and logged the error.
+  }
+});
+
+document.getElementById('export-pgen').addEventListener('click', async () => {
+  const statusEl = document.getElementById('export-status');
+  const selected = selectedExportHazards();
+  if (!selected.length) { statusEl.textContent = 'pick a hazard'; return; }
+  if (!liveAdjustAvailable) { statusEl.textContent = 'no cached grid to export'; return; }
+
+  for (const entry of selected) {
+    await downloadPgen(entry.hazardPath, entry.store(), statusEl, entry.label);
+  }
 });
 
 
@@ -824,8 +959,13 @@ async function loadData() {
     console.warn('No forecast-hour manifest available, falling back to single snapshot:', err);
     document.getElementById('valid-time').textContent = '--------Z'; // clear any "loading" text
     document.getElementById('fxx-row').style.display = 'none';
-    document.getElementById('adjust-panel').style.display = 'none'; // nothing cached to recompute from
-    document.getElementById('adjust-mtn-panel').style.display = 'none'; // same
+    // Nothing cached to recompute from, so neither the adjustors nor the
+    // exports can do anything. The adjustors used to be whole panels that
+    // were hidden here; now they live inside their hazard rows, so the
+    // equivalent is to collapse and disable the rows themselves and dim
+    // the export panel -- the visibility checkboxes stay live, since
+    // showing and hiding layers still works fine without a cached grid.
+    disableLiveAdjust('no cached grid for this cycle -- adjustment and export need one');
     try {
       const ifrResp = await fetch('/api/hazards/ifr');
       const ifrGeoJSON = await ifrResp.json();

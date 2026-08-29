@@ -95,12 +95,230 @@ html, body {
   right: 14px;
 }
 
-#adjust-panel {
-  min-width: 220px;
+#layers-panel,
+#export-panel {
+  min-width: 232px;
+  max-width: 232px;
 }
 
-#adjust-mtn-panel {
-  min-width: 220px;
+/* The rail can outgrow the window once there are seven hazards, so it
+   scrolls rather than running off the bottom. */
+.panel-stack-top-right {
+  max-height: calc(100vh - 28px);
+}
+
+/* An author `display` rule beats the `hidden` attribute's UA styling, so
+   both of these need to opt back out explicitly -- without this the rail
+   "collapses" into a strip that is still full width and still showing
+   every panel. */
+.rail-panels[hidden],
+.rail-strip[hidden] {
+  display: none;
+}
+
+.rail-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  max-height: calc(100vh - 28px);
+  /* Room for the scrollbar so it never sits on top of a slider. */
+  padding-right: 2px;
+}
+
+/* --- Whole-rail collapse: everything folds to this strip. --- */
+.rail-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 6px 4px;
+  backdrop-filter: blur(3px);
+}
+
+.rail-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+
+.rail-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--panel-border);
+}
+
+.rail-collapse {
+  float: right;
+  margin-top: -2px;
+}
+
+/* --- Hazard rows: header, disclosure, and the adjustors beneath. --- */
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+/* A hazard row stacks its header and its body; a static row is just the
+   header, so it keeps the original single-line layout. */
+.layer-row[data-hazard] {
+  display: block;
+  padding: 2px 0;
+}
+
+.layer-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.layer-row-static {
+  cursor: pointer;
+}
+
+/* The expander is a button so it is keyboard reachable and announces its
+   state; it is styled to look like the row label it replaces. */
+.layer-expand {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.layer-expand:hover {
+  color: var(--text-primary);
+}
+
+.layer-expand .disclosure {
+  margin-left: auto;
+  font-size: 9px;
+  color: var(--text-muted);
+  transition: transform 0.12s ease-out;
+}
+
+.layer-row-open .disclosure {
+  transform: rotate(90deg);
+  color: var(--text-secondary);
+}
+
+.layer-row-disabled .layer-expand {
+  cursor: not-allowed;
+  color: var(--text-muted);
+}
+
+.layer-row-disabled .disclosure {
+  visibility: hidden;
+}
+
+.panel-disabled {
+  opacity: 0.5;
+}
+
+.layer-body {
+  margin: 4px 0 8px 21px;      /* aligns under the label, past the checkbox */
+  padding-left: 8px;
+  border-left: 1px solid var(--panel-border);
+}
+
+.body-title {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+/* --- Export panel --- */
+.export-group {
+  margin-bottom: 10px;
+}
+
+.export-group-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.export-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.export-check input[type="checkbox"] {
+  accent-color: var(--accent-ifr);
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+}
+
+.export-hours {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+}
+
+/* Disabled on purpose: per-hour splitting is not built, and a control
+   that silently ignored its own state would be worse than one that says
+   so. The whole group dims, including its labels. */
+#export-hours-group {
+  opacity: 0.45;
+}
+
+#export-hours-group input,
+#export-hours-group .export-check,
+.export-all-toggle:disabled {
+  cursor: not-allowed;
+}
+
+.export-all-toggle {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  padding: 1px 4px;
+}
+
+.export-note {
+  font-size: 9px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+#export-status {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: none;
+  letter-spacing: normal;
+  margin-left: 6px;
 }
 
 .adjust-row {
