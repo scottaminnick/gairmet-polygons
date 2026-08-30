@@ -35,4 +35,14 @@ output/
 data/terrain/*.tif
 data/terrain/*.tiff
 
+# The intermediate mosaic checkpoint (pipeline/fetch_terrain.py's
+# --stage mosaic). It is a ~30 MB pre-compressed .npz that already
+# persists between runs through actions/cache -- committing it buys
+# nothing and costs a full fresh copy in history on EVERY terrain run,
+# which is exactly how this repo reached 2.2 GB above. It got committed
+# once, in 3975d0f, because fetch_terrain.yml staged the whole directory;
+# that step now names terrain_grid.npz explicitly, and
+# tests/test_workflow_dependencies.py asserts it stays that way.
+data/terrain/mosaic_cache.npz
+
 .DS_Store

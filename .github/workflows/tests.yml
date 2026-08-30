@@ -49,8 +49,14 @@ jobs:
       # This is a feature, not just a speed optimization: installing only
       # the light set means CI FAILS if someone adds a module-level heavy
       # import to a path the webapp touches.
-      - name: Install dependencies (light set + pytest)
-        run: pip install -r requirements.txt pytest
+      # pyyaml is a TEST dependency, not a webapp one: tests/
+      # test_workflow_dependencies.py parses the workflow files. It comes
+      # in transitively via uvicorn[standard] today, which is precisely
+      # the kind of inheritance that has already broken this repo once
+      # (affine, when rasterio was removed), so it is named here rather
+      # than relied on.
+      - name: Install dependencies (light set + test deps)
+        run: pip install -r requirements.txt pytest pyyaml
 
       # Guards the specific Railway failure mode this repo has actually
       # hit: pipeline/fetch_terrain.py imported requests at module level

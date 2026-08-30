@@ -33,6 +33,10 @@ import built from a variable. Nothing in this repo does that today; if
 something starts to, this test will not know. The stronger check remains
 actually running the entry point under the reduced set, which is how the
 fix for the geojson failure was verified.
+
+It also guards what the workflows COMMIT, which is the same shape of
+problem pointing the other way: a step that stages a directory picks up
+whatever a later change happens to put in it.
 """
 
 import ast
@@ -243,3 +247,95 @@ def test_every_dependency_allowance_carries_a_reason():
                 f"{entry_point} no longer reaches {module}; drop the allowance rather "
                 f"than leaving a check switched off for an import that is gone"
             )
+
+
+# ---------------------------------------------------------------------------
+# What the workflows commit back to the repo.
+# ---------------------------------------------------------------------------
+
+WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
+
+
+def _run_steps(workflow_path):
+    """Every `run:` script in a workflow, as (step name, script) pairs."""
+    import yaml
+
+    spec = yaml.safe_load(workflow_path.read_text())
+    steps = []
+    for job in (spec.get("jobs") or {}).values():
+        for step in job.get("steps") or []:
+            if "run" in step:
+                steps.append((step.get("name", "<unnamed>"), step["run"]))
+    return steps
+
+
+def test_the_terrain_workflow_stages_the_grid_and_not_the_directory():
+    """
+    `git add data/terrain/` committed a 30 MB mosaic checkpoint to main
+    (3975d0f) the first run after that checkpoint was added -- the file
+    already persists through actions/cache, so the commit bought nothing
+    and would have repeated on every run. .npz does not delta-compress,
+    so each one is a full fresh copy in history; that is precisely how
+    this repo reached 2.2 GB before output/ was untracked.
+
+    Gitignoring the checkpoint fixes today's file. Naming the staged file
+    is what stops the NEXT thing written into that directory from being
+    committed by a step that was never asked to.
+    """
+    workflow = WORKFLOW_DIR / "fetch_terrain.yml"
+    adds = [
+        (name, line.strip())
+        for name, script in _run_steps(workflow)
+        for line in script.splitlines()
+        if line.strip().startswith("git add")
+    ]
+    assert adds, "fetch_terrain.yml no longer stages anything -- did the commit step move?"
+
+    for name, line in adds:
+        paths = line.split()[2:]                       # everything after `git add`
+        assert paths, f"{name!r}: bare `git add`"
+        for path in paths:
+            assert path not in ("-A", "--all", ".", "data/terrain", "data/terrain/"), (
+                f"{workflow.name} step {name!r} stages {path!r} -- a directory or the whole "
+                f"tree. That is what committed the 30 MB mosaic checkpoint in 3975d0f; "
+                f"name the files to publish instead."
+            )
+            assert not path.endswith("/"), f"{name!r} stages a directory: {path!r}"
+        assert "data/terrain/terrain_grid.npz" in paths, (
+            f"{workflow.name} step {name!r} stages {paths}; the terrain grid is the file "
+            f"that belongs in history"
+        )
+
+
+def test_the_mosaic_checkpoint_is_ignored_and_untracked():
+    """Belt to the workflow's braces: even a hand-run `git add -A` locally
+    must not pick the checkpoint up."""
+    import subprocess
+
+    ignore = (REPO_ROOT / ".gitignore").read_text()
+    assert "data/terrain/mosaic_cache.npz" in ignore, "the mosaic checkpoint is not gitignored"
+
+    tracked = subprocess.run(
+        ["git", "ls-files", "data/terrain"], cwd=REPO_ROOT, capture_output=True, text=True
+    ).stdout.split()
+    assert "data/terrain/mosaic_cache.npz" not in tracked, (
+        "the mosaic checkpoint is tracked again; it persists via actions/cache and "
+        "committing it puts a full 30 MB copy in history every terrain run"
+    )
+
+
+def test_the_checkpoint_path_the_workflow_caches_is_the_one_that_is_ignored():
+    """
+    Three places name this file -- the cache steps, .gitignore, and
+    fetch_terrain.py's default. If they drift, the checkpoint either stops
+    being cached or starts being committed, and neither says so.
+    """
+    from pipeline.fetch_terrain import DEFAULT_MOSAIC_CACHE
+
+    workflow = (WORKFLOW_DIR / "fetch_terrain.yml").read_text()
+    assert workflow.count(f"path: {DEFAULT_MOSAIC_CACHE}") == 2, (
+        f"the restore and save steps should both cache {DEFAULT_MOSAIC_CACHE}"
+    )
+    assert DEFAULT_MOSAIC_CACHE in (REPO_ROOT / ".gitignore").read_text(), (
+        f"fetch_terrain.py writes {DEFAULT_MOSAIC_CACHE}, which .gitignore does not cover"
+    )

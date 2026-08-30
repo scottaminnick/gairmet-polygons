@@ -110,7 +110,16 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/terrain/
+          # Named explicitly, NOT 'git add data/terrain/'. The directory
+          # also holds mosaic_cache.npz, a ~30 MB pre-compressed
+          # checkpoint that already persists via actions/cache above --
+          # the glob committed it once (3975d0f) and would have done so on
+          # every run. .npz files do not delta-compress, so that is a full
+          # fresh copy in history each time; the same mechanism took this
+          # repo to 2.2 GB before output/ was untracked. It is gitignored
+          # now as well, but the glob is the thing that reaches for
+          # whatever happens to be there next.
+          git add data/terrain/terrain_grid.npz
           git diff --staged --quiet && echo "No changes to commit" && exit 0
           git commit -m "Update cached terrain grid (terrain_radius_nm=${{ github.event.inputs.terrain_radius_nm || '12.0' }}) [skip ci]"
           git push
