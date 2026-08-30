@@ -63,9 +63,7 @@ from __future__ import annotations
 
 import math
 
-import geojson
 import numpy as np
-from pyproj import CRS, Geod, Transformer
 from scipy.ndimage import distance_transform_edt
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry import mapping as shapely_mapping
@@ -82,7 +80,41 @@ from pipeline.grid_spec import GridSpec
 # "widespread" criterion), instead of the older, cruder degrees-squared
 # proxy (which is still available for callers that don't need real-world
 # precision, e.g. small synthetic test grids).
-_GEOD = Geod(ellps="WGS84")
+# WHY geojson AND pyproj ARE IMPORTED LAZILY BELOW, NOT HERE.
+#
+# pipeline/fetch_terrain.py reaches this module -- via
+# pipeline.boundaries, for the land mask the baseline needs -- and the
+# Fetch Terrain Grid workflow installs a much lighter dependency set than
+# the hazard pipelines do. A module-level import of anything this file's
+# BOUNDARY-MASK path does not itself need therefore breaks that workflow,
+# which is exactly what happened: the land-mask change made
+# compute_output_grids import this module, and the run died on
+# `import geojson` after downloading all 1,708 terrain tiles.
+#
+# Neither library is used by the mask path. geojson only wraps finished
+# polygons into a FeatureCollection, and pyproj only measures/buffers
+# them -- both strictly on the hazard-output side, downstream of anything
+# terrain does. Kept lazy so that stays true by construction; a
+# module-level import here silently widens what the terrain job must
+# install, and the cost shows up an hour into a run rather than at
+# import.
+#
+# See tests/test_workflow_dependencies.py, which pins each workflow's
+# declared dependency set against the imports its entry point actually
+# reaches.
+
+
+def _geod():
+    """pyproj's WGS84 geodesic, created on first use. See the note above."""
+    global _GEOD_CACHE
+    if _GEOD_CACHE is None:
+        from pyproj import Geod
+
+        _GEOD_CACHE = Geod(ellps="WGS84")
+    return _GEOD_CACHE
+
+
+_GEOD_CACHE = None
 SQ_METERS_PER_SQ_MILE = 2_589_988.11
 NM_TO_METERS = 1852.0
 
@@ -216,7 +248,7 @@ def geodesic_area_sq_mi(polygon) -> float:
     miles, using proper geodesic calculation (not a flat-projection
     approximation). Works directly on lon/lat coordinates.
     """
-    area_sq_m, _perimeter = _GEOD.geometry_area_perimeter(polygon)
+    area_sq_m, _perimeter = _geod().geometry_area_perimeter(polygon)
     return abs(area_sq_m) / SQ_METERS_PER_SQ_MILE
 
 
@@ -273,6 +305,8 @@ def merge_nearby_polygons(polygons: list, radius_nm: float) -> list:
     maxy = max(b[3] for b in bounds)
     center_lon = (minx + maxx) / 2
     center_lat = (miny + maxy) / 2
+
+    from pyproj import CRS, Transformer
 
     aeqd = CRS.from_proj4(f"+proj=aeqd +lat_0={center_lat} +lon_0={center_lon} +units=m")
     to_aeqd = Transformer.from_crs("EPSG:4326", aeqd, always_xy=True).transform
@@ -659,6 +693,8 @@ def polygons_to_feature_collection(
     shared `properties` dict). Per-polygon values win if a key appears
     in both dicts.
     """
+    import geojson
+
     properties = properties or {}
     if per_polygon_properties is None:
         per_polygon_properties = [{}] * len(polygons)

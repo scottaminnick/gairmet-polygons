@@ -1,0 +1,34 @@
+# Fetch Terrain Grid dependencies -- what .github/workflows/fetch_terrain.yml
+# installs to run pipeline/fetch_terrain.py.
+#
+# Deliberately much lighter than requirements-pipeline.txt: the terrain
+# fetch touches no NBM data, so none of the GRIB2 stack (herbie/xarray/
+# cfgrib/pandas) is needed, and that job downloads 1,708 tiles before it
+# does anything else -- paying an unnecessary install cost on every run.
+#
+# This file exists because the list used to be inline in the workflow
+# (`pip install requests numpy scipy affine`) with nothing checking it.
+# When the land-only baseline change made compute_output_grids import
+# pipeline.boundaries -> pipeline.polygons, the job began needing shapely
+# and scikit-image, nobody updated the inline list, and the run died with
+# ModuleNotFoundError AFTER downloading all 1,708 tiles.
+# tests/test_workflow_dependencies.py now pins this file against what the
+# entry point actually imports.
+
+requests        # tile downloads (imported lazily inside the fetch functions)
+numpy
+scipy           # maximum_filter1d / uniform_filter for the ridge search
+affine          # pipeline.grid_spec.GridSpec.to_affine()
+
+# Both reached through pipeline.boundaries, for the land mask the
+# land-only baseline needs: shapely unions the coastline features,
+# scikit-image rasterizes the union onto the mosaic grid. NOT needed
+# before that change, which is how the drift happened.
+shapely
+scikit-image
+
+# NOT here, deliberately: geojson and pyproj. pipeline/polygons.py imports
+# both lazily, inside the functions that wrap or measure finished polygons
+# -- strictly hazard-output work, downstream of anything terrain does. If
+# either becomes a module-level import there again, this job breaks; see
+# that file's note and the test above.

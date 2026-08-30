@@ -23,6 +23,10 @@
 # module docstring) with zero system-library dependencies, and
 # benchmarked faster besides.
 fastapi
+pydantic        # webapp/main.py imports it directly (the PGEN request models).
+                # Installed transitively by fastapi today, but this repo has
+                # already lost a dependency that way once -- see affine below --
+                # so it is declared rather than inherited.
 uvicorn[standard]
 numpy
 scipy
