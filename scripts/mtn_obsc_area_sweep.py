@@ -72,6 +72,12 @@ from pipeline.hazards.mtn_obsc import (  # noqa: E402
 )
 from pipeline.polygons import geodesic_area_sq_mi  # noqa: E402
 
+# Two fixed reference points, so the mask column means something without
+# leaving the table. CONUS land is what makes the percentages legible: a
+# threshold calling 2.5M sq mi mountainous is claiming 80% of the country.
+LEGACY_MTNOBSC_SQ_MI = 1_201_000
+CONUS_LAND_SQ_MI = 3_120_000
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -157,24 +163,31 @@ def main():
         # No shortcut here, unlike the area sweep below: relief changes the
         # mountainous MASK, so every threshold is a different polygonization
         # rather than a different filter over one result.
-        header = (f"{'relief':>9} {'mountainous':>13} {'polygons':>9} {'total sq mi':>13} "
-                  f"{'median':>9} {'largest':>10}")
+        header = (f"{'relief':>9} {'mountainous':>13} {'% CONUS':>8} {'% legacy':>9} "
+                  f"{'comps':>6} {'total sq mi':>13} {'median':>9} {'largest':>11}")
         print(header)
         print("-" * len(header))
         for relief_ft in sorted(args.relief_ft):
             kept, mask_area = run(relief_ft, args.min_area_sq_mi)
-            marker = "  <- current default" if relief_ft == MOUNTAINOUS_RELIEF_THRESHOLD_FT else ""
+            marker = "  <- default" if relief_ft == MOUNTAINOUS_RELIEF_THRESHOLD_FT else ""
             mask_str = f"{mask_area:,.0f}" if mask_area is not None else "-"
+            pct_conus = f"{100 * mask_area / CONUS_LAND_SQ_MI:.1f}%" if mask_area is not None else "-"
+            pct_legacy = f"{100 * mask_area / LEGACY_MTNOBSC_SQ_MI:.0f}%" if mask_area is not None else "-"
             if not kept:
-                print(f"{relief_ft:>8,.0f}f {mask_str:>13} {0:>9} {0:>13} {'-':>9} {'-':>10}{marker}")
+                print(f"{relief_ft:>8,.0f}f {mask_str:>13} {pct_conus:>8} {pct_legacy:>9} "
+                      f"{0:>6} {0:>13} {'-':>9} {'-':>11}{marker}")
                 continue
             print(
-                f"{relief_ft:>8,.0f}f {mask_str:>13} {len(kept):>9} {sum(kept):>13,.0f} "
-                f"{np.median(kept):>9,.0f} {max(kept):>10,.0f}{marker}"
+                f"{relief_ft:>8,.0f}f {mask_str:>13} {pct_conus:>8} {pct_legacy:>9} "
+                f"{len(kept):>6} {sum(kept):>13,.0f} {np.median(kept):>9,.0f} "
+                f"{max(kept):>11,.0f}{marker}"
             )
         print()
-        print("'mountainous' is the mask area before the min-area filter; 'total sq mi' is")
-        print("after it. Legacy broad-brush MTN OBSC is ~1,200,000 sq mi; CONUS land ~3,120,000.")
+        print(f"'mountainous' is the mask area after all four gates and before the min-area")
+        print(f"filter; 'total sq mi' is after it, and 'comps' counts the surviving connected")
+        print(f"components. % CONUS is against {CONUS_LAND_SQ_MI:,} sq mi of land; % legacy is")
+        print(f"against the {LEGACY_MTNOBSC_SQ_MI:,} sq mi the legacy broad-brush areas total.")
+        print(f"min-area filter held at {args.min_area_sq_mi:,.0f} sq mi for this table.")
         return
 
     # Area sweep: polygonized once at the smallest area, then re-filtered.
