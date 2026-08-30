@@ -43,19 +43,56 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Deliberately just these three, not the full
-      # requirements-pipeline.txt -- this script talks to a plain S3
-      # bucket over HTTPS, not GRIB2/NBM, so it doesn't need
-      # cfgrib/xarray/herbie-data/pyproj/etc. Same "only install what
-      # this specific script actually touches" reasoning already used
-      # for inspect_nbm.yml.
+      # Deliberately much lighter than requirements-pipeline.txt -- this
+      # script talks to a plain S3 bucket over HTTPS, not GRIB2/NBM, so
+      # it doesn't need cfgrib/xarray/herbie-data/etc. Same "only install
+      # what this specific script actually touches" reasoning already
+      # used for inspect_nbm.yml.
       - name: Install dependencies
-        run: pip install requests numpy scipy affine
+        # Declared in a file rather than inline, so a change to what
+        # pipeline/fetch_terrain.py imports can be checked against it --
+        # see requirements-terrain.txt for the failure that motivated it.
+        run: pip install -r requirements-terrain.txt
 
-      - name: Fetch + process terrain grid
+      # THE MOSAIC IS CHECKPOINTED SEPARATELY FROM THE STEPS THAT USE IT.
+      #
+      # Assembling it means downloading 1,708 tiles, which is nearly all
+      # of this job's wall time; everything after it is a few minutes of
+      # array work. A run that got through the download and then died on
+      # the very last step (which is exactly what a missing dependency in
+      # compute_output_grids did) had to redo the whole fetch.
+      #
+      # restore/save are used rather than actions/cache because the plain
+      # action only saves at the END of a SUCCESSFUL job -- precisely the
+      # case that does not apply here. Saving immediately after assembly,
+      # with if: always(), is what makes the checkpoint survive a later
+      # failure.
+      #
+      # The key is deliberately coarse. Correctness does not rest on it:
+      # the checkpoint stores the bounds and downsample factor it was
+      # built from, and fetch_terrain.py refetches if they don't match
+      # what it wants. A key can be forgotten; that check cannot.
+      - name: Restore mosaic checkpoint
+        id: mosaic-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data/terrain/mosaic_cache.npz
+          key: terrain-mosaic-v1
+
+      - name: Assemble mosaic (downloads tiles only if the checkpoint missed)
+        run: python3 pipeline/fetch_terrain.py --stage mosaic
+
+      - name: Save mosaic checkpoint
+        if: always() && steps.mosaic-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: data/terrain/mosaic_cache.npz
+          key: terrain-mosaic-v1
+
+      - name: Compute terrain grids
         env:
           MTN_OBSC_TERRAIN_RADIUS_NM: ${{ github.event.inputs.terrain_radius_nm || '12.0' }}
-        run: python3 pipeline/fetch_terrain.py
+        run: python3 pipeline/fetch_terrain.py --stage grids
 
       # Backup/inspection copy independent of the git commit below --
       # useful if the commit step ever fails (e.g. branch protection)

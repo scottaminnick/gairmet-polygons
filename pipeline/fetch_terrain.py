@@ -703,10 +703,86 @@ def load_terrain_grid(path: str = "data/terrain/terrain_grid.npz") -> tuple[dict
     return grids, grid_spec, terrain_radius_nm
 
 
-def main(output_path: str = "data/terrain/terrain_grid.npz") -> None:
-    print(f"Fetching {len(list_conus_tiles())} Skadi tiles covering {CONUS_BOUNDS}...")
-    mosaic, mosaic_grid_spec = assemble_intermediate_mosaic()
+DEFAULT_MOSAIC_CACHE = "data/terrain/mosaic_cache.npz"
+
+
+def save_mosaic_cache(path, mosaic, grid_spec, bounds, downsample_factor):
+    """
+    Checkpoint the assembled mosaic, so a failure downstream of assembly
+    does not mean re-downloading 1,708 tiles.
+
+    The parameters that DETERMINE the mosaic are stored alongside it and
+    checked on load, so a stale checkpoint can never be silently reused
+    against different bounds or a different resolution. That check lives
+    here rather than in the cache key because a wrong answer is much
+    worse than a slow one: a key can be forgotten to bump, whereas this
+    compares the actual numbers the array was built from.
+    """
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        path,
+        mosaic=mosaic,
+        west=grid_spec.west, north=grid_spec.north, dx=grid_spec.dx, dy=grid_spec.dy,
+        bounds=np.asarray(bounds, dtype=np.float64),
+        downsample_factor=downsample_factor,
+    )
+    size_mb = Path(path).stat().st_size / 1e6
+    print(f"Mosaic checkpointed to {path} ({size_mb:.0f} MB)")
+
+
+def load_mosaic_cache(path, bounds, downsample_factor):
+    """
+    Return (mosaic, grid_spec) from a checkpoint built with the same
+    parameters, or None -- missing, unreadable, or built for a different
+    region or resolution all mean "fetch it again", which is merely slow.
+    """
+    if not Path(path).exists():
+        return None
+    try:
+        with np.load(path) as data:
+            if not np.array_equal(data["bounds"], np.asarray(bounds, dtype=np.float64)):
+                print(f"Ignoring mosaic checkpoint: built for bounds {tuple(data['bounds'])}, "
+                      f"want {bounds}")
+                return None
+            if int(data["downsample_factor"]) != int(downsample_factor):
+                print(f"Ignoring mosaic checkpoint: built at downsample factor "
+                      f"{int(data['downsample_factor'])}, want {downsample_factor}")
+                return None
+            mosaic = data["mosaic"]
+            grid_spec = GridSpec(west=float(data["west"]), north=float(data["north"]),
+                                 dx=float(data["dx"]), dy=float(data["dy"]))
+    except Exception as err:                       # truncated/corrupt checkpoint
+        print(f"Ignoring unreadable mosaic checkpoint {path}: {err}")
+        return None
+
+    print(f"Reusing mosaic checkpoint {path}: {mosaic.shape} -- no tiles to download")
+    return mosaic, grid_spec
+
+
+def get_mosaic(mosaic_cache=DEFAULT_MOSAIC_CACHE, bounds=CONUS_BOUNDS,
+               downsample_factor=TILE_DOWNSAMPLE_FACTOR):
+    """The mosaic, from the checkpoint if one matches, else fetched and checkpointed."""
+    if mosaic_cache:
+        cached = load_mosaic_cache(mosaic_cache, bounds, downsample_factor)
+        if cached is not None:
+            return cached
+
+    print(f"Fetching {len(list_conus_tiles(bounds))} Skadi tiles covering {bounds}...")
+    mosaic, grid_spec = assemble_intermediate_mosaic(bounds, downsample_factor)
     print(f"Intermediate mosaic assembled: {mosaic.shape}")
+    if mosaic_cache:
+        save_mosaic_cache(mosaic_cache, mosaic, grid_spec, bounds, downsample_factor)
+    return mosaic, grid_spec
+
+
+def main(output_path: str = "data/terrain/terrain_grid.npz",
+         mosaic_cache: str = DEFAULT_MOSAIC_CACHE,
+         stage: str = "all") -> None:
+    mosaic, mosaic_grid_spec = get_mosaic(mosaic_cache)
+    if stage == "mosaic":
+        # The workflow stops here so the checkpoint can be saved before
+        # anything downstream gets a chance to fail.
+        return
 
     baseline_ft, ridge_ft, out_grid_spec = compute_output_grids(mosaic, mosaic_grid_spec)
     print(f"Output grids computed: {baseline_ft.shape}, terrain_radius_nm={TERRAIN_RADIUS_NM}")
@@ -725,4 +801,16 @@ def main(output_path: str = "data/terrain/terrain_grid.npz") -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    ap = argparse.ArgumentParser(description="Fetch and process the MTN OBSC terrain grid.")
+    ap.add_argument("--output", default="data/terrain/terrain_grid.npz")
+    ap.add_argument("--mosaic-cache", default=DEFAULT_MOSAIC_CACHE,
+                    help="checkpoint for the assembled mosaic, reused when its bounds and "
+                         "resolution match; '' disables it")
+    ap.add_argument("--stage", choices=["all", "mosaic", "grids"], default="all",
+                    help="'mosaic' assembles and checkpoints, then stops -- the workflow "
+                         "runs that first so the checkpoint is saved before the steps that "
+                         "can fail; 'grids' and 'all' go on to compute and save the grids")
+    args = ap.parse_args()
+    main(output_path=args.output, mosaic_cache=args.mosaic_cache, stage=args.stage)

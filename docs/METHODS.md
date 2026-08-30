@@ -535,6 +535,54 @@ contract a restructure breaks quietest.
 
 ---
 
+## 8.5 Workflow dependency sets
+
+Each workflow installs a different set, and a module-level import added
+anywhere in `pipeline/` can silently widen what all of them need. This has
+bitten twice, both times only at runtime in the one environment missing
+the package:
+
+- `fetch_terrain.py` imported `requests` at module level while
+  `webapp/main.py` imports `load_terrain_grid()` from it — that endpoint
+  500'd in production.
+- The land-only baseline made `compute_output_grids` import
+  `pipeline.boundaries` → `pipeline.polygons`, which imported `geojson` at
+  module scope. Fetch Terrain Grid installs neither `geojson` nor
+  `pyproj`, and the run died **after downloading all 1,708 tiles**.
+
+`pipeline/polygons.py` therefore imports `geojson` and `pyproj` lazily,
+inside the functions that wrap or measure finished polygons. Neither is
+used by the boundary-mask path, which is the only part terrain reaches, so
+keeping them lazy keeps the terrain job to `requirements-terrain.txt` —
+`requests numpy scipy affine shapely scikit-image`. `shapely` and
+`scikit-image` genuinely are needed there (unioning the coastline and
+rasterizing it), and were the actual missing dependency once `geojson`
+stopped being the first name to fail.
+
+`tests/test_workflow_dependencies.py` walks each entry point's first-party
+import graph — following imports inside function bodies, since that is how
+`fetch_terrain` reaches `boundaries` — and asserts everything reached is in
+the requirements file that workflow installs. It is static, so it cannot
+see a dynamically constructed import; nothing here does that today. Where a
+reached module is genuinely never executed by that job, it is listed in
+`DEFERRED_AND_UNUSED` with a reason rather than quietly skipped.
+
+## 8.6 The terrain mosaic is checkpointed
+
+Assembling the intermediate mosaic means downloading 1,708 Skadi tiles and
+is nearly all of the job's wall time; everything after is a few minutes of
+array work. The workflow now runs `--stage mosaic`, saves the checkpoint,
+then runs `--stage grids`, so a failure downstream of assembly costs
+minutes rather than the whole fetch.
+
+The save uses `actions/cache/save` with `if: always()` rather than
+`actions/cache`, which only saves at the end of a *successful* job —
+exactly the case that does not apply. The cache key is deliberately coarse:
+correctness rests on the checkpoint storing the bounds and downsample
+factor it was built from, which `load_mosaic_cache` checks, because a key
+can be forgotten to bump and that comparison cannot. A mismatched,
+unreadable, or absent checkpoint is a refetch, never a wrong answer.
+
 ## 9. Known limits
 
 - `MOUNTAINOUS_RELIEF_THRESHOLD_FT` and `TERRAIN_RADIUS_NM` are placeholders
