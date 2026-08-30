@@ -30,9 +30,8 @@ on:
         required: false
         default: "50"
       min_area_sq_mi:
-        description: "Minimum polygon area (sq mi) -- matches AIRMET/G-AIRMET's historical 'widespread' criterion by default"
+        description: "Minimum polygon area (sq mi) -- leave blank for the pipeline default (pipeline.hazards.mtn_obsc.DEFAULT_MIN_AREA_SQ_MI). Separate from IFR's: terrain-following areas are long and thin, so IFR's 3,000 sq mi is not the right number here by default"
         required: false
-        default: "3000"
 
 # Ensures only ONE run of this workflow is ever actually executing at a
 # time -- same reasoning as generate_ifr.yml's own concurrency block, in
@@ -113,7 +112,10 @@ jobs:
           MTN_OBSC_THRESHOLD_PCT: ${{ github.event.inputs.threshold_pct || '50' }}
           MTN_OBSC_CLEARANCE_MARGIN_FT: ${{ github.event.inputs.clearance_margin_ft || '500' }}
           MTN_OBSC_NEIGHBORHOOD_RADIUS_NM: ${{ github.event.inputs.neighborhood_radius_nm || '50' }}
-          MTN_OBSC_MIN_AREA_SQ_MI: ${{ github.event.inputs.min_area_sq_mi || '3000' }}
+          # Passed through raw: empty falls back to
+          # pipeline.hazards.mtn_obsc.DEFAULT_MIN_AREA_SQ_MI, so this hazard's
+          # default lives in one place and cannot drift from IFR's by accident.
+          MTN_OBSC_MIN_AREA_SQ_MI: ${{ github.event.inputs.min_area_sq_mi }}
         run: python3 pipeline/generate_latest_mtn_obsc.py
 
       - name: Publish artifacts to the data-mtnobsc branch

@@ -96,7 +96,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from scipy.ndimage import maximum_filter, uniform_filter
+from scipy.ndimage import maximum_filter1d, uniform_filter
 
 # NOTE: `requests` is deliberately NOT imported here at module level,
 # even though this module's fetching functions need it. webapp/main.py's
@@ -148,6 +148,15 @@ OUTPUT_RESOLUTION_DEG = 0.025
 # never an approximate resample.
 INTERMEDIATE_ARCSEC = 30
 RAW_TILE_SIZE = 3601  # Skadi/SRTM1: 3601x3601, 1 arcsecond, tiles overlap
+
+# int16 minimum, used in the stored baseline grid to mean "this block
+# contains no land cells" -- a real distinction from any elevation,
+# since no point on Earth is anywhere near -32,768 ft. load_terrain_grid()
+# turns it back into NaN immediately, so no arithmetic ever sees it; it
+# exists only because the on-disk format is int16 and NaN is not
+# representable there. See compute_output_grids() for why no-land blocks
+# are NaN rather than 0.
+NO_LAND_BASELINE_SENTINEL = -32768
                        # their neighbor's edge pixel by design.
 TILE_DOWNSAMPLE_FACTOR = INTERMEDIATE_ARCSEC  # 1 arcsec -> 30 arcsec
 
@@ -301,6 +310,19 @@ def _block_max_pool(arr: np.ndarray, factor: int) -> np.ndarray:
     return reshaped.max(axis=(1, 3))
 
 
+def _block_sum_pool(arr: np.ndarray, factor: int) -> np.ndarray:
+    """
+    Same block reduce as the others, summing. Only used as the two
+    halves of a masked mean (sum of values over land, divided by count
+    of land cells) -- see compute_output_grids().
+    """
+    rows, cols = arr.shape
+    reshaped = arr[: rows // factor * factor, : cols // factor * factor].reshape(
+        rows // factor, factor, cols // factor, factor
+    )
+    return reshaped.sum(axis=(1, 3))
+
+
 def _block_mean_pool(arr: np.ndarray, factor: int) -> np.ndarray:
     """Same as _block_max_pool but averaging -- used for the baseline
     (local elevation) grid, which should represent "the ground here,"
@@ -385,6 +407,100 @@ def _radius_deg(radius_nm: float, center_lat_deg: float) -> tuple[float, float]:
     return lat_deg, lon_deg
 
 
+def _disc_footprint(row_px: int, col_px: int) -> np.ndarray:
+    """
+    Boolean footprint for the ridge search: a circle on the GROUND, which
+    is an ELLIPSE in index space, because a lon/lat cell is not square --
+    at 45N a degree of longitude is ~0.7 of a degree of latitude, and the
+    ratio moves across CONUS. row_px and col_px are the radius in cells
+    along each axis, already computed per latitude band by _radius_deg().
+
+    WHY NOT A RECTANGLE (what this replaced): maximum_filter(size=...) is
+    a rectangle, so the search reaches sqrt(2) ~ 1.41x the nominal radius
+    into its corners and only 1.0x along the axes. At 12 nm that is a
+    17 nm reach on the diagonals. It was a deliberate v1 simplification --
+    over-generous in the safe direction for hazard detection -- and it
+    stopped being harmless once the raster closing stopped bridging
+    across valleys: with terrain-following areas, a footprint that
+    reaches further diagonally than axially prints grid-aligned boxy
+    edges straight onto the polygon.
+
+    The cost of the change is real but bounded: a rectangle is separable
+    (two 1-D running maxima, O(cells) regardless of radius) while a disc
+    is not, which is what _footprint_maximum_filter() exists to work
+    around.
+    """
+    if row_px < 1 or col_px < 1:
+        raise ValueError(f"footprint radius must be at least 1 cell, got {row_px}x{col_px}")
+    rows = np.arange(-row_px, row_px + 1)[:, None]
+    cols = np.arange(-col_px, col_px + 1)[None, :]
+    return ((rows / row_px) ** 2 + (cols / col_px) ** 2) <= 1.0
+
+
+def _footprint_maximum_filter(values: np.ndarray, footprint: np.ndarray) -> np.ndarray:
+    """
+    maximum_filter(values, footprint=footprint) for a footprint whose
+    every row is a centred contiguous run -- which a disc is.
+
+    scipy's own footprint path visits every True cell for every pixel:
+    at 12 nm on the 30 arcsec mosaic that is a ~2,550-cell footprint over
+    ~25 million cells. This decomposes the disc into its rows instead:
+    one horizontal running max per distinct half-width (O(cells) each,
+    via maximum_filter1d), then a vertical max over the shifted results.
+    Same answer -- checked against maximum_filter(footprint=...) across
+    several aspect ratios in the tests -- for ~25 passes instead of
+    ~2,550.
+
+    Measured over the full mosaic: ~9 s this way, ~2 min through scipy's
+    footprint path, ~1 s for the rectangle it replaces. All three are
+    noise against the ~90 minute tile fetch, so this is about keeping the
+    change cheap rather than about it being unaffordable otherwise.
+
+    Edges replicate, matching the mode="nearest" the rectangular filter
+    used, so the change of footprint doesn't quietly change edge
+    behaviour too.
+    """
+    half_rows = footprint.shape[0] // 2
+    half_widths = []
+    for offset, row in enumerate(footprint):
+        (indices,) = np.nonzero(row)
+        if len(indices) == 0:
+            half_widths.append(-1)                       # empty row, contributes nothing
+            continue
+        centre = footprint.shape[1] // 2
+        width = centre - indices[0]
+        if indices[-1] - centre != width or len(indices) != 2 * width + 1:
+            raise ValueError(
+                f"footprint row {offset} is not a centred contiguous run; "
+                "this filter only handles footprints like a disc or a rectangle"
+            )
+        half_widths.append(int(width))
+
+    result = np.full_like(values, -np.inf, dtype=np.float32)
+    for width in sorted({w for w in half_widths if w >= 0}):
+        row_max = maximum_filter1d(values, size=2 * width + 1, axis=1, mode="nearest")
+        for offset, this_width in enumerate(half_widths):
+            if this_width != width:
+                continue
+            shift = offset - half_rows                   # result[i] = max over rows i+shift
+            np.maximum(result, _shift_rows(row_max, shift), out=result)
+    return result
+
+
+def _shift_rows(values: np.ndarray, shift: int) -> np.ndarray:
+    """values[i + shift], with the edge row replicated (mode="nearest")."""
+    if shift == 0:
+        return values
+    shifted = np.empty_like(values)
+    if shift > 0:
+        shifted[:-shift] = values[shift:]
+        shifted[-shift:] = values[-1]
+    else:
+        shifted[-shift:] = values[:shift]
+        shifted[:-shift] = values[0]
+    return shifted
+
+
 # ---------------------------------------------------------------------------
 # Final output grids
 # ---------------------------------------------------------------------------
@@ -427,19 +543,53 @@ def compute_output_grids(
         pad_top = min(band_start, row_px)
         pad_bottom = min(n_rows - band_end, row_px)
         window = mosaic[band_start - pad_top: band_end + pad_bottom, :]
-        # NOTE: rectangular footprint (size=...), not a true circle --
-        # a deliberate v1 simplification. Slightly over-generous at the
-        # window's corners, which is the safe direction to be wrong in
-        # for a hazard-detection search (better to over-include a
-        # borderline ridge than miss one).
-        filtered = maximum_filter(window, size=(2 * row_px + 1, 2 * col_px + 1), mode="nearest")
+        # A circle on the ground, not a rectangle -- see _disc_footprint()
+        # for why the rectangle's 1.41x diagonal reach stopped being
+        # harmless. The footprint is rebuilt per band because its aspect
+        # ratio follows cos(latitude).
+        filtered = _footprint_maximum_filter(window, _disc_footprint(row_px, col_px))
         ridge_full[band_start:band_end, :] = filtered[pad_top: pad_top + (band_end - band_start), :]
+
+    # LAND MASK, ON THE MOSAIC'S OWN GRID (30 arcsec, 1/120 deg) -- not
+    # on the 0.025 deg output grid. Both baseline averaging steps below
+    # run at mosaic resolution, and a mask built at output resolution
+    # would be three times too coarse to tell which cells inside a block
+    # are land. Rasterizing here costs ~30-60 s on a ~3400x7300 grid,
+    # which is nothing against this script's ~90 minute tile fetch.
+    #
+    # Imported locally for the same reason `requests` is -- webapp
+    # imports load_terrain_grid() from this module and shouldn't pull in
+    # the polygon stack to do it.
+    from pipeline.boundaries import LAND_BOUNDARY_PATH, get_boundary_mask
+
+    land = get_boundary_mask(mosaic_grid_spec, mosaic.shape, LAND_BOUNDARY_PATH)
+    land_f = land.astype(np.float32)
 
     # Baseline: gentle smoothing roughly matching NBM's own working
     # resolution -- standing in for the surface elevation NBM's
     # ceiling-AGL forecast is implicitly relative to (see module
     # docstring; NBM does not publish this field itself).
-    baseline_full = uniform_filter(mosaic, size=3, mode="nearest")
+    #
+    # WATER IS EXCLUDED FROM BOTH AVERAGES. Ocean and lake cells sit at
+    # (or near) 0 ft, and a plain mean drags every coastal or lakeside
+    # block down toward the water surface -- which inflates relief,
+    # since relief is ridge minus baseline. That is a systematic band
+    # along every coast and every large lake, and it is what put MTN
+    # OBSC signal on Minnesota's North Shore and in coastal New England
+    # in the 09Z run. Averaging over land cells only measures the ridge
+    # against the ground beside it, which is the question this hazard
+    # actually asks.
+    #
+    # A masked mean is sum(values over land) / count(land), which is
+    # what dividing one uniform_filter by the other gives: the filters
+    # return means over the same window, so the window size cancels.
+    land_fraction = uniform_filter(land_f, size=3, mode="nearest")
+    land_elevation_mean = uniform_filter(mosaic * land_f, size=3, mode="nearest")
+    baseline_full = np.where(
+        land_fraction > 0,
+        land_elevation_mean / np.where(land_fraction > 0, land_fraction, 1.0),
+        np.nan,
+    )
 
     ratio = output_resolution_deg / intermediate_deg
     if abs(ratio - round(ratio)) > 1e-6:
@@ -453,8 +603,24 @@ def compute_output_grids(
     ridge_out = _block_max_pool(ridge_full, ratio)
     # Mean, not max, for baseline's final reduce -- baseline should stay
     # "the ground here," not get dragged back toward ridge height by a
-    # second max operation.
-    baseline_out = _block_mean_pool(baseline_full, ratio)
+    # second max operation. Masked, for the reason above: the mean is
+    # over the block's LAND cells only.
+    #
+    # A block with no land cells at all gets NaN rather than a
+    # substituted value. That is deliberate and it is not a gap: a block
+    # with no land is water, water cannot be mountainous, and the relief
+    # gate reads NaN as "not mountainous" without any special-casing
+    # (NaN >= threshold is False). Substituting 0 ft would instead hand
+    # the gate a plausible-looking sea-level baseline under whatever
+    # ridge height the max filter reached from the nearest shore --
+    # exactly the false relief this change exists to remove.
+    land_cells_per_block = _block_sum_pool(land_f, ratio)
+    baseline_out = np.where(
+        land_cells_per_block > 0,
+        _block_sum_pool(np.where(land, baseline_full, 0.0), ratio)
+        / np.where(land_cells_per_block > 0, land_cells_per_block, 1.0),
+        np.nan,
+    )
 
     # Defensive final check, in addition to the per-tile validation in
     # _parse_hgt_bytes -- belt-and-suspenders. If ANY float32 value here
@@ -465,8 +631,11 @@ def compute_output_grids(
     # exactly 32767 and implausible negatives, with no exception at all).
     # Clamping explicitly here, with a loud print if it ever actually
     # triggers, converts "silent data corruption" into "impossible."
+    no_land = ~np.isfinite(baseline_out)  # legitimate: see the NaN note above
     for name, grid in (("baseline", baseline_out), ("ridge", ridge_out)):
         bad = ~np.isfinite(grid) | (grid < -32768) | (grid > 32767)
+        if name == "baseline":
+            bad &= ~no_land
         n_bad = int(np.sum(bad))
         if n_bad:
             print(
@@ -480,11 +649,17 @@ def compute_output_grids(
 
     west, south, east, north = output_bounds
     out_grid_spec = GridSpec(west=west, north=north, dx=output_resolution_deg, dy=-output_resolution_deg)
-    return (
-        np.round(baseline_out).astype(np.int16),
-        np.round(ridge_out).astype(np.int16),
-        out_grid_spec,
-    )
+
+    # int16 has no NaN, and the stored format stays int16 deliberately
+    # (see load_terrain_grid's docstring, and the file is 3.9 MB in the
+    # repo -- float32 would double it). So "no land in this block" is
+    # carried as a sentinel and turned back into NaN on load, which is
+    # the only place the grids are read.
+    baseline_int = np.round(np.where(no_land, 0.0, baseline_out)).astype(np.int16)
+    baseline_int[no_land] = NO_LAND_BASELINE_SENTINEL
+    print(f"  baseline: {int(no_land.sum())} of {no_land.size} output cells have no land at all")
+
+    return baseline_int, np.round(ridge_out).astype(np.int16), out_grid_spec
 
 
 # ---------------------------------------------------------------------------
@@ -515,8 +690,13 @@ def load_terrain_grid(path: str = "data/terrain/terrain_grid.npz") -> tuple[dict
     grid_spec = GridSpec(
         west=float(data["west"]), north=float(data["north"]), dx=float(data["dx"]), dy=float(data["dy"])
     )
+    baseline = data["baseline_elevation_ft"].astype(np.float32)
+    # NO_LAND_BASELINE_SENTINEL -> NaN, here and nowhere else, so callers
+    # only ever see a real elevation or "there is no land here". The
+    # int16 -> float32 cast is exact, so == is the right test.
+    baseline[baseline == NO_LAND_BASELINE_SENTINEL] = np.nan
     grids = {
-        "baseline_elevation_ft": data["baseline_elevation_ft"].astype(np.float32),
+        "baseline_elevation_ft": baseline,
         "ridge_elevation_ft": data["ridge_elevation_ft"].astype(np.float32),
     }
     terrain_radius_nm = float(data["terrain_radius_nm"])

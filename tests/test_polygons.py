@@ -342,11 +342,11 @@ def test_grid_to_polygons_correctly_handles_holes():
     print(f"Interior rings (holes): {len(donut.interiors)}")
     assert len(donut.interiors) == 1, f"Expected exactly 1 hole, got {len(donut.interiors)}"
 
-    center_lon, center_lat = grid_spec.to_affine() * (center, center)
+    center_lon, center_lat = grid_spec.to_affine() @ (center, center)
     center_point = Point(center_lon, center_lat)
     assert not donut.contains(center_point), "Center point should be excluded -- it's in the hole"
 
-    ring_lon, ring_lat = grid_spec.to_affine() * (center + 50, center)
+    ring_lon, ring_lat = grid_spec.to_affine() @ (center + 50, center)
     ring_point = Point(ring_lon, ring_lat)
     assert donut.contains(ring_point), "A point in the ring itself should be included"
 
@@ -475,7 +475,7 @@ def test_to_affine_stays_corner_based():
     affine has to break this test on the way past.
     """
     for name, grid in CONVENTION_GRIDS:
-        corner_lon, corner_lat = grid.to_affine() * (0, 0)
+        corner_lon, corner_lat = grid.to_affine() @ (0, 0)
         assert abs(corner_lon - (grid.west - grid.dx / 2)) < 1e-12, f"{name}"
         assert abs(corner_lat - (grid.north - grid.dy / 2)) < 1e-12, f"{name}"
 

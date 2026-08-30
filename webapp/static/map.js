@@ -92,6 +92,42 @@ const layers = {
       if (name) layer.bindTooltip(name, { sticky: true, className: 'artcc-tooltip' });
     },
   }),
+
+  // The legacy (pre-automation) MTN OBSC areas. DISPLAY ONLY -- nothing
+  // here feeds a gate, mask or filter; it exists so a forecaster can put
+  // derived and legacy areas side by side during calibration. See
+  // data/boundaries/LEGACY_MTNOBSC.md for what the geometry is worth.
+  //
+  // Styled to read as neither hazard nor airspace: outline only, in a
+  // colour used nowhere else (states are slate, ARTCC teal, IFR amber,
+  // MTN OBSC violet), with a long dash that says "reference line".
+  legacyMtnObsc: L.geoJSON(null, {
+    style: (feature) => {
+      const name = (feature.properties && feature.properties.name) || '';
+      // CentralValleyCutout is a HOLE in the Rockies area, not a hazard
+      // area of its own. Drawn dotted and dimmer so it reads as "this
+      // bit is taken out" rather than "here is another area", and
+      // labelled to say so outright.
+      const isCutout = name === 'CentralValleyCutout';
+      return {
+        color: '#ff5c8a',
+        weight: isCutout ? 1 : 2,
+        fill: false,
+        opacity: isCutout ? 0.65 : 1,
+        dashArray: isCutout ? '2 5' : '10 6',
+      };
+    },
+    onEachFeature: (feature, layer) => {
+      const name = feature.properties && feature.properties.name;
+      const isCutout = name === 'CentralValleyCutout';
+      const label = !name
+        ? '&#9888; unnamed feature &mdash; legacy_mtnobsc.json has no <code>name</code> property'
+        : isCutout
+          ? `${name} &mdash; cutout from the Rockies area, not a hazard area`
+          : `${name} &mdash; legacy area (reference only)`;
+      layer.bindTooltip(label, { sticky: true, className: 'legacy-tooltip' });
+    },
+  }),
 };
 
 layers.states.addTo(map);
@@ -112,6 +148,12 @@ document.getElementById('toggle-states').addEventListener('change', (e) => {
 document.getElementById('toggle-artcc').addEventListener('change', (e) => {
   if (e.target.checked) map.addLayer(layers.artcc);
   else map.removeLayer(layers.artcc);
+});
+
+// Off by default -- a comparison overlay, not part of the normal view.
+document.getElementById('toggle-legacy-mtnobsc').addEventListener('change', (e) => {
+  if (e.target.checked) map.addLayer(layers.legacyMtnObsc);
+  else map.removeLayer(layers.legacyMtnObsc);
 });
 
 document.getElementById('toggle-mtn').addEventListener('change', (e) => {
@@ -152,6 +194,151 @@ function debounce(fn, delay) {
   };
 }
 
+// --- RIGHT-RAIL ACCORDION ---
+//     Each hazard row in LAYERS owns its adjustors, expanded inline
+//     beneath it. One open at a time: opening a row closes whatever was
+//     open, which is what keeps the rail from growing back into a third
+//     of the screen once there are seven hazards instead of two.
+//
+//     The checkbox and the expander are siblings in the markup, so
+//     visibility and expansion never interfere: a hazard can be visible
+//     and collapsed, or hidden and expanded. Rows without adjustors
+//     (STATE, ARTCC, LEGACY MTN OBSC) are plain labels with no expander
+//     and no disclosure triangle, so the difference is visible before
+//     anyone clicks.
+//
+//     Adding a hazard is one entry here plus its row in index.html.
+const HAZARD_PANELS = [
+  { hazard: 'ifr', expander: 'expand-ifr', body: 'adjust-ifr-body' },
+  { hazard: 'mtn', expander: 'expand-mtn', body: 'adjust-mtn-body' },
+];
+
+function setHazardExpanded(panel, expanded) {
+  const expander = document.getElementById(panel.expander);
+  const body = document.getElementById(panel.body);
+  if (!expander || !body) return;
+  body.hidden = !expanded;
+  expander.setAttribute('aria-expanded', String(expanded));
+  expander.closest('.layer-row').classList.toggle('layer-row-open', expanded);
+}
+
+HAZARD_PANELS.forEach((panel) => {
+  const expander = document.getElementById(panel.expander);
+  if (!expander) return;
+  expander.addEventListener('click', () => {
+    const body = document.getElementById(panel.body);
+    const willOpen = body.hidden;
+    HAZARD_PANELS.forEach((other) => setHazardExpanded(other, false));
+    if (willOpen) setHazardExpanded(panel, true);
+  });
+});
+
+// Default state on load: everything collapsed.
+HAZARD_PANELS.forEach((panel) => setHazardExpanded(panel, false));
+
+// --- WHOLE-RAIL COLLAPSE ---
+//     Collapses to a narrow icon strip so the map can go full width.
+//     Session-only by design: this environment has no localStorage, so
+//     the state lives in the DOM for as long as the page does and a
+//     reload comes back expanded.
+function setRailCollapsed(collapsed) {
+  const panels = document.getElementById('rail-panels');
+  const strip = document.getElementById('rail-strip');
+  if (!panels || !strip) return;
+  panels.hidden = collapsed;
+  strip.hidden = !collapsed;
+  document.getElementById('right-rail').classList.toggle('rail-is-collapsed', collapsed);
+}
+
+document.getElementById('rail-collapse').addEventListener('click', () => setRailCollapsed(true));
+document.getElementById('rail-expand').addEventListener('click', () => setRailCollapsed(false));
+
+// The strip's icons re-open the rail and scroll the panel they name into
+// view -- with seven hazards the rail may well be taller than the window.
+document.querySelectorAll('.rail-icon').forEach((button) => {
+  button.addEventListener('click', () => {
+    setRailCollapsed(false);
+    const target = document.getElementById(button.dataset.scrollTo);
+    if (target) target.scrollIntoView({ block: 'nearest' });
+  });
+});
+
+setRailCollapsed(false);
+
+// Called when there is no cached grid behind this cycle: recompute and
+// export both depend on one, so the controls that drive them are
+// collapsed, disabled and labelled rather than left looking operable.
+function disableLiveAdjust(reason) {
+  HAZARD_PANELS.forEach((panel) => {
+    setHazardExpanded(panel, false);
+    const expander = document.getElementById(panel.expander);
+    expander.disabled = true;
+    expander.title = reason;
+    expander.closest('.layer-row').classList.add('layer-row-disabled');
+  });
+
+  const exportPanel = document.getElementById('export-panel');
+  exportPanel.classList.add('panel-disabled');
+  exportPanel.title = reason;
+  exportPanel.querySelectorAll('button, input').forEach((control) => { control.disabled = true; });
+  document.getElementById('export-status').textContent = 'unavailable';
+}
+
+function disableLegacyToggle(reason) {
+  const toggle = document.getElementById('toggle-legacy-mtnobsc');
+  if (!toggle) return;
+  toggle.checked = false;
+  toggle.disabled = true;
+  const row = toggle.closest('.layer-row');
+  if (row) {
+    row.classList.add('layer-toggle-disabled');
+    row.title = reason;
+  }
+}
+
+// --- The legacy overlay's features are identified by a `name`
+//     property, which both the styling and the tooltips key off. A file
+//     that spells it differently is NOT a broken file in any way the
+//     browser can detect: it parses, it draws three areas, and every
+//     tooltip quietly falls back. The Central Valley cutout is the real
+//     casualty -- without its name it loses the dotted styling and the
+//     label that say it is a hole in the Rockies area, and reads as a
+//     third hazard area instead.
+//
+//     That is a wrong map with nothing on screen admitting it, so it gets
+//     said out loud: in the layer list, where the operator is, and in the
+//     console for whoever is deploying. Deliberately NOT a reason to
+//     disable the layer -- the geometry is still worth looking at, and a
+//     forecaster mid-calibration should not lose it over a key name.
+function checkLegacyFeatureNames(geojson) {
+  const features = (geojson && geojson.features) || [];
+  const unnamed = features.filter((f) => !(f.properties && f.properties.name));
+  const warning = document.getElementById('legacy-mtnobsc-warning');
+  if (!unnamed.length) {
+    warning.hidden = true;
+    return;
+  }
+
+  // Name the key that IS there, when there is exactly one candidate --
+  // it turns "something is wrong" into a one-line fix.
+  const keys = new Set();
+  unnamed.forEach((f) => Object.keys(f.properties || {}).forEach((k) => keys.add(k)));
+  const suspect = [...keys].find((k) => k !== 'source' && k !== 'bearing_datum');
+  const found = suspect ? ` (found \`${suspect}\`)` : '';
+
+  warning.innerHTML =
+    `&#9888; ${unnamed.length} of ${features.length} legacy features have no ` +
+    `<code>name</code>${found}. Areas are drawn, but the Central Valley cutout ` +
+    `is not distinguishable from a hazard area. Regenerate with ` +
+    `<code>scripts/build_legacy.py</code>.`;
+  warning.hidden = false;
+  console.error(
+    `legacy_mtnobsc.json: ${unnamed.length}/${features.length} features lack a "name" property` +
+    (suspect ? `; found "${suspect}" instead` : '') +
+    ' -- the Central Valley cutout will render as an ordinary legacy area'
+  );
+}
+
 // --- PER-FORECAST-HOUR ADJUSTMENT STATE ---
 //     Each forecast hour keeps its OWN slider settings, per hazard, rather
 //     than one set shared across the whole cycle. Forecasters need this:
@@ -180,6 +367,7 @@ const IFR_FIELDS = [
 
 const MTN_FIELDS = [
   { key: 'threshold', slider: 'adjust-mtn-threshold', label: 'adjust-mtn-threshold-val', prop: 'threshold_pct' },
+  { key: 'relief', slider: 'adjust-mtn-relief', label: 'adjust-mtn-relief-val', prop: 'mountainous_relief_ft' },
   { key: 'clearance', slider: 'adjust-mtn-clearance', label: 'adjust-mtn-clearance-val', prop: 'clearance_margin_ft' },
   { key: 'radius', slider: 'adjust-mtn-radius', label: 'adjust-mtn-radius-val', prop: 'neighborhood_radius_nm' },
   { key: 'minArea', slider: 'adjust-mtn-minarea', label: 'adjust-mtn-minarea-val', prop: 'min_area_sq_mi' },
@@ -208,12 +396,23 @@ function makeHourStore(fields) {
     },
 
     // Starting settings for an hour, from its scheduled snapshot's
-    // properties, falling back to the sliders for anything absent.
+    // properties.
+    //
+    // A property the snapshot does not carry falls back to the slider's
+    // DEFAULT, not to where the slider currently sits. This path is also
+    // what RESET runs through, and resetting to "wherever you left it" is
+    // not a reset. It matters for any parameter added after a snapshot was
+    // written -- mountainous_relief_ft is the first -- where every cached
+    // file predates the property and the fallback is the only branch taken.
+    // The markup's default value is the pipeline default, so this restores
+    // exactly what the scheduled run would have used.
     fromProps(props) {
       if (!props) return null;
-      const current = this.read();
       const out = {};
-      fields.forEach((f) => { out[f.key] = props[f.prop] ?? current[f.key]; });
+      fields.forEach((f) => {
+        const el = document.getElementById(f.slider);
+        out[f.key] = props[f.prop] ?? Number(el.defaultValue);
+      });
       return out;
     },
 
@@ -287,19 +486,45 @@ const debouncedRecompute = debounce(recomputeCurrentSnapshot, 300);
 //     (clearance_margin_ft), and the two hazards are genuinely tuned
 //     independently -- a forecaster dialing in an IFR threshold
 //     shouldn't silently move the mountain obscuration boundaries too. ---
+// --- The mountainous-area readout under the RELIEF slider.
+//
+//     The figure is a FeatureCollection foreign member rather than a
+//     feature property, because it describes the mask the polygons were
+//     cut from, not any one polygon -- at a relief threshold high enough
+//     to leave no mountains at all there are no features to hang it on,
+//     and that is exactly the case worth showing.
+//
+//     Absent means "this snapshot predates the measurement" (a scheduled
+//     file written by an older pipeline run), not "zero". Those are very
+//     different numbers, so an absent member shows as -- and a real zero
+//     shows as 0.
+function setMountainousArea(geojson) {
+  const el = document.getElementById('adjust-mtn-relief-area');
+  const sqMi = geojson?.mountainous_area_sq_mi;
+  if (sqMi == null) {
+    el.textContent = '--';
+    el.title = 'not measured in this snapshot -- move a slider to recompute';
+    return;
+  }
+  el.textContent = sqMi >= 1e6
+    ? `${(sqMi / 1e6).toFixed(2)}M mi\u00b2`
+    : `${Math.round(sqMi).toLocaleString()} mi\u00b2`;
+  el.title = `${Math.round(sqMi).toLocaleString()} sq mi of the grid is mountainous at this relief threshold`;
+}
+
 async function recomputeCurrentMtnSnapshot(settings = null) {
   if (currentFxx == null || !liveAdjustAvailable) return;
 
   // Slider-driven calls pass nothing and read the DOM; hour switches pass
   // that hour's stored settings explicitly.
-  const { threshold, clearance, radius, minArea } = settings || mtnHours.read();
+  const { threshold, relief, clearance, radius, minArea } = settings || mtnHours.read();
   const statusEl = document.getElementById('adjust-mtn-status');
   const fxxStr = String(currentFxx).padStart(2, '0');
 
   statusEl.textContent = 'computing...';
   try {
     const url = `/api/hazards/mtn_obsc/${fxxStr}/recompute?threshold_pct=${threshold}` +
-      `&clearance_margin_ft=${clearance}&neighborhood_radius_nm=${radius}&min_area_sq_mi=${minArea}`;
+      `&mountainous_relief_ft=${relief}&clearance_margin_ft=${clearance}&neighborhood_radius_nm=${radius}&min_area_sq_mi=${minArea}`;
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(`MTN OBSC recompute failed (${resp.status})`);
     const geojson = await resp.json();
@@ -307,6 +532,7 @@ async function recomputeCurrentMtnSnapshot(settings = null) {
     layers.mtn.clearLayers();
     layers.mtn.addData(geojson);
     document.getElementById('legend-mtn-threshold').textContent = threshold;
+    setMountainousArea(geojson);
     statusEl.textContent = '';
   } catch (err) {
     console.error('MTN OBSC recompute failed:', err);
@@ -339,6 +565,7 @@ document.getElementById('adjust-minarea').addEventListener('input', (e) => {
 //     label update, debounced recompute). ---
 [
   ['adjust-mtn-threshold', 'adjust-mtn-threshold-val'],
+  ['adjust-mtn-relief', 'adjust-mtn-relief-val'],
   ['adjust-mtn-clearance', 'adjust-mtn-clearance-val'],
   ['adjust-mtn-radius', 'adjust-mtn-radius-val'],
   ['adjust-mtn-minarea', 'adjust-mtn-minarea-val'],
@@ -395,17 +622,15 @@ function downloadTextFile(content, filename, mimeType) {
 //     sliders currently say -- lets a forecaster dial in thresholds,
 //     review the result, then hand off exactly that draft rather than
 //     only ever being able to export the default scheduled version. ---
-document.getElementById('adjust-generate').addEventListener('click', async () => {
+async function generateIfrFiles(statusEl) {
   if (currentFxx == null || !liveAdjustAvailable) return;
 
   const threshold = document.getElementById('adjust-threshold').value;
   const radius = document.getElementById('adjust-radius').value;
   const minArea = document.getElementById('adjust-minarea').value;
   const fxxStr = String(currentFxx).padStart(2, '0');
-  const statusEl = document.getElementById('generate-status');
   const baseName = `ifr_f${fxxStr}_t${threshold}_r${radius}_a${minArea}`;
 
-  statusEl.textContent = 'generating...';
   try {
     const baseUrl = `/api/hazards/ifr/${fxxStr}/recompute?threshold_pct=${threshold}&neighborhood_radius_nm=${radius}&min_area_sq_mi=${minArea}`;
 
@@ -419,14 +644,12 @@ document.getElementById('adjust-generate').addEventListener('click', async () =>
 
     downloadTextFile(geojsonText, `${baseName}.geojson`, 'application/geo+json');
     downloadTextFile(xmlText, `${baseName}.xml`, 'application/xml');
-
-    statusEl.textContent = 'downloaded';
-    setTimeout(() => { statusEl.textContent = ''; }, 3000);
   } catch (err) {
     console.error('Generate failed:', err);
-    statusEl.textContent = 'error (see console)';
+    statusEl.textContent = 'IFR error (see console)';
+    throw err;
   }
-});
+}
 
 // --- MTN OBSC reset: drops THIS hour's saved settings and reloads its
 //     original scheduled snapshot. Other hours keep their adjustments.
@@ -448,21 +671,20 @@ document.getElementById('adjust-mtn-reset-all').addEventListener('click', async 
 
 // --- MTN OBSC generate: downloads GeoJSON + XML for whatever the MTN
 //     sliders currently say, same as the IFR generate button. ---
-document.getElementById('adjust-mtn-generate').addEventListener('click', async () => {
+async function generateMtnFiles(statusEl) {
   if (currentFxx == null || !liveAdjustAvailable) return;
 
   const threshold = document.getElementById('adjust-mtn-threshold').value;
+  const relief = document.getElementById('adjust-mtn-relief').value;
   const clearance = document.getElementById('adjust-mtn-clearance').value;
   const radius = document.getElementById('adjust-mtn-radius').value;
   const minArea = document.getElementById('adjust-mtn-minarea').value;
   const fxxStr = String(currentFxx).padStart(2, '0');
-  const statusEl = document.getElementById('generate-mtn-status');
-  const baseName = `mtn_obsc_f${fxxStr}_t${threshold}_c${clearance}_r${radius}_a${minArea}`;
+  const baseName = `mtn_obsc_f${fxxStr}_t${threshold}_e${relief}_c${clearance}_r${radius}_a${minArea}`;
 
-  statusEl.textContent = 'generating...';
   try {
     const baseUrl = `/api/hazards/mtn_obsc/${fxxStr}/recompute?threshold_pct=${threshold}` +
-      `&clearance_margin_ft=${clearance}&neighborhood_radius_nm=${radius}&min_area_sq_mi=${minArea}`;
+      `&mountainous_relief_ft=${relief}&clearance_margin_ft=${clearance}&neighborhood_radius_nm=${radius}&min_area_sq_mi=${minArea}`;
 
     const geojsonResp = await fetch(baseUrl);
     if (!geojsonResp.ok) throw new Error(`GeoJSON fetch failed (${geojsonResp.status})`);
@@ -474,14 +696,12 @@ document.getElementById('adjust-mtn-generate').addEventListener('click', async (
 
     downloadTextFile(geojsonText, `${baseName}.geojson`, 'application/geo+json');
     downloadTextFile(xmlText, `${baseName}.xml`, 'application/xml');
-
-    statusEl.textContent = 'downloaded';
-    setTimeout(() => { statusEl.textContent = ''; }, 3000);
   } catch (err) {
     console.error('MTN OBSC generate failed:', err);
-    statusEl.textContent = 'error (see console)';
+    statusEl.textContent = 'MTN OBSC error (see console)';
+    throw err;
   }
-});
+}
 
 // --- COMBINED PGEN EXPORT ---
 //     Downloads ONE PGEN XML document holding all five forecast hours,
@@ -507,8 +727,8 @@ function pgenHoursPayload(store) {
   });
 }
 
-async function downloadPgen(hazardPath, store, statusEl) {
-  statusEl.textContent = 'building all hours...';
+async function downloadPgen(hazardPath, store, statusEl, label = hazardPath) {
+  statusEl.textContent = `building ${label} (all hours)...`;
   try {
     const resp = await fetch(`/api/hazards/${hazardPath}/pgen`, {
       method: 'POST',
@@ -525,22 +745,75 @@ async function downloadPgen(hazardPath, store, statusEl) {
     downloadTextFile(JSON.stringify(data.sidecar, null, 2),
                      data.sidecar_filename, 'application/json');
 
-    statusEl.textContent = `${data.sidecar.total_gfa_elements} elements downloaded`;
+    statusEl.textContent = `${label}: ${data.sidecar.total_gfa_elements} elements`;
     setTimeout(() => { statusEl.textContent = ''; }, 4000);
   } catch (err) {
     console.error('PGEN export failed:', err);
-    statusEl.textContent = 'error (see console)';
+    statusEl.textContent = `${label} error (see console)`;
   }
 }
 
-document.getElementById('adjust-pgen').addEventListener('click', () => {
-  if (!liveAdjustAvailable) return;
-  downloadPgen('ifr', ifrHours, document.getElementById('generate-status'));
+// --- EXPORT PANEL ---
+//     One panel driving both hazards, replacing the pair of export
+//     buttons that used to sit inside each adjustor. The requests and
+//     the routes behind them are unchanged -- this only decides which
+//     hazards each click covers.
+//
+//     The hazard checkboxes FOLLOW layer visibility until someone edits
+//     them, which is what "default to whichever layers are visible"
+//     means once visibility can change after load. Editing one pins it,
+//     because at that point it is a deliberate choice rather than a
+//     default.
+const EXPORT_HAZARDS = [
+  { checkbox: 'export-hazard-ifr', visibility: 'toggle-ifr', hazardPath: 'ifr', label: 'IFR',
+    store: () => ifrHours, generate: generateIfrFiles },
+  { checkbox: 'export-hazard-mtn', visibility: 'toggle-mtn', hazardPath: 'mtn_obsc', label: 'MTN OBSC',
+    store: () => mtnHours, generate: generateMtnFiles },
+];
+
+EXPORT_HAZARDS.forEach((entry) => {
+  const box = document.getElementById(entry.checkbox);
+  const visibility = document.getElementById(entry.visibility);
+  box.checked = visibility.checked;
+  box.addEventListener('change', () => { box.dataset.userSet = 'true'; });
+  visibility.addEventListener('change', () => {
+    if (box.dataset.userSet !== 'true') box.checked = visibility.checked;
+  });
 });
 
-document.getElementById('adjust-mtn-pgen').addEventListener('click', () => {
-  if (!liveAdjustAvailable) return;
-  downloadPgen('mtn_obsc', mtnHours, document.getElementById('generate-mtn-status'));
+function selectedExportHazards() {
+  return EXPORT_HAZARDS.filter((entry) => document.getElementById(entry.checkbox).checked);
+}
+
+document.getElementById('export-generate').addEventListener('click', async () => {
+  const statusEl = document.getElementById('export-status');
+  const selected = selectedExportHazards();
+  if (!selected.length) { statusEl.textContent = 'pick a hazard'; return; }
+  if (!liveAdjustAvailable) { statusEl.textContent = 'no cached grid to export'; return; }
+
+  statusEl.textContent = 'generating...';
+  try {
+    // Sequential rather than parallel: each hazard fires two downloads,
+    // and browsers throttle simultaneous ones from a single gesture.
+    for (const entry of selected) {
+      await entry.generate(statusEl);
+    }
+    statusEl.textContent = 'downloaded';
+    setTimeout(() => { statusEl.textContent = ''; }, 3000);
+  } catch (err) {
+    // generate* already wrote the specific message and logged the error.
+  }
+});
+
+document.getElementById('export-pgen').addEventListener('click', async () => {
+  const statusEl = document.getElementById('export-status');
+  const selected = selectedExportHazards();
+  if (!selected.length) { statusEl.textContent = 'pick a hazard'; return; }
+  if (!liveAdjustAvailable) { statusEl.textContent = 'no cached grid to export'; return; }
+
+  for (const entry of selected) {
+    await downloadPgen(entry.hazardPath, entry.store(), statusEl, entry.label);
+  }
 });
 
 
@@ -601,6 +874,7 @@ async function loadMtnObscSnapshot(requestedFxx) {
     const firstProps = geojson.features?.[0]?.properties;
     document.getElementById('legend-mtn-threshold').textContent =
       firstProps?.threshold_pct ?? '--';
+    setMountainousArea(geojson);
 
     // First visit to this hour (or a reset): seed its settings from the
     // scheduled snapshot and sync the sliders to what's actually on
@@ -615,6 +889,7 @@ async function loadMtnObscSnapshot(requestedFxx) {
     console.warn('Mountain Obscuration layer unavailable:', err);
     layers.mtn.clearLayers();
     document.getElementById('legend-mtn-threshold').textContent = '--';
+    setMountainousArea(null);
   }
 }
 
@@ -739,6 +1014,22 @@ async function loadData() {
     console.error('Failed to load ARTCC boundaries:', err);
   }
 
+  // The legacy overlay is optional data: a deployment without the file
+  // gets a 404 here, which disables the toggle rather than logging an
+  // error the operator can do nothing about.
+  try {
+    const legacyResp = await fetch('/api/boundaries/legacy_mtnobsc');
+    if (legacyResp.ok) {
+      const legacyGeoJSON = await legacyResp.json();
+      checkLegacyFeatureNames(legacyGeoJSON);
+      layers.legacyMtnObsc.addData(legacyGeoJSON);
+    } else {
+      disableLegacyToggle('legacy_mtnobsc.json not deployed');
+    }
+  } catch (err) {
+    disableLegacyToggle('legacy boundaries unavailable');
+  }
+
   // Try the manifest first -- if it exists, build the forecast-hour
   // selector and load its first (shortest) snapshot. If it doesn't
   // (e.g. demo-data-only situations, or an older deployment), fall back
@@ -758,8 +1049,13 @@ async function loadData() {
     console.warn('No forecast-hour manifest available, falling back to single snapshot:', err);
     document.getElementById('valid-time').textContent = '--------Z'; // clear any "loading" text
     document.getElementById('fxx-row').style.display = 'none';
-    document.getElementById('adjust-panel').style.display = 'none'; // nothing cached to recompute from
-    document.getElementById('adjust-mtn-panel').style.display = 'none'; // same
+    // Nothing cached to recompute from, so neither the adjustors nor the
+    // exports can do anything. The adjustors used to be whole panels that
+    // were hidden here; now they live inside their hazard rows, so the
+    // equivalent is to collapse and disable the rows themselves and dim
+    // the export panel -- the visibility checkboxes stay live, since
+    // showing and hiding layers still works fine without a cached grid.
+    disableLiveAdjust('no cached grid for this cycle -- adjustment and export need one');
     try {
       const ifrResp = await fetch('/api/hazards/ifr');
       const ifrGeoJSON = await ifrResp.json();

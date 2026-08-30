@@ -221,6 +221,9 @@ from pipeline.hazards.ifr import (
 )
 from pipeline.polygons import (
     GridSpec,
+    cell_areas_sq_mi,
+    cell_dimensions_km,
+    close_mask,
     filter_polygons_by_area,
     grid_to_polygons,
     merge_nearby_polygons,
@@ -314,6 +317,40 @@ MIN_BASELINE_ELEVATION_FT = -500.0
 GAUSSIAN_SIGMA_CELLS = 0.6
 BOUNDARY_SMOOTHING_DEG = 0.02
 FINAL_SIMPLIFY_TOLERANCE_DEG = 0.05
+
+# MTN OBSC's own minimum-area filter, deliberately separate from IFR's.
+#
+# The value is still 3,000 sq mi -- AIRMET/G-AIRMET's historical
+# "widespread" criterion, which IFR uses -- but that number was never
+# chosen for this hazard, and it was set when the vector closing was
+# inflating terrain into blobs. Terrain-following areas are long and
+# thin: a 100 x 10 nm ridge is about 1,300 sq mi and does not survive
+# 3,000, so the filter is now removing real ridges rather than noise.
+#
+# THIS IS A PLACEHOLDER AWAITING A FORECASTER'S CHOICE, not a
+# meteorological judgement made here -- same status as
+# MOUNTAINOUS_RELIEF_THRESHOLD_FT. It is a separate constant so changing
+# it is one edit that cannot move IFR, and so the sweep in docs/METHODS.md
+# has something to point at.
+DEFAULT_MIN_AREA_SQ_MI = 3000.0
+
+# The forecaster's neighborhood radius, applied to the raster rather
+# than to the finished polygons. Flip to False for a one-line revert to
+# merge_nearby_polygons(), matching the pattern
+# pipeline.hazards.ifr.USE_LABEL_GRID_POLYGONIZE uses -- the two paths
+# take the same arguments and mean the same thing by them.
+#
+# Why the raster version is the default: the vector closing runs after
+# the land / elevation / ARTCC / relief gates, so it can (and did) put
+# polygons back over Lake Superior and across the Canadian border. See
+# the branch in polygonize_mtn_obsc_grid() for the full account.
+USE_RASTER_CLOSING_MTNOBSC = True
+
+# What a cell the raster closing ADDED is worth when the grid is
+# contoured. Saturated rather than "just above threshold" so the
+# resulting isoline lands at the cell edge instead of its centre -- see
+# the closing branch in polygonize_mtn_obsc_grid().
+CLOSING_FILL_PCT = 100.0
 
 # Same sentinel-pinning trick as IFR's LAYER_OFF -- guaranteed to never
 # cross any real 0-100 threshold_pct value, so non-mountainous cells are
@@ -679,9 +716,10 @@ def polygonize_mtn_obsc_grid(
     date: datetime,
     fxx: int,
     threshold_pct: float = 50.0,
+    mountainous_relief_ft: float = MOUNTAINOUS_RELIEF_THRESHOLD_FT,
     clearance_margin_ft: float = DEFAULT_CLEARANCE_MARGIN_FT,
     neighborhood_radius_nm: float = 50.0,
-    min_area_sq_mi: float = 3000.0,
+    min_area_sq_mi: float = DEFAULT_MIN_AREA_SQ_MI,
     terrain_radius_nm: float | None = None,
 ) -> dict:
     """
@@ -700,13 +738,28 @@ def polygonize_mtn_obsc_grid(
     threshold_pct : float
         Probability (0-100) above which a cell counts as "hazard
         present." Forecaster-adjustable, same meaning as IFR's.
+    mountainous_relief_ft : float
+        Local relief (ridge minus baseline) at or above which a cell
+        counts as mountainous. Defaults to
+        MOUNTAINOUS_RELIEF_THRESHOLD_FT; a forecaster-adjustable input
+        rather than a fixed rule, because this is THE binding constraint
+        on how much ground the hazard claims and it has never been
+        calibrated -- see that constant's docstring.
+
+        Applied here at recompute time against the cached terrain grid,
+        NOT baked in at fetch time like terrain_radius_nm, which is what
+        makes it adjustable live at all.
     clearance_margin_ft : float
         One of CLEARANCE_MARGIN_OPTIONS_FT (0/500/1000/2000 ft) --
         added to the real terrain rise before interpolating probability.
         NEW parameter, not present for IFR.
-    neighborhood_radius_nm, min_area_sq_mi : float
-        Reused as-is from IFR -- same meaning, same defaults. NOT the
-        same thing as terrain_radius_nm (see module docstring).
+    neighborhood_radius_nm : float
+        Same meaning as IFR's. NOT the same thing as terrain_radius_nm
+        (see module docstring). Applied to the RASTER, with every gate
+        re-applied afterwards -- see the closing branch below.
+    min_area_sq_mi : float
+        Defaults to DEFAULT_MIN_AREA_SQ_MI, this hazard's own constant
+        rather than IFR's number -- see there for why they are separate.
     terrain_radius_nm : float, optional
         INFORMATIONAL ONLY -- whatever radius was baked into the loaded
         terrain grid at fetch time (see prepare_mtn_obsc_grid()'s
@@ -719,7 +772,7 @@ def polygonize_mtn_obsc_grid(
     dict (GeoJSON FeatureCollection)
     """
     terrain_relief_ft = ridge_elevation_ft - baseline_elevation_ft
-    mountainous_mask = terrain_relief_ft >= MOUNTAINOUS_RELIEF_THRESHOLD_FT
+    mountainous_mask = terrain_relief_ft >= mountainous_relief_ft
 
     # THE water exclusion: a real land polygon following the actual
     # coastline. Necessary because the relief check alone can't tell
@@ -747,7 +800,23 @@ def polygonize_mtn_obsc_grid(
     within_conus_mask = get_boundary_mask(grid_spec, mountainous_mask.shape, CONUS_BOUNDARY_PATH)
     mountainous_mask = mountainous_mask & within_conus_mask
 
-    critical_ceiling_agl = terrain_relief_ft + clearance_margin_ft
+    # baseline_elevation_ft is NaN where a terrain block contained no
+    # land at all (see fetch_terrain.compute_output_grids). Those cells
+    # are already out -- NaN fails every gate above, which is the whole
+    # point of using NaN rather than a substituted elevation -- so the
+    # only thing left to do is keep the NaN from travelling into the
+    # interpolation, whose result for them is discarded anyway.
+    # THE NUMBER CALIBRATION NEEDS. mountainous_relief_ft decides how much
+    # of CONUS this hazard can claim before any weather is consulted, and
+    # without seeing the total there is no way to judge a threshold except
+    # by eye. Measured AFTER every gate, because that is the ground that
+    # actually reaches the polygonizer. Reported on the FeatureCollection
+    # (see below) so the viewer can show it beside the slider.
+    mountainous_area_sq_mi = float(
+        (cell_areas_sq_mi(grid_spec, mountainous_mask.shape) * mountainous_mask).sum()
+    )
+
+    critical_ceiling_agl = np.nan_to_num(terrain_relief_ft, nan=0.0) + clearance_margin_ft
     derived_probability, _is_extrapolated = interpolate_terrain_relative_probability(
         critical_ceiling_agl, ceiling_prob_grids
     )
@@ -757,8 +826,47 @@ def polygonize_mtn_obsc_grid(
     # CONUS) can never cross any real threshold_pct.
     layer_grid = np.where(mountainous_mask, derived_probability, LAYER_OFF)
 
+    if USE_RASTER_CLOSING_MTNOBSC:
+        # THE NEIGHBORHOOD RADIUS, IN RASTER SPACE.
+        #
+        # merge_nearby_polygons() (the else branch below) does the same
+        # closing in vector space, but it runs AFTER every gate, so it
+        # can push a polygon straight back over ground a gate removed.
+        # That is what put MTN OBSC areas over Lake Superior in the 09Z
+        # run: the land mask excludes the lake correctly (point-tested),
+        # and the vector closing bridged across it anyway. Same failure
+        # mode IFR v2 was rewritten to remove.
+        #
+        # Closing the raster instead makes the fix a statement rather
+        # than a hope -- the three gates are simply re-applied to the
+        # closed mask below.
+        hazard = mountainous_mask & (derived_probability >= threshold_pct)
+        closed = close_mask(hazard, cell_dimensions_km(grid_spec, hazard.shape), neighborhood_radius_nm)
+
+        # RE-APPLY EVERY GATE. The water one is the reported bug, but the
+        # mountainous one matters just as much: a closing that reaches
+        # across a valley must not invent mountainous terrain where the
+        # relief gate already said there is none. (mountainous_mask has
+        # the land, elevation and ARTCC gates folded into it above; the
+        # two boundary masks are re-applied explicitly as well, so this
+        # reads as the checklist it is rather than relying on that.)
+        closed &= on_land_mask
+        closed &= within_conus_mask
+        closed &= mountainous_mask
+
+        # Cells the closing ADDED were below threshold by definition, so
+        # their real probability cannot carry them past the contour
+        # level. Pin them to a saturated value: the closing has already
+        # decided they are in, and the contour's remaining job is to
+        # place the edge. Pinning just above the threshold instead would
+        # put the isoline almost exactly on the added cell's centre --
+        # eroding the closed area by half a cell -- because the contour
+        # interpolates between LAYER_OFF and the cell's value.
+        layer_grid = np.where(closed, np.where(hazard, derived_probability, CLOSING_FILL_PCT), LAYER_OFF)
+
     polygons = grid_to_polygons(layer_grid, grid_spec, threshold=threshold_pct, min_area_deg2=0.001)
-    polygons = merge_nearby_polygons(polygons, radius_nm=neighborhood_radius_nm)
+    if not USE_RASTER_CLOSING_MTNOBSC:
+        polygons = merge_nearby_polygons(polygons, radius_nm=neighborhood_radius_nm)
     polygons = filter_polygons_by_area(polygons, min_area_sq_mi=min_area_sq_mi)
     polygons = [
         smooth_polygon_boundary(p, smoothing_deg=BOUNDARY_SMOOTHING_DEG, join_style=2) for p in polygons
@@ -772,11 +880,12 @@ def polygonize_mtn_obsc_grid(
         all_per_polygon_properties.append({"weather_type": weather_type})
 
     valid_time = date + timedelta(hours=fxx)
-    return polygons_to_feature_collection(
+    feature_collection = polygons_to_feature_collection(
         polygons,
         properties={
             "hazard": "MTN_OBSC",
             "threshold_pct": threshold_pct,
+            "mountainous_relief_ft": mountainous_relief_ft,
             "clearance_margin_ft": clearance_margin_ft,
             "neighborhood_radius_nm": neighborhood_radius_nm,
             "min_area_sq_mi": min_area_sq_mi,
@@ -788,14 +897,22 @@ def polygonize_mtn_obsc_grid(
         per_polygon_properties=all_per_polygon_properties,
     )
 
+    # A GeoJSON foreign member rather than a per-feature property: it
+    # describes the whole mask, not any one polygon, and it has to survive
+    # a quiet cycle that produces no features at all -- which is exactly
+    # when a forecaster raising the threshold most wants to see it.
+    feature_collection["mountainous_area_sq_mi"] = round(mountainous_area_sq_mi)
+    return feature_collection
+
 
 def generate_mtn_obsc_polygons(
     date: datetime,
     fxx: int,
     threshold_pct: float = 50.0,
+    mountainous_relief_ft: float = MOUNTAINOUS_RELIEF_THRESHOLD_FT,
     clearance_margin_ft: float = DEFAULT_CLEARANCE_MARGIN_FT,
     neighborhood_radius_nm: float = 50.0,
-    min_area_sq_mi: float = 3000.0,
+    min_area_sq_mi: float = DEFAULT_MIN_AREA_SQ_MI,
     terrain_grid_path: str = "data/terrain/terrain_grid.npz",
     target_resolution_deg: float = OUTPUT_RESOLUTION_DEG,
 ) -> dict:
@@ -817,6 +934,7 @@ def generate_mtn_obsc_polygons(
         date,
         fxx,
         threshold_pct=threshold_pct,
+        mountainous_relief_ft=mountainous_relief_ft,
         clearance_margin_ft=clearance_margin_ft,
         neighborhood_radius_nm=neighborhood_radius_nm,
         min_area_sq_mi=min_area_sq_mi,

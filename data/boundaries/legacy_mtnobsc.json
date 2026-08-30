@@ -4,7 +4,7 @@
   {
    "type": "Feature",
    "properties": {
-    "area": "Appalachians",
+    "name": "Appalachians",
     "source": "legacy NMAP MTN OBSC boundary",
     "bearing_datum": "TRUE (unverified - see notes)"
    },
@@ -83,7 +83,7 @@
   {
    "type": "Feature",
    "properties": {
-    "area": "Rockies",
+    "name": "Rockies",
     "source": "legacy NMAP MTN OBSC boundary",
     "bearing_datum": "TRUE (unverified - see notes)"
    },
@@ -214,7 +214,7 @@
   {
    "type": "Feature",
    "properties": {
-    "area": "CentralValleyCutout",
+    "name": "CentralValleyCutout",
     "source": "legacy NMAP MTN OBSC boundary",
     "bearing_datum": "TRUE (unverified - see notes)"
    },
