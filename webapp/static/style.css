@@ -663,3 +663,16 @@ html, body {
 .adjust-pgen-btn:hover {
   background: rgba(216, 180, 254, 0.15);
 }
+
+/* A data problem the operator can act on, in the layer list beside the
+   layer it affects -- not a console message nobody has open. */
+.layer-warning {
+  margin: 2px 0 6px 24px;
+  padding: 4px 6px;
+  border-left: 2px solid #ffb347;
+  font-size: 9px;
+  line-height: 1.35;
+  color: #ffb347;
+  text-transform: none;
+  letter-spacing: normal;
+}

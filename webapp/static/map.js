@@ -118,11 +118,13 @@ const layers = {
       };
     },
     onEachFeature: (feature, layer) => {
-      const name = (feature.properties && feature.properties.name) || 'legacy area';
+      const name = feature.properties && feature.properties.name;
       const isCutout = name === 'CentralValleyCutout';
-      const label = isCutout
-        ? `${name} &mdash; cutout from the Rockies area, not a hazard area`
-        : `${name} &mdash; legacy area (reference only)`;
+      const label = !name
+        ? '&#9888; unnamed feature &mdash; legacy_mtnobsc.json has no <code>name</code> property'
+        : isCutout
+          ? `${name} &mdash; cutout from the Rockies area, not a hazard area`
+          : `${name} &mdash; legacy area (reference only)`;
       layer.bindTooltip(label, { sticky: true, className: 'legacy-tooltip' });
     },
   }),
@@ -292,6 +294,49 @@ function disableLegacyToggle(reason) {
     row.classList.add('layer-toggle-disabled');
     row.title = reason;
   }
+}
+
+// --- The legacy overlay's features are identified by a `name`
+//     property, which both the styling and the tooltips key off. A file
+//     that spells it differently is NOT a broken file in any way the
+//     browser can detect: it parses, it draws three areas, and every
+//     tooltip quietly falls back. The Central Valley cutout is the real
+//     casualty -- without its name it loses the dotted styling and the
+//     label that say it is a hole in the Rockies area, and reads as a
+//     third hazard area instead.
+//
+//     That is a wrong map with nothing on screen admitting it, so it gets
+//     said out loud: in the layer list, where the operator is, and in the
+//     console for whoever is deploying. Deliberately NOT a reason to
+//     disable the layer -- the geometry is still worth looking at, and a
+//     forecaster mid-calibration should not lose it over a key name.
+function checkLegacyFeatureNames(geojson) {
+  const features = (geojson && geojson.features) || [];
+  const unnamed = features.filter((f) => !(f.properties && f.properties.name));
+  const warning = document.getElementById('legacy-mtnobsc-warning');
+  if (!unnamed.length) {
+    warning.hidden = true;
+    return;
+  }
+
+  // Name the key that IS there, when there is exactly one candidate --
+  // it turns "something is wrong" into a one-line fix.
+  const keys = new Set();
+  unnamed.forEach((f) => Object.keys(f.properties || {}).forEach((k) => keys.add(k)));
+  const suspect = [...keys].find((k) => k !== 'source' && k !== 'bearing_datum');
+  const found = suspect ? ` (found \`${suspect}\`)` : '';
+
+  warning.innerHTML =
+    `&#9888; ${unnamed.length} of ${features.length} legacy features have no ` +
+    `<code>name</code>${found}. Areas are drawn, but the Central Valley cutout ` +
+    `is not distinguishable from a hazard area. Regenerate with ` +
+    `<code>scripts/build_legacy.py</code>.`;
+  warning.hidden = false;
+  console.error(
+    `legacy_mtnobsc.json: ${unnamed.length}/${features.length} features lack a "name" property` +
+    (suspect ? `; found "${suspect}" instead` : '') +
+    ' -- the Central Valley cutout will render as an ordinary legacy area'
+  );
 }
 
 // --- PER-FORECAST-HOUR ADJUSTMENT STATE ---
@@ -975,7 +1020,9 @@ async function loadData() {
   try {
     const legacyResp = await fetch('/api/boundaries/legacy_mtnobsc');
     if (legacyResp.ok) {
-      layers.legacyMtnObsc.addData(await legacyResp.json());
+      const legacyGeoJSON = await legacyResp.json();
+      checkLegacyFeatureNames(legacyGeoJSON);
+      layers.legacyMtnObsc.addData(legacyGeoJSON);
     } else {
       disableLegacyToggle('legacy_mtnobsc.json not deployed');
     }

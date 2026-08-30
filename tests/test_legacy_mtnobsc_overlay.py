@@ -23,12 +23,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LEGACY_PATH = REPO_ROOT / "data" / "boundaries" / "legacy_mtnobsc.json"
+NAVAIDS_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "navaids_subset.csv"
 EXPECTED_FEATURES = {"Appalachians", "Rockies", "CentralValleyCutout"}
 
 # CONUS with a generous margin -- the same bounding box the terrain grid
 # uses (pipeline.fetch_terrain.CONUS_BOUNDS). A vertex outside this is a
 # resolution error in the VOR strings, not a wide area.
 CONUS_WEST, CONUS_SOUTH, CONUS_EAST, CONUS_NORTH = -126.0, 22.0, -65.0, 50.0
+
+
+def _legacy_geojson_bytes():
+    if not LEGACY_PATH.exists():
+        pytest.skip(
+            "data/boundaries/legacy_mtnobsc.json not in this checkout -- generate it with "
+            "scripts/build_legacy.py (see data/boundaries/LEGACY_MTNOBSC.md)"
+        )
+    return LEGACY_PATH.read_bytes()
 
 
 def _legacy_geojson():
@@ -77,6 +87,77 @@ def test_every_vertex_is_inside_conus():
             for lon, lat in ring:
                 assert CONUS_WEST <= lon <= CONUS_EAST, f"{name}: longitude {lon} is outside CONUS"
                 assert CONUS_SOUTH <= lat <= CONUS_NORTH, f"{name}: latitude {lat} is outside CONUS"
+
+
+def test_running_the_build_script_reproduces_the_committed_file_byte_for_byte():
+    """
+    The committed GeoJSON and the script that generates it are two
+    artifacts of one source (the VOR strings in build_legacy.py), and
+    nothing but this test keeps them in step. They were already out of
+    step once: the script emitted the identifier under `area` while the
+    file and the viewer used `name`.
+
+    Run as a subprocess, through the real CLI, because that is what a
+    person regenerating this actually types -- importing build() would
+    skip argument handling and the output path, which is where the last
+    round of drift lived.
+
+    navaids_subset.csv is a verbatim subset of OurAirports' navaids.csv
+    (URL in the script header), trimmed to the rows these three strings
+    resolve -- every US/CA row for a referenced ident, so the table's own
+    duplicate handling still applies. Verified byte-identical output
+    against the full 1.5 MB upstream table when it was made.
+    """
+    import subprocess
+    import sys
+    import tempfile
+
+    committed = _legacy_geojson_bytes()
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "regenerated.json"
+        result = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "scripts" / "build_legacy.py"),
+             "--navaids", str(NAVAIDS_FIXTURE), "--out", str(out), "--quiet"],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, f"build_legacy.py failed:\n{result.stderr}"
+        regenerated = out.read_bytes()
+
+    assert regenerated == committed, (
+        "regenerating no longer reproduces data/boundaries/legacy_mtnobsc.json. "
+        "If the VOR strings or the navaid table changed on purpose, commit the "
+        "regenerated file; if not, the script and the data have drifted apart."
+    )
+
+
+def test_the_build_script_writes_into_the_repo_by_default():
+    """
+    It used to write to a hardcoded /home/claude/... path, so a
+    regeneration landed nowhere near the file it was meant to replace.
+    """
+    import ast
+
+    source = (REPO_ROOT / "scripts" / "build_legacy.py").read_text()
+    assert "/home/claude" not in source, "the hardcoded personal output path is back"
+
+    tree = ast.parse(source)
+    default_out = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "DEFAULT_OUT" for t in node.targets)
+    ]
+    assert default_out, "DEFAULT_OUT is gone"
+    assert "legacy_mtnobsc.json" in ast.unparse(default_out[0]), ast.unparse(default_out[0])
+    assert "REPO_ROOT" in ast.unparse(default_out[0]), "the default output path is not repo-relative"
+
+
+def test_the_navaid_source_is_documented_where_someone_regenerating_will_look():
+    """The table is not vendored, so the script has to say where to get it."""
+    source = (REPO_ROOT / "scripts" / "build_legacy.py").read_text()
+    header = source[:source.index('"""', source.index('"""') + 3)]
+    assert "ourairports-data/main/navaids.csv" in header, (
+        "the navaid table's download URL is not in the script header"
+    )
 
 
 def test_the_overlay_is_not_wired_into_any_gate_or_mask():

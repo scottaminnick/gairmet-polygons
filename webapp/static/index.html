@@ -158,6 +158,13 @@
         <span class="swatch swatch-legacy"></span>
         <span class="mono">LEGACY MTN OBSC</span>
       </label>
+      <!-- Shown only when the loaded file has features without a `name`
+           property. That used to fail silently: the areas still drew, but
+           every tooltip fell back to "legacy area" and the Central Valley
+           cutout lost the styling that says it is a cutout, so it read as
+           a third hazard area. Nothing on screen said anything was
+           wrong. -->
+      <div class="layer-warning mono" id="legacy-mtnobsc-warning" hidden></div>
     </div>
 
     <!-- EXPORT: one panel for every hazard, rather than a pair of buttons

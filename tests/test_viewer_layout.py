@@ -338,6 +338,59 @@ def test_markup_defaults_match_the_route_defaults_that_reset_relies_on():
             )
 
 
+# --- The legacy overlay's wrong-key warning --------------------------------
+#     A file keyed `area` instead of `name` is not detectably broken to the
+#     browser: it parses, it draws three areas, and only the Central Valley
+#     cutout silently loses the styling that says it is a cutout. So the
+#     viewer has to say so itself.
+
+def test_the_legacy_overlay_has_somewhere_to_put_a_data_warning():
+    assert "legacy-mtnobsc-warning" in HTML_IDS, "no warning element for the legacy overlay"
+    tag = re.search(r'<div class="layer-warning[^"]*" id="legacy-mtnobsc-warning"[^>]*>', HTML)
+    assert tag, "the warning element is not a .layer-warning"
+    assert "hidden" in tag.group(0), "the warning must start hidden -- it is not the normal state"
+
+
+def test_the_warning_sits_with_the_layer_it_is_about():
+    legacy_row = HTML.index('id="toggle-legacy-mtnobsc"')
+    warning = HTML.index('id="legacy-mtnobsc-warning"')
+    panels_end = HTML.index('id="export-panel"')
+    assert legacy_row < warning < panels_end, (
+        "the warning should follow the LEGACY MTN OBSC row inside the layers panel"
+    )
+
+
+def test_a_missing_name_is_reported_rather_than_papered_over():
+    """
+    The old code substituted the string 'legacy area' for a missing name,
+    which is what made the failure invisible. Both the styling and the
+    tooltip now have to distinguish "absent" from "named".
+    """
+    assert "checkLegacyFeatureNames" in JS, "nothing checks the legacy features' names"
+    assert "|| 'legacy area'" not in JS, (
+        "the tooltip still falls back to a plausible-looking label for an unnamed feature"
+    )
+
+    check = _slice_between(JS, "function checkLegacyFeatureNames(", "\n}")
+    assert "console.error" in check, "a wrong-keyed file should also reach whoever deployed it"
+    assert "build_legacy.py" in check, "the warning should say how to fix it"
+    assert "hidden = false" in check and "hidden = true" in check, (
+        "the warning must both appear and go away again"
+    )
+
+
+def test_a_wrong_keyed_file_does_not_disable_the_layer():
+    """
+    The geometry is still worth looking at, and a forecaster mid-
+    calibration should not lose the overlay over a property name. Absent
+    data disables the toggle; wrong-keyed data warns.
+    """
+    check = _slice_between(JS, "function checkLegacyFeatureNames(", "\n}")
+    assert "disableLegacyToggle" not in check, (
+        "a naming problem should warn, not disable -- disabling is for a missing file"
+    )
+
+
 # --- helpers ---------------------------------------------------------------
 
 def _module_constant(repo_root, name):

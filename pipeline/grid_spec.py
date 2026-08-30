@@ -91,7 +91,7 @@ class GridSpec:
         exactly what find_contours returns, e.g. row=0.5 for an isoline
         running halfway between the centres of rows 0 and 1.
         """
-        return self.to_affine() * (col + 0.5, row + 0.5)
+        return self.to_affine() @ (col + 0.5, row + 0.5)
 
     def lonlat_to_pixel(self, lon: float, lat: float) -> tuple[float, float]:
         """
@@ -99,5 +99,5 @@ class GridSpec:
         of pixel_to_lonlat(). Derived from the same affine rather than
         rewritten as arithmetic, so the two cannot drift apart.
         """
-        col, row = ~self.to_affine() * (lon, lat)
+        col, row = ~self.to_affine() @ (lon, lat)
         return row - 0.5, col - 0.5

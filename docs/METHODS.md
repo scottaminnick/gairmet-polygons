@@ -396,6 +396,11 @@ ground-truth checks (a contour landing on real cell edges, a lon/lat
 rectangle rasterizing to exactly its cells). All three fail on the old
 behaviour; the round trips do not. See `tests/test_polygons.py`.
 
+Both conversions use `@` rather than `*` for the affine multiplication.
+Same transform — `affine` raises a `PendingDeprecationWarning` on `*`, and
+these two run per contour vertex, so `*` was emitting ~83,000 warnings per
+test run and burying everything else in the log.
+
 ---
 
 ## 6. Export
@@ -443,6 +448,34 @@ substituted with Sherbrooke airport, and eight identifiers that collide
 with foreign navaids resolved US-first.
 
 ---
+
+### 7.1 Regenerating it, and the identifier
+
+`scripts/build_legacy.py` rebuilds the file from the VOR strings it
+carries. It writes to `data/boundaries/legacy_mtnobsc.json` by default
+(repo-relative) and takes the navaid table with `--navaids`; the table is
+OurAirports' open dump, not vendored, with the download URL in the script
+header. `tests/fixtures/navaids_subset.csv` is a verbatim subset of the
+rows these three strings resolve, and
+`tests/test_legacy_mtnobsc_overlay.py` asserts that regenerating from it
+reproduces the committed file **byte for byte** — the script and the data
+are two artifacts of one source, and nothing else keeps them in step.
+
+The feature identifier is the `name` property. It was `area` in the
+script's output while the viewer and the tests read `name`, which is worth
+recording because of *how* it failed: in Python it was a loud `KeyError`,
+but in the viewer it was silent. All three areas still drew; every tooltip
+fell back to a plausible "legacy area"; and `CentralValleyCutout` lost the
+dotted styling and the label that mark it as a hole in the Rockies area,
+so it read as a third hazard area. Nothing on screen said otherwise.
+
+The viewer now checks the loaded features and, if any lack `name`, shows a
+warning in the layers panel naming the key it found instead, and logs the
+same to the console. It deliberately does **not** disable the layer: the
+geometry is still worth looking at, and a forecaster mid-calibration
+should not lose the overlay over a property name. A missing *file* still
+disables the toggle; that is a different condition.
+
 
 ## 8. Viewer panel structure
 
