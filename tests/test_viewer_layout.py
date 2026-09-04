@@ -391,6 +391,56 @@ def test_a_wrong_keyed_file_does_not_disable_the_layer():
     )
 
 
+# --- Cycle staleness -------------------------------------------------------
+#     The panel always showed the loaded cycle honestly; it could not say
+#     when that cycle had stopped being the current one. A six-hour-old
+#     polygon set looks exactly like a fresh one.
+
+def test_the_info_panel_can_report_a_stale_cycle():
+    assert "cycle-staleness" in HTML_IDS, "no staleness indicator in the info panel"
+    tag = re.search(r'<div class="panel-warning[^"]*" id="cycle-staleness"[^>]*>', HTML)
+    assert tag and "hidden" in tag.group(0), "the staleness warning must start hidden"
+
+    # In the info panel, with the cycle it contradicts -- not in the rail.
+    assert HTML.index('id="model-cycle"') < HTML.index('id="cycle-staleness"') < HTML.index('id="right-rail"')
+
+
+def test_the_expected_cycle_comes_from_the_publish_schedule():
+    """
+    The generation workflows run at :20 and :35 past 03/09/15/21Z, so a
+    cycle is not late the instant it is named -- without a grace period
+    the panel would cry stale for half an hour after every cycle.
+    """
+    assert "const CYCLE_HOURS = [3, 9, 15, 21]" in JS, "the cycle hours no longer match the crons"
+    assert "PUBLISH_GRACE_MINUTES" in JS, "no grace period between a cycle and its publication"
+
+    workflow = (Path(__file__).resolve().parent.parent / ".github" / "workflows"
+                / "generate_ifr.yml").read_text()
+    cron_hours = re.search(r'cron: "\d+ ([\d,]+) ', workflow).group(1)
+    assert cron_hours == "3,9,15,21", (
+        f"generate_ifr.yml now runs at {cron_hours}; CYCLE_HOURS in map.js still says 3,9,15,21"
+    )
+
+
+def test_staleness_is_rechecked_while_the_page_sits_open():
+    """A page left open crosses a cycle boundary with no fetch to trigger
+    a re-evaluation."""
+    assert "STALENESS_RECHECK_MS" in JS and "setInterval" in JS, (
+        "the staleness check only runs on load, so an open page never notices"
+    )
+
+
+def test_the_warning_says_what_to_do_about_it():
+    """
+    The likeliest cause is the reader's own cache, which they can fix; the
+    next likeliest is a failed publish, which they cannot. It should say
+    both rather than only announcing a problem.
+    """
+    body = _slice_between(JS, "function updateStalenessIndicator(", "\n}")
+    assert "Ctrl-Shift-R" in body, "the warning does not say how to clear a stale cache"
+    assert "/api/data/status" in body, "the warning does not point at the publish status"
+
+
 # --- helpers ---------------------------------------------------------------
 
 def _module_constant(repo_root, name):

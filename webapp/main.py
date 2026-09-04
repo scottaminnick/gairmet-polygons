@@ -99,6 +99,74 @@ def _require_manifest(hazard_key: str) -> dict:
     return manifest
 
 
+# --- CACHING: EVERYTHING THIS APP SERVES IS EITHER DATA THAT EXPIRES OR
+#     CODE THAT READS IT. ---
+#
+# None of the responses carried Cache-Control, so browsers applied their
+# own heuristic freshness (RFC 9111 5.2's permission to guess from
+# Last-Modified) and cached them. Observed directly: raw.githubusercontent
+# served model_cycle 09Z while a normal window showed 03Z and a private
+# window showed 09Z. The server was right the whole time.
+#
+# That is worse than an ordinary stale cache, because a six-hour-old
+# polygon set looks exactly like a current one -- there is nothing in the
+# picture to tell a forecaster which they are looking at.
+#
+# Applied as middleware rather than per route on purpose. There are a
+# dozen data routes now and there will be seven hazards' worth later; a
+# decorator that has to be remembered on each one is a decorator that will
+# eventually be forgotten, and the symptom of forgetting it is invisible.
+#
+# The two classes get different treatment:
+#
+#   /api/*  -> no-store. The data changes every six hours (cycles at
+#              03/09/15/21Z) and a recompute is parameterised by slider
+#              values in the query string, so there is nothing worth
+#              keeping between requests.
+#
+#   the app itself -> no-cache, must-revalidate. NOT no-store: StaticFiles
+#              already sends ETag and Last-Modified, so revalidation costs
+#              a 304 with no body, and the page still loads instantly.
+#              What it stops is the genuinely nasty version of this bug --
+#              a forecaster running last week's map.js against this
+#              morning's data, where the two disagree about what a
+#              property is called and the page just quietly draws the
+#              wrong thing.
+#
+# Leaflet and the fonts come from versioned CDN URLs and are deliberately
+# left alone.
+NO_STORE = "no-store, no-cache, must-revalidate, max-age=0"
+REVALIDATE = "no-cache, must-revalidate, max-age=0"
+
+# Anything the browser executes or renders as the app. Extension-based so
+# a new panel script or stylesheet is covered without being listed.
+APP_ASSET_SUFFIXES = (".html", ".js", ".css", ".map")
+
+
+def _cache_control_for(path: str) -> str | None:
+    if path.startswith("/api/"):
+        return NO_STORE
+    if path == "/" or path.endswith(APP_ASSET_SUFFIXES):
+        return REVALIDATE
+    return None
+
+
+@app.middleware("http")
+async def set_cache_headers(request, call_next):
+    response = await call_next(request)
+    directive = _cache_control_for(request.url.path)
+    if directive is None:
+        return response
+
+    response.headers["Cache-Control"] = directive
+    if directive == NO_STORE:
+        # Pragma and Expires are for HTTP/1.0 caches and the proxies that
+        # still honour them; harmless where Cache-Control is understood.
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
 def _find_snapshot(manifest: dict, fxx: str):
     return next(
         (s for s in manifest.get("snapshots", []) if str(s["requested_forecast_hour"]).zfill(2) == fxx.zfill(2)),

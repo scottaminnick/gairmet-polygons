@@ -94,6 +94,19 @@ def env(tmp_path, monkeypatch):
     httpd.shutdown()
     httpd.server_close()
 
+    # Reload AGAIN on the way out, after monkeypatch has restored the
+    # environment. Config is read into module-level constants at import
+    # time, so without this the module keeps pointing at this test's
+    # tmp_path for the rest of the session -- and pytest keeps the last
+    # few tmp dirs, so the stale path still EXISTS and still holds the
+    # synthetic grid bytes _publish() writes (deliberately not real .npz,
+    # since the fetch layer never parses them). Anything later in the run
+    # that actually loads a grid then fails on those bytes, a long way
+    # from the cause. tests/test_cache_headers.py exercises the recompute
+    # routes in-process and is where that surfaced.
+    monkeypatch.undo()
+    importlib.reload(artifacts)
+
 
 def test_fetches_and_serves_a_published_cycle(env):
     artifacts, remote, _local, _httpd = env

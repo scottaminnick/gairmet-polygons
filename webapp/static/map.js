@@ -175,6 +175,93 @@ function formatValidTime(iso) {
   return `${dd}${hh}${mm}Z`;
 }
 
+// --- CYCLE STALENESS ---
+//
+//     The panel has always shown the loaded cycle honestly. What it could
+//     not do was say when that cycle is no longer the current one, and a
+//     six-hour-old polygon set looks exactly like a fresh one -- there is
+//     nothing in the map to distinguish them.
+//
+//     Two ways to end up here, and the indicator does not care which:
+//       - a browser serving the manifest from cache (what prompted this:
+//         raw.githubusercontent had 09Z, a normal window showed 03Z, a
+//         private window showed 09Z);
+//       - artifacts.refresh_hazard() failing and deliberately keeping the
+//         last good cycle serving rather than blanking the site
+//         (tests/test_artifacts.py::test_failed_refresh_keeps_the_last_
+//         good_cycle). That is the right behaviour and stays -- it just
+//         should not be silent.
+//
+//     The generation workflows run at :20 and :35 past 03/09/15/21Z, so a
+//     cycle is not expected to be on the site the instant it is named.
+//     PUBLISH_GRACE_MINUTES covers the run plus the publish; only after
+//     that does an older cycle count as late.
+const CYCLE_HOURS = [3, 9, 15, 21];
+const PUBLISH_GRACE_MINUTES = 90;
+const STALENESS_RECHECK_MS = 5 * 60 * 1000;
+
+// The most recent cycle that should be published by `now`. Walks back
+// from now minus the grace, so it is the newest cycle whose publication
+// window has fully passed.
+function expectedCycleStart(now) {
+  const cutoff = new Date(now.getTime() - PUBLISH_GRACE_MINUTES * 60 * 1000);
+  const candidate = new Date(Date.UTC(
+    cutoff.getUTCFullYear(), cutoff.getUTCMonth(), cutoff.getUTCDate(), 0, 0, 0, 0));
+  let expected = null;
+  // Today's cycles up to the cutoff, else yesterday's last one.
+  CYCLE_HOURS.forEach((hour) => {
+    const start = new Date(candidate.getTime() + hour * 3600 * 1000);
+    if (start <= cutoff) expected = start;
+  });
+  if (expected) return expected;
+  const yesterday = new Date(candidate.getTime() - 24 * 3600 * 1000);
+  return new Date(yesterday.getTime() + CYCLE_HOURS[CYCLE_HOURS.length - 1] * 3600 * 1000);
+}
+
+// The cycle currently on screen, so the recheck timer can re-evaluate it
+// without refetching anything.
+let loadedModelCycle = null;
+
+function updateStalenessIndicator(now = new Date()) {
+  const el = document.getElementById('cycle-staleness');
+  if (!el) return;
+  if (!loadedModelCycle) {
+    el.hidden = true;
+    return;
+  }
+
+  const loaded = new Date(loadedModelCycle);
+  if (isNaN(loaded)) {
+    el.hidden = true;
+    return;
+  }
+
+  const expected = expectedCycleStart(now);
+  const behindMs = expected.getTime() - loaded.getTime();
+  // A whole cycle or more. Deliberately not "any amount behind": the
+  // comparison uses the BROWSER's clock, and a modest clock error should
+  // not be able to raise a false alarm. Six hours of skew is a broken
+  // machine, not a rounding difference.
+  if (behindMs < 6 * 3600 * 1000) {
+    el.hidden = true;
+    return;
+  }
+
+  const hours = Math.round(behindMs / 3600000);
+  el.innerHTML =
+    `&#9888; <b>STALE DATA</b> &mdash; showing the ` +
+    `${String(loaded.getUTCHours()).padStart(2, '0')}Z cycle, ` +
+    `${hours} h behind. The ` +
+    `${String(expected.getUTCHours()).padStart(2, '0')}Z cycle should be current. ` +
+    `Hard-reload (Ctrl-Shift-R / Cmd-Shift-R); if it persists the publish may have failed ` +
+    `&mdash; check <code>/api/data/status</code>.`;
+  el.hidden = false;
+}
+
+// A page left open across a cycle boundary goes stale without any fetch
+// happening, so the check is on a timer as well as on load.
+setInterval(() => updateStalenessIndicator(), STALENESS_RECHECK_MS);
+
 // --- Tracks which forecast hour is currently displayed, so the
 //     live-adjustment sliders know what to recompute against. Also
 //     tracks whether live adjustment is even possible (it isn't in the
@@ -939,6 +1026,8 @@ function buildFxxSelector(manifest) {
   container.innerHTML = '';
 
   document.getElementById('model-cycle').textContent = formatValidTime(manifest.model_cycle);
+  loadedModelCycle = manifest.model_cycle;
+  updateStalenessIndicator();
   document.getElementById('nbm-source-cycle').textContent = manifest.nbm_source_cycle
     ? formatValidTime(manifest.nbm_source_cycle)
     : '--------Z'; // older manifests generated before this field existed

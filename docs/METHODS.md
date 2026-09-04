@@ -583,6 +583,49 @@ factor it was built from, which `load_mosaic_cache` checks, because a key
 can be forgotten to bump and that comparison cannot. A mismatched,
 unreadable, or absent checkpoint is a refetch, never a wrong answer.
 
+## 8.7 Caching, and saying when the data is stale
+
+Nothing the app served carried `Cache-Control`, so browsers applied their
+own heuristic freshness (RFC 9111 §5.2) and cached it. Observed:
+`raw.githubusercontent` had `model_cycle` 09Z while a normal window showed
+03Z and a private window showed 09Z. The server was correct throughout,
+which is what made it hard to see — a six-hour-old polygon set is
+pixel-for-pixel as plausible as a current one.
+
+One middleware in `webapp/main.py`, not a per-route decorator: there are a
+dozen data routes now and seven hazards' worth later, and a decorator that
+must be remembered is one that will eventually be forgotten — invisibly.
+
+- **`/api/*` → `no-store, no-cache, must-revalidate, max-age=0`** (plus
+  `Pragma`/`Expires` for HTTP/1.0 intermediaries). The data changes every
+  six hours and a recompute is keyed entirely on its query string.
+- **The front end (`/`, `.html`, `.js`, `.css`) → `no-cache,
+  must-revalidate, max-age=0`.** Not `no-store`: `StaticFiles` already
+  sends an `ETag`, so revalidation is a 304 with no body — verified, 46 KB
+  of `map.js` becomes an empty 304. What it prevents is worse than stale
+  data: last week's `map.js` against this morning's data, silently
+  disagreeing about what a property is called.
+
+Error responses carry it too, so a cached 503 cannot outlive the outage.
+Leaflet and the fonts come from versioned CDN URLs and are left cacheable.
+
+### The staleness indicator
+
+Headers stop the browser causing this; they cannot fix a publish that
+failed. `artifacts.refresh_hazard()` deliberately keeps the last good
+cycle serving rather than blanking the site
+(`test_failed_refresh_keeps_the_last_good_cycle`) — right behaviour, but
+silent. So the panel now computes the cycle that *should* be published
+from the clock and warns when the loaded one is older.
+
+Cycles are 03/09/15/21Z, with `PUBLISH_GRACE_MINUTES = 90` covering the
+run and publish (the crons fire at :20 and :35). The warning triggers only
+at a **full cycle** behind: the comparison uses the browser's clock, and a
+modest clock error should not be able to raise a false alarm. It names the
+loaded cycle, the expected one, how far behind, and both remedies — a hard
+reload for a cache, `/api/data/status` for a failed publish. A timer
+re-checks, so a page left open across a boundary notices.
+
 ## 9. Known limits
 
 - `MOUNTAINOUS_RELIEF_THRESHOLD_FT` and `TERRAIN_RADIUS_NM` are placeholders
