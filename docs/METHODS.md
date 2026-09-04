@@ -563,9 +563,34 @@ stopped being the first name to fail.
 import graph — following imports inside function bodies, since that is how
 `fetch_terrain` reaches `boundaries` — and asserts everything reached is in
 the requirements file that workflow installs. It is static, so it cannot
-see a dynamically constructed import; nothing here does that today. Where a
-reached module is genuinely never executed by that job, it is listed in
-`DEFERRED_AND_UNUSED` with a reason rather than quietly skipped.
+see a dynamically constructed import; nothing here does that today.
+
+**The test suite is an entry point too.** `tests.yml` runs the whole suite
+under the light set (`requirements.txt pytest pyyaml`), deliberately, so CI
+fails if a module-level heavy import creeps into a path the webapp touches
+— which makes the suite subject to the same failure. That was not covered
+until a test importing `NBM_LEAD_TIME_OFFSET_HOURS` from
+`pipeline.gairmet_cycle` (→ `fetch_nbm` → `requests`) passed locally and
+failed only in CI. Entry points are the files pytest actually collects;
+`demo_visualize.py` is excluded with a reason, and a test fails if anything
+in `tests/` is neither checked nor recorded as a non-test.
+
+**Deferred vs. required.** The walker tracks whether a module is reachable
+by module-scope imports the whole way down, or only through a function-level
+hop that may never run. Two rules make this accurate:
+
+- An *entry point's own* function-level imports are **not** deferred — a
+  script's `main()` runs its calls, and a test body executes. This is why
+  `fetch_terrain` → `boundaries` → `shapely` is required outright, which is
+  exactly the chain the terrain job died on.
+- A function-level hop *deeper in* is deferred, and only those can be
+  excused by `DEFERRED_AND_UNUSED` — with a reason, and only while the
+  import still exists. An allowance never covers a module the entry point
+  imports directly.
+
+Without that distinction a blanket "tests may reach `requests`" allowance
+would have excused the very CI-only break this section exists for; it was
+verified by reintroducing that import and confirming the guard fails.
 
 ## 8.6 The terrain mosaic is checkpointed
 

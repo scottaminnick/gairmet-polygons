@@ -72,7 +72,20 @@ FIRST_PARTY_ROOTS = ("pipeline", "webapp", "scripts", "tests")
 # what broke) from a deferred-and-never-taken one, so the difference is
 # recorded here, with the reason, rather than guessed at. Keep this list
 # short and specific: every entry is a check being turned off.
+# Keys may be exact paths or fnmatch globs. An allowance only ever
+# excuses a module reached THROUGH something else -- if the entry point
+# imports it by name itself, the allowance does not apply and the check
+# still fails. Otherwise one glob would quietly excuse a direct
+# `import requests` added to a test later.
 DEFERRED_AND_UNUSED = {
+    "tests/test_*.py": {
+        "requests": (
+            "reached only through pipeline.hazards.ifr's function-level import of "
+            "pipeline.fetch_nbm, which fetches from NOAA. Deferred there deliberately (see "
+            "that module's docstring); no test calls fetch_probability_grid, because doing so "
+            "would make the suite depend on the network and on NBM being up."
+        ),
+    },
     "webapp/main.py": {
         "requests": (
             "reached only via pipeline.hazards.ifr's function-level import of "
@@ -112,21 +125,31 @@ def _declared_packages(requirements_name):
 
 
 def _module_scope_imports(tree):
-    """Third-party module roots imported where they run at import time."""
+    """
+    FULL dotted module names imported where they run at import time.
+
+    Full names, not first segments: the traversal asks whether a
+    particular first-party module ("pipeline.fetch_nbm") was imported at
+    module scope, and truncating to "pipeline" makes that question
+    unanswerable -- every hop then looks deferred, which is the safe-
+    looking answer and the wrong one.
+    """
     names = set()
-    for node in tree.body:
+
+    def collect(node):
         if isinstance(node, ast.Import):
-            names |= {alias.name.split(".")[0] for alias in node.names}
+            names.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            names.add(node.module.split(".")[0])
+            names.add(node.module)
+
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            collect(node)
         elif isinstance(node, (ast.If, ast.Try)):
             # `if TYPE_CHECKING:` and try/except ImportError blocks still
             # sit at module scope; recurse into them.
             for sub in ast.walk(node):
-                if isinstance(sub, ast.Import):
-                    names |= {alias.name.split(".")[0] for alias in sub.names}
-                elif isinstance(sub, ast.ImportFrom) and sub.level == 0 and sub.module:
-                    names.add(sub.module.split(".")[0])
+                collect(sub)
     return names
 
 
@@ -141,8 +164,18 @@ def _all_imports(tree):
     return names
 
 
-def _first_party_path(module):
+def _first_party_path(module, relative_to=None):
     """pipeline.hazards.ifr -> Path to that file, or None if not ours."""
+    # A test importing a sibling ("from test_polygons import ...") is a
+    # first-party import written unqualified, because tests/ is on
+    # sys.path when pytest runs. Resolved against the importing file's own
+    # directory, or it looks like a third-party package that nobody
+    # installs.
+    if relative_to is not None:
+        sibling = relative_to.parent / (module.replace(".", "/") + ".py")
+        if sibling.exists():
+            return sibling
+
     if module.split(".")[0] not in FIRST_PARTY_ROOTS:
         return None
     candidate = REPO_ROOT / (module.replace(".", "/") + ".py")
@@ -152,30 +185,83 @@ def _first_party_path(module):
     return package_init if package_init.exists() else None
 
 
+def _allowances_for(entry_point):
+    """Merged allowances for an entry point, exact keys and globs alike."""
+    import fnmatch
+
+    merged = {}
+    for pattern, entries in DEFERRED_AND_UNUSED.items():
+        if pattern == entry_point or fnmatch.fnmatch(entry_point, pattern):
+            merged.update(entries)
+    return merged
+
+
+def _direct_imports(entry_point):
+    """Module roots the entry point file imports itself, at any scope."""
+    tree = ast.parse((REPO_ROOT / entry_point).read_text())
+    return {module.split(".")[0] for module in _all_imports(tree)}
+
+
 def _reachable_third_party(entry_point):
     """
-    Third-party modules that will be imported when `entry_point` runs,
-    following first-party imports transitively (function-level ones
-    included -- that is how fetch_terrain reaches boundaries).
+    Third-party modules an execution of `entry_point` can import, as
+    {module_root: (chain, deferred_only)}.
 
-    Returns {module_root: [chain that reaches it]}.
+    THE DEFERRED FLAG IS THE WHOLE POINT. Following first-party imports
+    inside function bodies is necessary -- that is how fetch_terrain
+    reaches boundaries, and the missing dependency there was real. But a
+    module reached only through a function-level hop may never be
+    imported at all, while one reachable by module-scope imports the
+    whole way down is imported the instant the entry point is.
+
+    deferred_only=False means every hop was module scope: importing the
+    entry point imports this, full stop. deferred_only=True means at
+    least one hop was a function-level import that may never run.
+
+    Distinguishing them is what makes the allowance list safe. Excusing
+    "requests for test modules" outright would also excuse
+    test_publish_schedule.py -> pipeline.gairmet_cycle ->
+    pipeline.fetch_nbm, which is module scope the whole way and does fail
+    -- the precise CI-only break this check exists to catch.
+
+    An entry point's OWN function-level imports are NOT deferred: a test
+    body executes.
     """
-    found, seen, queue = {}, set(), [(REPO_ROOT / entry_point, (entry_point,))]
+    found = {}
+    # (path, chain, deferred_so_far, is_entry_point)
+    queue = [(REPO_ROOT / entry_point, (entry_point,), False, True)]
+    seen = {}
+
     while queue:
-        path, chain = queue.pop()
-        if path in seen:
+        path, chain, deferred, is_entry = queue.pop()
+        # Revisit a file only if we arrive by a strictly better (less
+        # deferred) route, so a deferred path found first cannot mask a
+        # module-scope one found later.
+        if path in seen and seen[path] <= deferred:
             continue
-        seen.add(path)
+        seen[path] = deferred
+
         tree = ast.parse(path.read_text())
+        module_scope = _module_scope_imports(tree)
+        every_import = _all_imports(tree)
 
-        for module in _module_scope_imports(tree):
-            if module not in STDLIB and _first_party_path(module) is None:
-                found.setdefault(module, chain)
+        for module in (every_import if is_entry else module_scope):
+            root = module.split(".")[0]
+            if root in STDLIB or _first_party_path(module, path) is not None:
+                continue
+            previous = found.get(root)
+            if previous is None or (previous[1] and not deferred):
+                found[root] = (chain, deferred)
 
-        for module in _all_imports(tree):
-            nested = _first_party_path(module)
-            if nested is not None and nested not in seen:
-                queue.append((nested, chain + (module,)))
+        for module in every_import:
+            nested = _first_party_path(module, path)
+            if nested is None:
+                continue
+            # For the entry point both scopes run; deeper in, a
+            # function-level import is deferred.
+            hop_deferred = deferred or (not is_entry and module not in module_scope)
+            queue.append((nested, chain + (module,), hop_deferred, False))
+
     return found
 
 
@@ -184,13 +270,17 @@ def test_every_workflow_installs_what_its_entry_point_imports(entry_point, requi
     declared = _declared_packages(requirements_name)
     reachable = _reachable_third_party(entry_point)
 
-    allowed = DEFERRED_AND_UNUSED.get(entry_point, {})
+    allowed = _allowances_for(entry_point)
+    direct = _direct_imports(entry_point)
     missing = []
-    for module, chain in sorted(reachable.items()):
+    for module, (chain, deferred_only) in sorted(reachable.items()):
         package = MODULE_TO_PACKAGE.get(module, module).lower()
-        if package in declared or module in allowed:
+        if package in declared:
             continue
-        missing.append(f"  {module} (package {package}) via {' -> '.join(chain)}")
+        if deferred_only and module in allowed and module not in direct:
+            continue
+        how = "deferred" if deferred_only else "at import time"
+        missing.append(f"  {module} (package {package}, {how}) via {' -> '.join(chain)}")
 
     assert not missing, (
         f"{entry_point} imports modules that {requirements_name} does not install.\n"
@@ -211,7 +301,7 @@ def test_the_terrain_job_does_not_quietly_acquire_the_hazard_output_stack():
     for module in ("geojson", "pyproj"):
         assert module not in reachable, (
             f"pipeline/fetch_terrain.py now reaches {module} "
-            f"(via {' -> '.join(reachable[module])}). It is imported lazily in "
+            f"(via {' -> '.join(reachable[module][0])}). It is imported lazily in "
             f"pipeline/polygons.py to keep the terrain job light; either restore that "
             f"or add it to requirements-terrain.txt deliberately."
         )
@@ -226,8 +316,19 @@ def test_the_walker_actually_follows_function_level_first_party_imports():
     """
     reachable = _reachable_third_party("pipeline/fetch_terrain.py")
     assert "shapely" in reachable, "the walker is not following into pipeline.boundaries"
-    chain = reachable["shapely"]
+    chain, deferred_only = reachable["shapely"]
     assert "pipeline.boundaries" in chain, chain
+
+    # And NOT counted as deferred, which is the subtle half. The hop is a
+    # function-level import, but it is inside the entry point itself --
+    # main() calls compute_output_grids on every run, so that import
+    # always executes. Treating "function-level" as "might not happen"
+    # here would have excused the original failure: the job died on this
+    # exact chain after downloading 1,708 tiles.
+    assert deferred_only is False, (
+        "an entry point's own function-level imports run; shapely must be required outright"
+    )
+    assert "shapely" in _declared_packages("requirements-terrain.txt")
 
 
 if __name__ == "__main__":
@@ -239,14 +340,155 @@ def test_every_dependency_allowance_carries_a_reason():
     Each entry in DEFERRED_AND_UNUSED switches off a real check, so it has
     to say why -- and stop existing once the import it excuses does.
     """
-    for entry_point, allowances in DEFERRED_AND_UNUSED.items():
-        reachable = _reachable_third_party(entry_point)
+    import fnmatch
+
+    for pattern, allowances in DEFERRED_AND_UNUSED.items():
+        targets = (
+            [pattern] if (REPO_ROOT / pattern).exists()
+            else [e for e in TEST_ENTRY_POINTS if fnmatch.fnmatch(e, pattern)]
+        )
+        assert targets, f"the allowance pattern {pattern!r} matches nothing"
         for module, reason in allowances.items():
-            assert len(reason) > 60, f"{entry_point}: {module} is excused without a real reason"
-            assert module in reachable, (
-                f"{entry_point} no longer reaches {module}; drop the allowance rather "
-                f"than leaving a check switched off for an import that is gone"
+            assert len(reason) > 60, f"{pattern}: {module} is excused without a real reason"
+            assert any(module in _reachable_third_party(t) for t in targets), (
+                f"nothing matching {pattern} reaches {module} any more; drop the allowance "
+                f"rather than leaving a check switched off for an import that is gone"
             )
+
+
+# ---------------------------------------------------------------------------
+# The test suite is an entry point too.
+#
+# tests.yml runs the whole suite under `requirements.txt pytest pyyaml`
+# -- the LIGHT set, deliberately, so CI fails if a module-level heavy
+# import creeps into a path the webapp touches. That makes the suite
+# itself subject to exactly the failure this file guards against, and it
+# was not covered: a test importing something CI does not install passes
+# locally, where everything is installed, and fails only in CI.
+#
+# That is not hypothetical. tests/test_publish_schedule.py imported
+# NBM_LEAD_TIME_OFFSET_HOURS from pipeline.gairmet_cycle, which imports
+# pipeline.fetch_nbm, which imports requests at module scope. requests is
+# not in requirements.txt. Green locally, ModuleNotFoundError in CI.
+# ---------------------------------------------------------------------------
+
+TESTS_WORKFLOW = "tests.yml"
+
+# Collected by pytest, so run by CI. Files in tests/ that pytest does NOT
+# collect are excluded below -- they are developer tools, and holding them
+# to CI's dependency set would be a constraint nobody asked for.
+TEST_ENTRY_POINTS = sorted(
+    str(p.relative_to(REPO_ROOT)) for p in (REPO_ROOT / "tests").glob("test_*.py")
+)
+
+NOT_COLLECTED_BY_PYTEST = {
+    "tests/demo_visualize.py": (
+        "a hand-run diagnostic that renders PNGs; it imports matplotlib, which is in "
+        "requirements-pipeline.txt but not the light set CI installs. pytest does not "
+        "collect it (no test_ prefix), so it never runs in CI."
+    ),
+}
+
+
+def _workflow_installed_packages(workflow_name):
+    """
+    What a workflow's `pip install` line actually installs: the contents
+    of any -r file, plus any package named inline.
+
+    Read from the workflow rather than copied into this file, so adding a
+    test dependency in one place cannot silently disagree with the guard
+    that checks for it.
+    """
+    packages = set()
+    for _name, script in _run_steps(WORKFLOW_DIR / workflow_name):
+        for line in script.splitlines():
+            line = line.strip()
+            if not line.startswith("pip install"):
+                continue
+            tokens = line.split()[2:]
+            index = 0
+            while index < len(tokens):
+                token = tokens[index]
+                if token == "-r":
+                    packages |= _declared_packages(tokens[index + 1])
+                    index += 2
+                    continue
+                if not token.startswith("-"):
+                    packages.add(token.split("[")[0].split("=")[0].lower())
+                index += 1
+    return packages
+
+
+@pytest.mark.parametrize("entry_point", TEST_ENTRY_POINTS)
+def test_every_test_module_runs_under_the_dependency_set_ci_installs(entry_point):
+    """
+    Walked exactly like a workflow entry point, with one difference that
+    matters: a test module's OWN function-level imports count, because a
+    test body executes. For the first-party modules it reaches, only
+    module-scope imports count -- a deferred import there may never be
+    taken, which is what DEFERRED_AND_UNUSED records.
+    """
+    declared = _workflow_installed_packages(TESTS_WORKFLOW)
+    allowed = _allowances_for(entry_point)
+    direct = _direct_imports(entry_point)
+
+    missing = []
+    for module, (chain, deferred_only) in sorted(_reachable_third_party(entry_point).items()):
+        package = MODULE_TO_PACKAGE.get(module, module).lower()
+        if package in declared:
+            continue
+        if deferred_only and module in allowed and module not in direct:
+            continue
+        how = "deferred" if deferred_only else "at import time"
+        missing.append(f"  {module} (package {package}, {how}) via {' -> '.join(chain)}")
+
+    assert not missing, (
+        f"{entry_point} imports modules that {TESTS_WORKFLOW}'s install step does not "
+        f"provide. This passes locally and fails only in CI:\n" + "\n".join(missing)
+    )
+
+
+def test_the_test_entry_point_list_covers_everything_pytest_collects():
+    """
+    TEST_ENTRY_POINTS is a glob, so it keeps up with new files by itself --
+    but only for files pytest actually collects. Anything else in tests/
+    has to be named as a known non-test, so a real test module cannot go
+    unchecked by being called something unexpected.
+    """
+    every_file = {str(p.relative_to(REPO_ROOT)) for p in (REPO_ROOT / "tests").glob("*.py")}
+    unaccounted = sorted(every_file - set(TEST_ENTRY_POINTS) - set(NOT_COLLECTED_BY_PYTEST))
+    assert not unaccounted, (
+        f"files in tests/ that are neither checked nor recorded as non-tests: {unaccounted}"
+    )
+
+
+def test_the_excluded_files_really_are_the_ones_pytest_skips():
+    """
+    The exclusions turn the check off, so they have to stay true. A file
+    renamed to test_*.py must start being checked, not stay excused.
+    """
+    for path, reason in NOT_COLLECTED_BY_PYTEST.items():
+        assert (REPO_ROOT / path).exists(), f"{path} is gone; drop it from the exclusion list"
+        assert not Path(path).name.startswith("test_"), (
+            f"{path} is collected by pytest now, so it runs in CI and must be checked"
+        )
+        assert len(reason) > 60, f"{path} is excused without a real reason"
+
+
+def test_the_suite_is_run_under_the_light_set_not_the_pipeline_set():
+    """
+    The whole check rests on this. If tests.yml ever installs
+    requirements-pipeline.txt, the suite stops proving the webapp's
+    deployed dependency set is sufficient -- which is the reason it
+    installs the light one.
+    """
+    declared = _workflow_installed_packages(TESTS_WORKFLOW)
+    assert "pytest" in declared and "pyyaml" in declared
+    for heavy in ("cfgrib", "xarray", "herbie-data", "pandas", "matplotlib"):
+        assert heavy not in declared, (
+            f"tests.yml now installs {heavy}; the suite no longer proves the webapp runs "
+            f"under requirements.txt alone"
+        )
 
 
 # ---------------------------------------------------------------------------
