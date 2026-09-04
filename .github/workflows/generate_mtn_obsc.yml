@@ -1,18 +1,42 @@
 name: Generate Latest Mountain Obscuration Polygons
 
 on:
-  # Fires 35 minutes after each real G-AIRMET cycle hour (03/09/15/21Z)
-  # -- deliberately staggered LATER than generate_ifr.yml's 20-minute
-  # mark (not just cosmetically different): this hazard fetches TEN
-  # real NBM fields per forecast hour vs. IFR's four (see
-  # pipeline/hazards/mtn_obsc.py's docstring), so it takes noticeably
-  # longer to run. The stagger originally existed because both
-  # workflows pushed to main and risked colliding there; they now
-  # publish to separate branches and cannot collide at all, but the
-  # offset is kept anyway so the two runs don't fetch from NBM
-  # simultaneously.
+  # THE SCHEDULE IS DERIVED, NOT HAND-WRITTEN. These lines are generated
+  # by pipeline.publish_schedule.cron_entries("mtn_obsc") and
+  # tests/test_publish_schedule.py fails if they drift from it. The
+  # offsets past +2:00 roll into later hours (and, for the +3:00 attempt after 21Z, into hour 0), which is the
+  # part that is easy to get wrong editing this by hand.
+  #
+  # WHY +1:15 AND NOT +0:20. At 20 minutes past the synoptic hour the
+  # matching NBM run is not posted, so find_latest_gairmet_cycle() fell
+  # back to the PREVIOUS NBM cycle and, with the +6h lead offset, rebuilt
+  # the G-AIRMET cycle that was already current. The 15Z first guess did
+  # not appear until 15:20Z -- thirty-five minutes after the 1445Z
+  # issuance it exists to seed.
+  #
+  # The four entries are RETRIES, not four separate products: +1:15,
+  # +1:45, +2:15 and +2:45, each 15 minutes after IFR's. Separate cron entries rather
+  # than a sleep/poll loop inside one job, which would burn billable
+  # minutes holding a runner and turn a late NBM into a timeout instead
+  # of a clean no-op. An attempt that runs before its NBM has landed
+  # falls back, rebuilds the already-published cycle, and
+  # .github/scripts/should_publish_cycle.py skips it.
+  #
+  # +1:15 is an ESTIMATE. NBM 03Z's arrival could only be bracketed
+  # between +20 minutes and +3h30m from existing logs. Every run now
+  # emits an NBM-ARRIVAL line (see pipeline/gairmet_cycle.py), so after a
+  # week this can be set from a measured distribution instead.
   schedule:
-    - cron: "35 3,9,15,21 * * *"
+    - cron: "30 4,10,16,22 * * *"
+    - cron: "0 5,11,17,23 * * *"
+    - cron: "30 5,11,17,23 * * *"
+    - cron: "0 0,6,12,18 * * *"
+  #
+  # Kept 15 minutes behind IFR throughout. This hazard fetches TEN real
+  # NBM fields per forecast hour against IFR's four (see
+  # pipeline/hazards/mtn_obsc.py), so it runs longer; the two also
+  # force-push separate data branches, and the stagger keeps those
+  # pushes and the NBM fetches from overlapping.
   # Manual trigger, with optional overrides so a forecaster can
   # regenerate with different settings without editing code.
   workflow_dispatch:
@@ -202,7 +226,7 @@ jobs:
           # abort on.
           set +e
           python3 "$GITHUB_WORKSPACE/.github/scripts/should_publish_cycle.py" \
-            --new "mtn_obsc_manifest.json" --existing "$EXISTING_MANIFEST"
+            --new "mtn_obsc_manifest.json" --existing "$EXISTING_MANIFEST" --hazard mtn_obsc
           GUARD_STATUS=$?
           set -e
           if [ "$GUARD_STATUS" -eq 10 ]; then

@@ -407,19 +407,22 @@ def test_the_info_panel_can_report_a_stale_cycle():
 
 def test_the_expected_cycle_comes_from_the_publish_schedule():
     """
-    The generation workflows run at :20 and :35 past 03/09/15/21Z, so a
-    cycle is not late the instant it is named -- without a grace period
-    the panel would cry stale for half an hour after every cycle.
+    The schedule moved: runs now start at +1:15 and retry to +3:00, and
+    the app normally holds a cycle AHEAD of wall clock (a 15Z package at
+    10:15Z). The numbers themselves are pinned against
+    pipeline/publish_schedule.py in tests/test_publish_schedule.py; what
+    this checks is that map.js still derives the expectation from the
+    publish window rather than from the clock.
     """
     assert "const CYCLE_HOURS = [3, 9, 15, 21]" in JS, "the cycle hours no longer match the crons"
-    assert "PUBLISH_GRACE_MINUTES" in JS, "no grace period between a cycle and its publication"
-
-    workflow = (Path(__file__).resolve().parent.parent / ".github" / "workflows"
-                / "generate_ifr.yml").read_text()
-    cron_hours = re.search(r'cron: "\d+ ([\d,]+) ', workflow).group(1)
-    assert cron_hours == "3,9,15,21", (
-        f"generate_ifr.yml now runs at {cron_hours}; CYCLE_HOURS in map.js still says 3,9,15,21"
+    assert "PUBLISH_WINDOW_CLOSE_MINUTES" in JS, (
+        "the staleness check no longer knows when the publish window closes"
     )
+    assert "NBM_LEAD_OFFSET_HOURS" in JS, (
+        "without the lead offset the check compares a package against the NBM cycle that "
+        "produced it and calls every healthy state stale"
+    )
+    assert "PUBLISH_GRACE_MINUTES" not in JS, "the old +90-minute grace is still there"
 
 
 def test_staleness_is_rechecked_while_the_page_sits_open():

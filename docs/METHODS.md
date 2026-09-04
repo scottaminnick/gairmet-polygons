@@ -626,6 +626,86 @@ loaded cycle, the expected one, how far behind, and both remedies — a hard
 reload for a cache, `/api/data/status` for a failed publish. A timer
 re-checks, so a page left open across a boundary notices.
 
+## 8.8 Publish schedule, retries, and NBM arrival
+
+The crons used to fire at **+0:20** past each synoptic hour. At that point
+the matching NBM run is not posted, so `find_latest_gairmet_cycle()` fell
+back to the previous NBM cycle and, with the +6h lead offset, rebuilt the
+G-AIRMET cycle that was **already current**. The 15Z first guess did not
+appear until 15:20Z — thirty-five minutes *after* the 1445Z issuance it
+exists to seed.
+
+Runs now start at **+1:15** and retry every 30 minutes to **+3:00**: four
+attempts per hazard per cycle, IFR first and MTN OBSC fifteen minutes
+behind throughout (it fetches ten NBM fields per hour to IFR's four, and
+the two force-push separate data branches).
+
+Retries are **separate cron entries, not a sleep/poll loop**. A job that
+sleeps burns billable minutes holding a runner and turns a late NBM into a
+timeout rather than a clean no-op. An attempt that runs before its NBM has
+landed falls back, rebuilds the already-published cycle, and
+`should_publish_cycle.py` skips it. The cost is a wasted fetch-and-process,
+which is why attempts stop at +3:00 rather than running to the next cycle.
+
+`NBM_LEAD_TIME_OFFSET_HOURS` stays at **6** — the forecaster has accepted
+~4.5 hours of lead for fresher guidance.
+
+The schedule lives in `pipeline/publish_schedule.py` (stdlib-only, so the
+publish guard can share it without the fetch stack) and the crons are
+*generated* from it; `tests/test_publish_schedule.py` fails if the YAML
+drifts. The offsets past +2:00 roll into later hours, and MTN OBSC's +3:00
+attempt after 21Z rolls into hour 0 of the next day — the part that gets
+silently wrong when eight cron lines are hand-edited.
+
+### Two skips that used to look the same
+
+"Branch holds X; not publishing" now distinguishes:
+
+- **`already-published`** — the target NBM arrived, this run built the
+  right cycle, an earlier attempt got there first. Routine.
+- **`nbm-not-yet`** — the target NBM had not arrived, so the run fell back
+  and rebuilt the already-live cycle. Expected on attempt one. On the
+  **final** attempt it means no further attempt is scheduled and that cycle
+  is *missed*, not delayed — so it logs `WARNING` to stderr. A
+  systematically missed cycle previously read as a routine no-op.
+
+Classified from `nbm_source_cycle` in the manifest the run just built
+against the synoptic hour it should have been chasing — the G-AIRMET cycle
+is identical in both cases and cannot tell them apart. A manual
+`workflow_dispatch` is reported as `unknown` rather than guessed at, and is
+never treated as a final attempt.
+
+### NBM arrival instrumentation
+
++1:15 is an **estimate**. NBM 03Z's arrival could only be bracketed between
++20 minutes and +3h30m from existing logs, which is far too wide to
+schedule against. Every run now emits one greppable line:
+
+```
+NBM-ARRIVAL hazard=ifr attempt=1/4 target=...09:00:00Z found=...09:00:00Z \
+            on_target=yes delta_min=75 behind_min=0 run=...10:15:00Z
+```
+
+`delta_min` is from the target cycle's nominal time to the run; on an
+`on_target=yes` line that is an upper bound on arrival latency, and across
+attempts the yes/no boundary brackets it. After a week, `grep NBM-ARRIVAL`
+over the job logs gives a real distribution to set the crons from.
+`on_target=no` is not a failure — only its persistence to attempt four is.
+
+### What this does to the staleness indicator
+
+The app now **normally holds a cycle ahead of the wall clock**: at 10:15Z
+it serves the 15Z package, 4h45m before 15Z. Comparing the loaded cycle to
+"now" would call every healthy state stale.
+
+Stale now means: the loaded cycle is older than the newest one that should
+have *published* — the G-AIRMET package (synoptic hour + 6h) of the newest
+synoptic hour whose publish window (+1:15 to +3:00) has closed. So at
+11:59Z holding the 09Z package is fine; at 12:00Z, when NBM 09Z's window
+shuts, the 15Z package is due and 09Z becomes stale. The threshold is still
+a full cycle, so browser clock skew cannot raise a false alarm, and the
+frozen-clock browser cases were rechosen for this schedule.
+
 ## 9. Known limits
 
 - `MOUNTAINOUS_RELIEF_THRESHOLD_FT` and `TERRAIN_RADIUS_NM` are placeholders

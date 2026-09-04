@@ -118,7 +118,7 @@ def main():
     )
 
     try:
-        nbm_cycle_date = find_latest_gairmet_cycle()
+        nbm_cycle_date = find_latest_gairmet_cycle(hazard="mtn_obsc")
     except Exception:
         print("FAILED to find any available cycle. Full traceback:\n")
         traceback.print_exc()

@@ -178,44 +178,57 @@ function formatValidTime(iso) {
 // --- CYCLE STALENESS ---
 //
 //     The panel has always shown the loaded cycle honestly. What it could
-//     not do was say when that cycle is no longer the current one, and a
-//     six-hour-old polygon set looks exactly like a fresh one -- there is
-//     nothing in the map to distinguish them.
+//     not do was say when that cycle has stopped being the current one,
+//     and a six-hour-old polygon set looks exactly like a fresh one.
 //
-//     Two ways to end up here, and the indicator does not care which:
+//     THE COMPARISON IS NOT AGAINST THE WALL CLOCK. A G-AIRMET package is
+//     built from the NBM cycle six hours before it (NBM_LEAD_OFFSET_HOURS
+//     in pipeline/gairmet_cycle.py, deliberately 6), so the app NORMALLY
+//     holds a cycle in the future: at 10:15Z it is serving the 15Z
+//     package, 4h45m before 15Z. Comparing the loaded cycle to "now"
+//     would call every healthy state stale.
+//
+//     What "stale" means instead: the loaded cycle is older than the
+//     newest one that should have PUBLISHED by now. A cycle should have
+//     published once every scheduled attempt at it has been and gone --
+//     the publish window runs +1:15 to +3:00 after its NBM synoptic hour
+//     (pipeline/publish_schedule.py; four retries, IFR then MTN OBSC).
+//
+//     Two ways to end up stale, and the indicator does not care which:
 //       - a browser serving the manifest from cache (what prompted this:
 //         raw.githubusercontent had 09Z, a normal window showed 03Z, a
 //         private window showed 09Z);
 //       - artifacts.refresh_hazard() failing and deliberately keeping the
 //         last good cycle serving rather than blanking the site
 //         (tests/test_artifacts.py::test_failed_refresh_keeps_the_last_
-//         good_cycle). That is the right behaviour and stays -- it just
-//         should not be silent.
+//         good_cycle). Right behaviour, but silent.
 //
-//     The generation workflows run at :20 and :35 past 03/09/15/21Z, so a
-//     cycle is not expected to be on the site the instant it is named.
-//     PUBLISH_GRACE_MINUTES covers the run plus the publish; only after
-//     that does an older cycle count as late.
+// These four MUST match pipeline/publish_schedule.py and
+// pipeline/gairmet_cycle.py; tests/test_publish_schedule.py fails if they
+// drift.
 const CYCLE_HOURS = [3, 9, 15, 21];
-const PUBLISH_GRACE_MINUTES = 90;
+const PUBLISH_WINDOW_CLOSE_MINUTES = 180;
+const NBM_LEAD_OFFSET_HOURS = 6;
 const STALENESS_RECHECK_MS = 5 * 60 * 1000;
 
-// The most recent cycle that should be published by `now`. Walks back
-// from now minus the grace, so it is the newest cycle whose publication
-// window has fully passed.
-function expectedCycleStart(now) {
-  const cutoff = new Date(now.getTime() - PUBLISH_GRACE_MINUTES * 60 * 1000);
-  const candidate = new Date(Date.UTC(
+// The newest G-AIRMET cycle that should be published by `now`: the last
+// NBM synoptic hour whose publish window has fully closed, shifted by the
+// lead offset to the package built from it.
+function expectedGairmetCycle(now) {
+  const cutoff = new Date(now.getTime() - PUBLISH_WINDOW_CLOSE_MINUTES * 60 * 1000);
+  const midnight = new Date(Date.UTC(
     cutoff.getUTCFullYear(), cutoff.getUTCMonth(), cutoff.getUTCDate(), 0, 0, 0, 0));
-  let expected = null;
-  // Today's cycles up to the cutoff, else yesterday's last one.
+
+  let synoptic = null;
   CYCLE_HOURS.forEach((hour) => {
-    const start = new Date(candidate.getTime() + hour * 3600 * 1000);
-    if (start <= cutoff) expected = start;
+    const start = new Date(midnight.getTime() + hour * 3600 * 1000);
+    if (start <= cutoff) synoptic = start;
   });
-  if (expected) return expected;
-  const yesterday = new Date(candidate.getTime() - 24 * 3600 * 1000);
-  return new Date(yesterday.getTime() + CYCLE_HOURS[CYCLE_HOURS.length - 1] * 3600 * 1000);
+  if (!synoptic) {
+    const yesterday = new Date(midnight.getTime() - 24 * 3600 * 1000);
+    synoptic = new Date(yesterday.getTime() + CYCLE_HOURS[CYCLE_HOURS.length - 1] * 3600 * 1000);
+  }
+  return new Date(synoptic.getTime() + NBM_LEAD_OFFSET_HOURS * 3600 * 1000);
 }
 
 // The cycle currently on screen, so the recheck timer can re-evaluate it
@@ -236,7 +249,7 @@ function updateStalenessIndicator(now = new Date()) {
     return;
   }
 
-  const expected = expectedCycleStart(now);
+  const expected = expectedGairmetCycle(now);
   const behindMs = expected.getTime() - loaded.getTime();
   // A whole cycle or more. Deliberately not "any amount behind": the
   // comparison uses the BROWSER's clock, and a modest clock error should
@@ -250,9 +263,9 @@ function updateStalenessIndicator(now = new Date()) {
   const hours = Math.round(behindMs / 3600000);
   el.innerHTML =
     `&#9888; <b>STALE DATA</b> &mdash; showing the ` +
-    `${String(loaded.getUTCHours()).padStart(2, '0')}Z cycle, ` +
+    `${String(loaded.getUTCHours()).padStart(2, '0')}Z package, ` +
     `${hours} h behind. The ` +
-    `${String(expected.getUTCHours()).padStart(2, '0')}Z cycle should be current. ` +
+    `${String(expected.getUTCHours()).padStart(2, '0')}Z package should have published by now. ` +
     `Hard-reload (Ctrl-Shift-R / Cmd-Shift-R); if it persists the publish may have failed ` +
     `&mdash; check <code>/api/data/status</code>.`;
   el.hidden = false;
