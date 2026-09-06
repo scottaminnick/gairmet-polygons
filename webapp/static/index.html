@@ -20,6 +20,10 @@
   <div class="panel-row"><span class="label">CYCLE</span><span id="model-cycle" class="mono value">--------Z</span></div>
   <div class="panel-row"><span class="label">NBM SRC</span><span id="nbm-source-cycle" class="mono value">--------Z</span></div>
   <div class="panel-row"><span class="label">SOURCE</span><span class="mono value">NBM PROBABILISTIC GUIDANCE</span></div>
+  <!-- Shown only when the loaded cycle is older than the one the clock
+       says should be published by now. The panel above has always shown
+       the truth; what it could not do was say when the truth is wrong. -->
+  <div class="panel-warning mono" id="cycle-staleness" hidden></div>
   <div class="fxx-row" id="fxx-row">
     <span class="label">FCST HR</span>
     <div class="fxx-buttons" id="fxx-buttons"><!-- populated by map.js from /api/hazards/ifr/manifest --></div>

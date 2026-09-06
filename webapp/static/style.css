@@ -676,3 +676,31 @@ html, body {
   text-transform: none;
   letter-spacing: normal;
 }
+
+/* Stale-cycle warning in the info panel. Sized to be read at a glance
+   from across a desk -- it is the one thing on the panel that means the
+   rest of the panel cannot be trusted. */
+.panel-warning {
+  /* The panel is sized by its content and its rows never wrap, so an
+     unconstrained warning stretches it into one very wide line. This is
+     the only prose in the panel; it wraps, and it does not decide how
+     wide the panel is. */
+  max-width: 260px;
+  white-space: normal;
+  overflow-wrap: break-word;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid #ff5c5c;
+  border-left-width: 3px;
+  border-radius: 2px;
+  background: rgba(255, 92, 92, 0.10);
+  color: #ff8a8a;
+  font-size: 10px;
+  line-height: 1.45;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.panel-warning b {
+  color: #ff5c5c;
+}

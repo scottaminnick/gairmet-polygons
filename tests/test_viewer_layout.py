@@ -391,6 +391,59 @@ def test_a_wrong_keyed_file_does_not_disable_the_layer():
     )
 
 
+# --- Cycle staleness -------------------------------------------------------
+#     The panel always showed the loaded cycle honestly; it could not say
+#     when that cycle had stopped being the current one. A six-hour-old
+#     polygon set looks exactly like a fresh one.
+
+def test_the_info_panel_can_report_a_stale_cycle():
+    assert "cycle-staleness" in HTML_IDS, "no staleness indicator in the info panel"
+    tag = re.search(r'<div class="panel-warning[^"]*" id="cycle-staleness"[^>]*>', HTML)
+    assert tag and "hidden" in tag.group(0), "the staleness warning must start hidden"
+
+    # In the info panel, with the cycle it contradicts -- not in the rail.
+    assert HTML.index('id="model-cycle"') < HTML.index('id="cycle-staleness"') < HTML.index('id="right-rail"')
+
+
+def test_the_expected_cycle_comes_from_the_publish_schedule():
+    """
+    The schedule moved: runs now start at +1:15 and retry to +3:00, and
+    the app normally holds a cycle AHEAD of wall clock (a 15Z package at
+    10:15Z). The numbers themselves are pinned against
+    pipeline/publish_schedule.py in tests/test_publish_schedule.py; what
+    this checks is that map.js still derives the expectation from the
+    publish window rather than from the clock.
+    """
+    assert "const CYCLE_HOURS = [3, 9, 15, 21]" in JS, "the cycle hours no longer match the crons"
+    assert "PUBLISH_WINDOW_CLOSE_MINUTES" in JS, (
+        "the staleness check no longer knows when the publish window closes"
+    )
+    assert "NBM_LEAD_OFFSET_HOURS" in JS, (
+        "without the lead offset the check compares a package against the NBM cycle that "
+        "produced it and calls every healthy state stale"
+    )
+    assert "PUBLISH_GRACE_MINUTES" not in JS, "the old +90-minute grace is still there"
+
+
+def test_staleness_is_rechecked_while_the_page_sits_open():
+    """A page left open crosses a cycle boundary with no fetch to trigger
+    a re-evaluation."""
+    assert "STALENESS_RECHECK_MS" in JS and "setInterval" in JS, (
+        "the staleness check only runs on load, so an open page never notices"
+    )
+
+
+def test_the_warning_says_what_to_do_about_it():
+    """
+    The likeliest cause is the reader's own cache, which they can fix; the
+    next likeliest is a failed publish, which they cannot. It should say
+    both rather than only announcing a problem.
+    """
+    body = _slice_between(JS, "function updateStalenessIndicator(", "\n}")
+    assert "Ctrl-Shift-R" in body, "the warning does not say how to clear a stale cache"
+    assert "/api/data/status" in body, "the warning does not point at the publish status"
+
+
 # --- helpers ---------------------------------------------------------------
 
 def _module_constant(repo_root, name):
