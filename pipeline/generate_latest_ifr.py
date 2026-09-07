@@ -4,12 +4,20 @@ pipeline/generate_latest_ifr.py
 THE production driver. Run on a schedule (see
 .github/workflows/generate_ifr.yml) to:
 
-  1. Find the most recent NBM cycle aligned to G-AIRMET's REAL issuance
-     schedule -- 03Z, 09Z, 15Z, and 21Z -- rather than just any hourly
-     NBM cycle. We probe with a cheap .idx fetch (not a full download)
-     and step backward through recent aligned cycles until one is
-     actually posted, since we don't know the exact posting lag in
-     advance.
+  1. Take the NBM cycle the workflow's poller already resolved (via the
+     NBM_SOURCE_CYCLE environment variable -- see
+     .github/scripts/await_nbm_cycle.py), or, when run by hand with
+     nothing set, find the most recent NBM cycle aligned to G-AIRMET's
+     REAL issuance schedule -- 03Z, 09Z, 15Z, and 21Z -- rather than just
+     any hourly NBM cycle, probing with a cheap .idx fetch (not a full
+     download) and stepping backward through recent aligned cycles until
+     one is actually posted.
+
+     In production the poller has ALREADY established which cycle this
+     is, and that the resulting package would actually publish, before
+     this script is reached: re-deriving it here could pick up a newer
+     cycle that posted in between and produce a package the pre-flight
+     guard never approved.
   2. SHIFT FORWARD one G-AIRMET interval (+6h) to produce the UPCOMING
      cycle's product from data that already exists, rather than the
      cycle that just occurred. This matches how forecasting actually
@@ -47,12 +55,12 @@ from pipeline.gairmet_cycle import (
     FORECAST_HOURS,
     NBM_LEAD_TIME_OFFSET_HOURS,
     PROBE_FORECAST_HOUR,
-    find_latest_gairmet_cycle,
+    resolve_nbm_cycle,
 )
 from pipeline.hazards.ifr import polygonize_ifr_grid_active, prepare_ifr_grid
 from pipeline.polygons import save_grid_cache
 
-# find_latest_gairmet_cycle(), GAIRMET_CYCLE_HOURS, FORECAST_HOURS,
+# resolve_nbm_cycle(), find_latest_gairmet_cycle(), GAIRMET_CYCLE_HOURS, FORECAST_HOURS,
 # NBM_LEAD_TIME_OFFSET_HOURS, MAX_CYCLES_TO_TRY, and PROBE_FORECAST_HOUR
 # have moved to pipeline/gairmet_cycle.py (imported above) -- see that
 # module's docstring for why: none of this scheduling logic is actually
@@ -67,7 +75,7 @@ OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
 
 
 # find_latest_gairmet_cycle() itself has moved to pipeline/gairmet_cycle.py
-# (imported above).
+# (imported above, behind resolve_nbm_cycle()).
 
 
 def generate_one_snapshot(nbm_cycle_date: datetime, gairmet_cycle_date: datetime, requested_fxx: int):
@@ -109,7 +117,7 @@ def main():
     )
 
     try:
-        nbm_cycle_date = find_latest_gairmet_cycle(hazard="ifr")
+        nbm_cycle_date = resolve_nbm_cycle(hazard="ifr")
     except Exception:
         print("FAILED to find any available cycle. Full traceback:\n")
         traceback.print_exc()

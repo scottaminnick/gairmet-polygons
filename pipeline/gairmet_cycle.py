@@ -15,16 +15,15 @@ belong bundled inside generate_latest_ifr.py.
 
 from __future__ import annotations
 
-import sys
+import os
 from datetime import datetime, timedelta, timezone
 
 from pipeline.fetch_nbm import fetch_idx
 from pipeline.publish_schedule import (
     GAIRMET_CYCLE_HOURS,
     NBM_LEAD_TIME_OFFSET_HOURS,
-    attempt_number,
-    is_final_attempt,
-    target_nbm_cycle,
+    PROBE_FORECAST_HOUR,
+    log_nbm_arrival,  # noqa: F401  (re-exported: callers have always imported it from here)
 )
 
 # Real G-AIRMET issuance hours (UTC) and real G-AIRMET valid-time
@@ -33,9 +32,10 @@ from pipeline.publish_schedule import (
 # 2045 UTC" for the text product; the graphical product's discrete
 # valid-time snapshots are 0/3/6/9/12h per section 7).
 # GAIRMET_CYCLE_HOURS is imported from pipeline.publish_schedule, which
-# owns it -- that module is stdlib-only so the publish guard can share
-# these numbers without pulling in the fetch stack. Re-exported here
-# because every existing caller imports it from this module.
+# owns it -- that module is stdlib-only so the publish guard and the
+# poller can share these numbers without pulling in the fetch stack.
+# Re-exported here because every existing caller imports it from this
+# module.
 FORECAST_HOURS = [0, 3, 6, 9, 12]  # hours INTO the upcoming G-AIRMET cycle -- used for labeling/filenames/UI
 
 # The NBM cycle find_latest_gairmet_cycle() finds is always the PREVIOUS
@@ -49,62 +49,39 @@ FORECAST_HOURS = [0, 3, 6, 9, 12]  # hours INTO the upcoming G-AIRMET cycle -- u
 # ~4.5 hours of lead in exchange for fresher guidance. Re-exported here
 # because every existing caller imports it from this module.
 
-from pipeline.publish_schedule import ATTEMPTS_PER_CYCLE  # noqa: E402  (re-exported for callers)
-
 MAX_CYCLES_TO_TRY = 8  # how many recent G-AIRMET-aligned cycles to try before giving up
+
 # Probe using the SMALLEST NBM forecast hour any hazard will actually need
 # (F00 -> NBM hour 6) -- if that's not posted yet, none of the longer lead
 # times any hazard needs would be either.
-PROBE_FORECAST_HOUR = FORECAST_HOURS[0] + NBM_LEAD_TIME_OFFSET_HOURS
+# The value itself lives in publish_schedule (stdlib-only, so the poller
+# can reach it); the derivation is asserted here so the two cannot drift.
+assert PROBE_FORECAST_HOUR == FORECAST_HOURS[0] + NBM_LEAD_TIME_OFFSET_HOURS
+
+# Set by the generate workflows from the poller's result. The run that
+# already decided which cycle it would build -- and that it WOULD publish
+# it -- has no business re-deriving that answer a second time from a
+# fresh set of probes: between the two, a newer cycle posting would make
+# the generated package disagree with the one the pre-flight guard
+# approved. See .github/scripts/await_nbm_cycle.py.
+NBM_SOURCE_CYCLE_ENV = "NBM_SOURCE_CYCLE"
 
 
-def log_nbm_arrival(found_cycle: datetime, hazard: str | None = None, now: datetime | None = None) -> dict:
+def resolve_nbm_cycle(hazard: str | None = None, probe_fxx: int = PROBE_FORECAST_HOUR) -> datetime:
     """
-    One machine-readable line per run recording what this run WANTED, what
-    it GOT, and how long after the cycle it was looking.
+    The NBM cycle this run should build from: whatever the workflow's
+    poller already settled on, or a fresh search if nothing did.
 
-    THE POINT. The schedule is currently set from an estimate: NBM 03Z's
-    arrival could only be bracketed between +20 minutes and +3h30m from
-    existing logs, which is far too wide to schedule against. Every run
-    emits one of these, so after a week the crons can be tightened or
-    loosened against a real arrival distribution instead.
-
-    A single greppable prefix and flat key=value pairs, because the thing
-    that will actually read these is `grep NBM-ARRIVAL` over downloaded
-    job logs, not a log pipeline this project does not have.
-
-    on_target=no is NOT a failure. It means the run fell back to an older
-    NBM and will rebuild an already-published cycle, which the publish
-    guard then skips. It only matters if it is still happening on the
-    final attempt -- see should_publish_cycle.py.
+    The env-var path is the normal one in production. The search is what
+    a hand-run `python3 pipeline/generate_latest_ifr.py` still gets, and
+    it is unchanged.
     """
-    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
-    target = target_nbm_cycle(now)
-    on_target = found_cycle == target
-    attempt = attempt_number(now, hazard) if hazard else None
-    record = {
-        "hazard": hazard or "-",
-        "attempt": f"{attempt}/{ATTEMPTS_PER_CYCLE}" if attempt else "manual",
-        "target": f"{target:%Y-%m-%dT%H:%M:%S}Z",
-        "found": f"{found_cycle:%Y-%m-%dT%H:%M:%S}Z",
-        "on_target": "yes" if on_target else "no",
-        # Minutes from the TARGET cycle's nominal time to this run. On an
-        # on_target=yes line this is an upper bound on that cycle's arrival
-        # latency; across attempts the yes/no boundary brackets it.
-        "delta_min": f"{(now - target).total_seconds() / 60:.0f}",
-        "behind_min": f"{(target - found_cycle).total_seconds() / 60:.0f}",
-        "run": f"{now:%Y-%m-%dT%H:%M:%S}Z",
-    }
-    print("NBM-ARRIVAL " + " ".join(f"{k}={v}" for k, v in record.items()))
-    if not on_target and hazard and is_final_attempt(now, hazard):
-        print(
-            f"WARNING: final attempt ({attempt}/{ATTEMPTS_PER_CYCLE}) for NBM "
-            f"{target:%Y-%m-%d %H}Z and it is still not posted -- falling back to "
-            f"{found_cycle:%Y-%m-%d %H}Z. The G-AIRMET cycle this run should have "
-            f"seeded is being missed, not merely delayed.",
-            file=sys.stderr,
-        )
-    return record
+    override = os.environ.get(NBM_SOURCE_CYCLE_ENV, "").strip()
+    if override:
+        cycle = datetime.fromisoformat(override.replace("Z", "+00:00")).replace(tzinfo=None)
+        print(f"Using the NBM cycle this run's poller already resolved: {cycle:%Y-%m-%d %H}Z")
+        return cycle
+    return find_latest_gairmet_cycle(probe_fxx, hazard)
 
 
 def find_latest_gairmet_cycle(probe_fxx: int = PROBE_FORECAST_HOUR,

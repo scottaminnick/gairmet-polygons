@@ -643,93 +643,192 @@ cycle serving rather than blanking the site
 silent. So the panel now computes the cycle that *should* be published
 from the clock and warns when the loaded one is older.
 
-Cycles are 03/09/15/21Z, with `PUBLISH_GRACE_MINUTES = 90` covering the
-run and publish (the crons fire at :20 and :35). The warning triggers only
+Cycles are 03/09/15/21Z. The expectation is derived from the publish
+window rather than from a fixed grace period — see §8.8 for how that
+window is now defined. The warning triggers only
 at a **full cycle** behind: the comparison uses the browser's clock, and a
 modest clock error should not be able to raise a false alarm. It names the
 loaded cycle, the expected one, how far behind, and both remedies — a hard
 reload for a cache, `/api/data/status` for a failed publish. A timer
 re-checks, so a page left open across a boundary notices.
 
-## 8.8 Publish schedule, retries, and NBM arrival
+## 8.8 Publish schedule, polling, and NBM arrival
 
-The crons used to fire at **+0:20** past each synoptic hour. At that point
-the matching NBM run is not posted, so `find_latest_gairmet_cycle()` fell
-back to the previous NBM cycle and, with the +6h lead offset, rebuilt the
-G-AIRMET cycle that was **already current**. The 15Z first guess did not
-appear until 15:20Z — thirty-five minutes *after* the 1445Z issuance it
-exists to seed.
+The crons originally fired at **+0:20** past each synoptic hour. At that
+point the matching NBM run is not posted, so `find_latest_gairmet_cycle()`
+fell back to the previous NBM cycle and, with the +6h lead offset, rebuilt
+the G-AIRMET cycle that was **already current**. The 15Z first guess did
+not appear until 15:20Z — thirty-five minutes *after* the 1445Z issuance
+it exists to seed.
 
-Runs now start at **+1:15** and retry every 30 minutes to **+3:00**: four
-attempts per hazard per cycle, IFR first and MTN OBSC fifteen minutes
-behind throughout (it fetches ten NBM fields per hour to IFR's four, and
-the two force-push separate data branches).
+The fix for that was a ladder of four retry crons per hazard, +1:15 to
++3:00. Real behaviour on 2026-09-07 showed why that could not work: the
+03Z package's four IFR attempts were **scheduled** at 22:15, 22:45, 23:15
+and 23:45Z and GitHub **started** them at 23:54, 00:22, 01:01 and 01:18Z —
+a consistent **~95 minute queue delay on every one**. Scheduled Actions
+runs are best-effort and queued at low priority; that delay is the
+platform, not the cron expression, so tightening the schedule cannot
+recover it. Two consequences:
 
-Retries are **separate cron entries, not a sleep/poll loop**. A job that
-sleeps burns billable minutes holding a runner and turns a late NBM into a
-timeout rather than a clean no-op. An attempt that runs before its NBM has
-landed falls back, rebuilds the already-published cycle, and
-`should_publish_cycle.py` skips it. The cost is a wasted fetch-and-process,
-which is why attempts stop at +3:00 rather than running to the next cycle.
+- The 03Z package published at ~23:54Z instead of ~22:45Z, giving the
+  forecaster 2h45m before the 0245Z issuance instead of the ~4h the
+  schedule was designed for.
+- Each attempt ran 15–20 minutes, because the publish decision came
+  *after* the NBM fetch and polygon generation. Three of four did the full
+  job and discarded it: roughly **nine hours of runner time a day** to
+  publish four packages.
+
+### Check before doing the work
+
+The single highest-value change, and what makes everything else
+affordable. Each generate workflow now, **before `pip install` and before
+touching any NBM data**:
+
+1. resolves which G-AIRMET-aligned NBM cycle is available
+   (`.github/scripts/await_nbm_cycle.py`),
+2. reads the cycle currently on its data branch,
+3. asks `should_publish_cycle.py` whether the package it would build is
+   newer.
+
+If it would not publish, the job exits successfully in seconds having
+installed nothing and downloaded nothing. Everything those steps import is
+**stdlib-only** — that is what lets them run above the install, and
+`tests/test_workflow_dependencies.py` fails if a third-party import ever
+creeps into their reach.
+
+### One polling job per hazard
+
+The retry ladder is gone. Each hazard has a single cron, scheduled ~45
+minutes before its NBM is due, that **waits**:
+
+- probe whether the target cycle is posted — an HTTP `HEAD` on the `.idx`,
+  so nothing is downloaded, not even the index;
+- if not, sleep `POLL_INTERVAL_MINUTES` (5) and re-check;
+- continue until found, or until a wall-clock deadline of **+3:30 after
+  the synoptic hour**;
+- on finding it, run the pipeline once and publish;
+- on hitting the deadline, log the `nbm-not-yet` WARNING and exit
+  successfully.
+
+Started on time, the job picks NBM up within five minutes of arrival
+rather than at the next half-hourly attempt. Started 95 minutes late, the
+data is already there and it proceeds immediately — no worse than the old
+first attempt. **The pattern is robust to the queue delay in both
+directions**, which is what the ladder never was.
+
+Sleeping in a job used to be the argument *against* this, on the grounds
+that it burns billable minutes. That argument belonged to the old cost
+model, where every attempt paid for a full fetch and generation up front.
+With the decision moved before the work, the loop is one HEAD request
+every five minutes.
+
+The deadline is anchored to the **synoptic hour, not to job start**, and
+is the same instant for both hazards: a job GitHub starts 95 minutes late
+must not get 95 extra minutes of runway and drift into the next cycle's
+territory. `timeout-minutes` is derived from it —
+`job_timeout_minutes(hazard)` = longest possible poll + a generation
+allowance = 192 for both — so a wedged poll cannot sit on GitHub's
+360-minute default.
+
+**Uncontended cron minutes.** `:00`, `:15`, `:30` and `:45` are the
+platform's most oversubscribed slots; an off-beat minute measurably
+reduces queue delay. IFR runs at **+0:43** and MTN OBSC at **+0:58**,
+keeping the 15-minute stagger the two hazards have always had (MTN OBSC
+fetches ten NBM fields per hour to IFR's four, and the two force-push
+separate data branches). Not a fix for the delay — nothing here is — but
+free.
 
 `NBM_LEAD_TIME_OFFSET_HOURS` stays at **6** — the forecaster has accepted
 ~4.5 hours of lead for fresher guidance.
 
 The schedule lives in `pipeline/publish_schedule.py` (stdlib-only, so the
-publish guard can share it without the fetch stack) and the crons are
-*generated* from it; `tests/test_publish_schedule.py` fails if the YAML
-drifts. The offsets past +2:00 roll into later hours, and MTN OBSC's +3:00
-attempt after 21Z rolls into hour 0 of the next day — the part that gets
-silently wrong when eight cron lines are hand-edited.
+poller and the publish guard can share it without the fetch stack) and the
+crons, the poll interval, the deadline and the job timeouts are all
+*generated* or *derived* from it; `tests/test_publish_schedule.py` fails if
+the YAML or the browser constants drift. Today's offsets do not roll into
+the next hour, but the generator still handles it — the offsets are meant
+to be retuned from measurement, and an offset pushed past the hour (or,
+after 21Z, past midnight) is exactly the edit that goes silently wrong by
+hand, so it is tested directly.
+
+The generate step is told which cycle to build via `NBM_SOURCE_CYCLE`
+rather than re-deriving one: between the pre-flight and the fetch, a newer
+cycle posting would otherwise produce a package no guard had approved.
 
 ### Two skips that used to look the same
 
-"Branch holds X; not publishing" now distinguishes:
+"Branch holds X; not publishing" distinguishes:
 
 - **`already-published`** — the target NBM arrived, this run built the
-  right cycle, an earlier attempt got there first. Routine.
+  right cycle, and that package is already on the branch. Routine.
 - **`nbm-not-yet`** — the target NBM had not arrived, so the run fell back
-  and rebuilt the already-live cycle. Expected on attempt one. On the
-  **final** attempt it means no further attempt is scheduled and that cycle
-  is *missed*, not delayed — so it logs `WARNING` to stderr. A
-  systematically missed cycle previously read as a routine no-op.
+  and would rebuild the already-live cycle. This got **more** serious with
+  polling, not less: there is one job per hazard per cycle, so a run that
+  fell back has already polled to its +3:30 deadline and given up. Nothing
+  else is coming, so the cycle is *missed*, not delayed, and it logs
+  `WARNING` to stderr.
 
-Classified from `nbm_source_cycle` in the manifest the run just built
-against the synoptic hour it should have been chasing — the G-AIRMET cycle
-is identical in both cases and cannot tell them apart. A manual
-`workflow_dispatch` is reported as `unknown` rather than guessed at, and is
-never treated as a final attempt.
+The one exception is `workflow_dispatch`, which probes once and proceeds
+rather than holding a runner for three hours — a person pressing the
+button before NBM has posted has not missed a cycle, and it is reported
+without the alarm. The workflows pass `--polled yes|no` from the event
+type so this is never guessed at.
+
+Classified from `nbm_source_cycle` against the synoptic hour the run
+should have been chasing — the G-AIRMET cycle is identical in both cases
+and cannot tell them apart.
 
 ### NBM arrival instrumentation
 
-+1:15 is an **estimate**. NBM 03Z's arrival could only be bracketed between
-+20 minutes and +3h30m from existing logs, which is far too wide to
-schedule against. Every run now emits one greppable line:
+The offsets are still estimates, and the log is how they stop being. What
+changed is that **two different latencies used to be conflated in one
+number**: how late *GitHub* started the job, and how late *NBM* posted the
+cycle. On 2026-09-07 those were ~95 minutes and ~0 minutes respectively,
+and `delta_min` could have meant either. They need different fixes — one
+is unfixable platform behaviour to absorb, the other is a schedule
+constant to retune — so they are now reported apart:
 
 ```
-NBM-ARRIVAL hazard=ifr attempt=1/4 target=...09:00:00Z found=...09:00:00Z \
-            on_target=yes delta_min=75 behind_min=0 run=...10:15:00Z
+NBM-ARRIVAL hazard=ifr target=...03:00:00Z found=...03:00:00Z on_target=yes \
+            job_start=...05:18:00Z detected=...05:19:00Z queue_delay_min=95 \
+            poll_wait_min=1 arrival_min=139 arrival_measured=no behind_min=0
 ```
 
-`delta_min` is from the target cycle's nominal time to the run; on an
-`on_target=yes` line that is an upper bound on arrival latency, and across
-attempts the yes/no boundary brackets it. After a week, `grep NBM-ARRIVAL`
-over the job logs gives a real distribution to set the crons from.
-`on_target=no` is not a failure — only its persistence to attempt four is.
+- `queue_delay_min` — job start minus its scheduled cron time. The
+  platform.
+- `poll_wait_min` — detection minus job start. Runner minutes spent
+  waiting.
+- `arrival_min` — detection minus the target synoptic hour. NBM.
+- `arrival_measured` — whether `arrival_min` is a real measurement or only
+  an upper bound. It is a measurement when the poll actually *watched* the
+  cycle appear (at least one probe found nothing first). Found on the very
+  first probe, all we know is "at or before then" — the common case when
+  the platform starts us late, and precisely how the two numbers got
+  conflated before.
+
+A week of `grep NBM-ARRIVAL` over the job logs now gives the queue-delay
+distribution and the NBM arrival distribution as separate series.
 
 ### What this does to the staleness indicator
 
-The app now **normally holds a cycle ahead of the wall clock**: at 10:15Z
-it serves the 15Z package, 4h45m before 15Z. Comparing the loaded cycle to
+The app **normally holds a cycle ahead of the wall clock**: at 10:15Z it
+serves the 15Z package, 4h45m before 15Z. Comparing the loaded cycle to
 "now" would call every healthy state stale.
 
-Stale now means: the loaded cycle is older than the newest one that should
+Stale means: the loaded cycle is older than the newest one that should
 have *published* — the G-AIRMET package (synoptic hour + 6h) of the newest
-synoptic hour whose publish window (+1:15 to +3:00) has closed. So at
-11:59Z holding the 09Z package is fine; at 12:00Z, when NBM 09Z's window
-shuts, the 15Z package is due and 09Z becomes stale. The threshold is still
-a full cycle, so browser clock skew cannot raise a false alarm, and the
-frozen-clock browser cases were rechosen for this schedule.
+synoptic hour whose publish window has closed. That window used to close
+at +3:00, when the last of four attempts had been and gone; it now closes
+at the **+3:30 poll deadline**, because until then a run is still
+legitimately waiting. `PUBLISH_WINDOW_CLOSE_MINUTES` in both
+`publish_schedule.py` and `map.js` is that deadline, and
+`expected_gairmet_cycle()` is the Python mirror of the browser's
+`expectedGairmetCycle()`, exercised against frozen clocks either side of
+the boundary and across midnight. The half hour matters: under the old
+anchor, at 06:15Z the viewer would show `STALE DATA` over a run that is
+still polling for exactly the cycle it is complaining about. The threshold
+is still a full cycle behind, so browser clock skew cannot raise a false
+alarm.
 
 ## 9. Known limits
 

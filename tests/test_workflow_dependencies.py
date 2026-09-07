@@ -289,6 +289,64 @@ def test_every_workflow_installs_what_its_entry_point_imports(entry_point, requi
     )
 
 
+# ---------------------------------------------------------------------------
+# The steps that run BEFORE `pip install`.
+#
+# The generate workflows decide whether they would publish anything at
+# all before installing dependencies or fetching NBM data -- that
+# reordering is what makes a non-publishing run cost seconds instead of
+# 15-20 minutes, and it is the reason polling for the NBM cycle is
+# affordable in the first place.
+#
+# It rests entirely on those steps importing nothing that is not in the
+# standard library. A single `import requests` anywhere in their reach
+# breaks every scheduled run of both hazards, at the first step, with a
+# ModuleNotFoundError -- and it would be added innocently, because every
+# other consumer of pipeline/publish_schedule.py has requests installed.
+# ---------------------------------------------------------------------------
+
+PRE_INSTALL_ENTRY_POINTS = [
+    ".github/scripts/await_nbm_cycle.py",
+    ".github/scripts/should_publish_cycle.py",
+]
+
+
+@pytest.mark.parametrize("entry_point", PRE_INSTALL_ENTRY_POINTS)
+def test_the_pre_install_scripts_import_nothing_but_the_standard_library(entry_point):
+    reachable = _reachable_third_party(entry_point)
+    assert not reachable, (
+        f"{entry_point} runs before `pip install` in the generate workflows and reaches "
+        f"third-party modules: "
+        + "; ".join(f"{m} via {' -> '.join(c)}" for m, (c, _) in sorted(reachable.items()))
+        + ". Every scheduled run of both hazards would fail at its first step. If the "
+        f"import "
+        f"is genuinely needed, the step has to move below the install -- which puts the cost "
+        f"of a full dependency install back on every non-publishing run."
+    )
+
+
+@pytest.mark.parametrize("workflow", ["generate_ifr.yml", "generate_mtn_obsc.yml"])
+def test_the_pre_install_scripts_really_do_run_before_the_install(workflow):
+    """
+    The check above is only worth anything while these scripts are still
+    the ones running first. If the steps get reordered, the constraint
+    they are held to stops matching what the workflow does.
+    """
+    import yaml
+
+    spec = yaml.safe_load((WORKFLOW_DIR / workflow).read_text())
+    steps = spec["jobs"]["generate"]["steps"]
+    scripts = [step.get("run", "") for step in steps]
+    install = next(i for i, r in enumerate(scripts) if "pip install" in r)
+    for entry_point in PRE_INSTALL_ENTRY_POINTS:
+        used_at = [i for i, r in enumerate(scripts) if Path(entry_point).name in r]
+        assert used_at, f"{workflow} no longer runs {entry_point}"
+        assert min(used_at) < install, (
+            f"{workflow} runs {entry_point} after `pip install`, so a run with nothing to "
+            f"publish pays for the install anyway"
+        )
+
+
 def test_the_terrain_job_does_not_quietly_acquire_the_hazard_output_stack():
     """
     geojson and pyproj are imported lazily in pipeline/polygons.py

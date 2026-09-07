@@ -36,13 +36,14 @@ def _load_guard():
 guard = _load_guard()
 
 
-def _manifest(tmp_path, name, cycle, nbm_source_cycle=None):
+def _manifest(tmp_path, name, cycle, nbm_source_cycle=None, **extra):
     path = tmp_path / name
     body = {"snapshots": []}
     if cycle is not None:
         body["model_cycle"] = cycle
     if nbm_source_cycle is not None:
         body["nbm_source_cycle"] = nbm_source_cycle
+    body.update(extra)
     path.write_text(json.dumps(body))
     return str(path)
 
@@ -121,24 +122,29 @@ def test_compares_instants_not_strings(tmp_path):
 # ---------------------------------------------------------------------------
 # Telling the two skips apart.
 #
-# With retry crons, "the branch already holds this cycle" has two very
-# different causes, and they used to log identically:
+# "The branch already holds this cycle" has two very different causes,
+# and they used to log identically:
 #
 #   already-published  the target NBM had arrived, we built the right
-#                      cycle, an earlier attempt got there first. Routine.
+#                      cycle, something got there first. Routine.
 #   nbm-not-yet        the target NBM had NOT arrived, so the run fell
-#                      back and rebuilt the already-live cycle. Fine on
-#                      attempt one; on the last attempt that cycle is
-#                      being missed, and a missed cycle that reads like a
-#                      routine no-op is a missed cycle nobody notices.
+#                      back and would rebuild the already-live cycle.
+#
+# The second one got MORE serious with the move to a polling job, not
+# less. There used to be four attempts, so falling back on attempt one
+# was expected and only the last one meant anything. There is now one job
+# per hazard per cycle: if it fell back, it already polled to its +3:30
+# deadline and gave up, and nothing else is coming. The single exception
+# is workflow_dispatch, which does not poll at all -- a person pressing
+# the button before NBM has posted is not a missed cycle.
 # ---------------------------------------------------------------------------
 
 SKIP_CASE = dict(cycle="2026-09-04T15:00:00Z")
 
 
-def _skip_pair(tmp_path, nbm_source_cycle):
+def _skip_pair(tmp_path, nbm_source_cycle, **extra):
     existing = _manifest(tmp_path, "existing.json", SKIP_CASE["cycle"])
-    new = _manifest(tmp_path, "new.json", SKIP_CASE["cycle"], nbm_source_cycle)
+    new = _manifest(tmp_path, "new.json", SKIP_CASE["cycle"], nbm_source_cycle, **extra)
     return new, existing
 
 
@@ -152,50 +158,87 @@ def test_skip_is_labelled_already_published_when_the_target_nbm_was_used(tmp_pat
     assert "WARNING" not in out.out and not out.err.strip()
 
 
-def test_skip_is_labelled_nbm_not_yet_when_the_run_fell_back(tmp_path, capsys):
-    new, existing = _skip_pair(tmp_path, "2026-09-04T03:00:00Z")
-    status = guard.main(["--new", new, "--existing", existing,
-                         "--hazard", "ifr", "--now", "2026-09-04T10:15:00Z"])
-    assert status == SKIP
-    out = capsys.readouterr()
-    assert "nbm-not-yet" in out.out
-    assert "attempt 1/4" in out.out
-    assert "WARNING" not in out.out, "attempt one falling back is routine, not a warning"
-
-
-def test_the_final_attempt_falling_back_warns_on_stderr(tmp_path, capsys):
+def test_a_scheduled_run_that_fell_back_has_missed_the_cycle_and_says_so(tmp_path, capsys):
     """
-    The one case that needs to look different from every other skip: no
-    further attempt is scheduled, so this cycle is missed rather than
-    delayed.
+    The case that changed. A scheduled run only reaches the publish step
+    having already polled to its deadline, so falling back is never
+    "attempt one, a later one will get it" any more -- there is no later
+    one. It has to read as an alarm, not as routine.
     """
-    new, existing = _skip_pair(tmp_path, "2026-09-04T03:00:00Z")
-    status = guard.main(["--new", new, "--existing", existing,
-                         "--hazard", "ifr", "--now", "2026-09-04T11:45:00Z"])
+    new, existing = _skip_pair(tmp_path, "2026-09-04T09:00:00Z")
+    status = guard.main(["--new", new, "--existing", existing, "--hazard", "ifr",
+                         "--polled", "yes", "--now", "2026-09-04T18:30:00Z"])
     assert status == SKIP, "a missed cycle is still a skip, not a build failure"
     out = capsys.readouterr()
     assert "WARNING" in out.err and "nbm-not-yet" in out.err
     assert "MISSED" in out.err
-    assert "attempt 4/4" in out.err
+    assert "+3:30" in out.err, "the message should name the deadline it actually hit"
     assert not out.out.strip(), "the warning should not also go to stdout"
 
 
-def test_mtn_obsc_final_attempt_after_midnight_is_recognised(tmp_path, capsys):
+def test_a_manual_run_that_fell_back_is_reported_without_the_alarm(tmp_path, capsys):
     """
-    MTN OBSC's fourth attempt at the 21Z cycle runs at 00:00 the next day.
-    A date bug would report it as attempt-less and stay quiet.
+    workflow_dispatch probes once and proceeds rather than holding a
+    runner for three hours. Falling back is then just what the button
+    does before NBM has posted; the scheduled job for that cycle is still
+    coming, so calling it a missed cycle would be wrong.
+    """
+    new, existing = _skip_pair(tmp_path, "2026-09-04T09:00:00Z")
+    status = guard.main(["--new", new, "--existing", existing, "--hazard", "ifr",
+                         "--polled", "no", "--now", "2026-09-04T15:30:00Z"])
+    assert status == SKIP
+    out = capsys.readouterr()
+    assert "nbm-not-yet" in out.out
+    assert "did not poll" in out.out
+    assert "WARNING" not in out.out and not out.err.strip()
+
+
+def test_the_pollers_own_result_file_answers_it_when_no_flag_is_passed(tmp_path, capsys):
+    """
+    The pre-flight call reads await_nbm_cycle.py's output, which records
+    deadline_reached itself. The flag is what the workflow passes; the
+    field is the cross-check, so a hand invocation against a poller result
+    still classifies correctly.
+    """
+    new, existing = _skip_pair(tmp_path, "2026-09-04T09:00:00Z", deadline_reached=False)
+    assert guard.main(["--new", new, "--existing", existing, "--hazard", "ifr",
+                       "--now", "2026-09-04T15:30:00Z"]) == SKIP
+    assert "did not poll" in capsys.readouterr().out
+
+
+def test_an_ordinary_manifest_with_no_poll_information_alarms_rather_than_staying_quiet(
+    tmp_path, capsys
+):
+    """
+    The real hazard manifests carry no deadline_reached field, and the
+    conservative reading of a fallback is that a cycle is being missed.
+    Silence would be the failure mode this classification exists to
+    remove.
+    """
+    new, existing = _skip_pair(tmp_path, "2026-09-04T09:00:00Z")
+    assert guard.main(["--new", new, "--existing", existing, "--hazard", "ifr",
+                       "--now", "2026-09-04T18:30:00Z"]) == SKIP
+    assert "WARNING" in capsys.readouterr().err
+
+
+def test_a_fallback_after_midnight_is_recognised(tmp_path, capsys):
+    """
+    MTN OBSC's 21Z poll runs to 00:30 the next day. A date bug would read
+    it against the wrong synoptic hour and report a fallback as routine.
     """
     existing = _manifest(tmp_path, "existing.json", "2026-09-05T03:00:00Z")
     new = _manifest(tmp_path, "new.json", "2026-09-05T03:00:00Z", "2026-09-04T15:00:00Z")
-    assert guard.main(["--new", new, "--existing", existing,
-                       "--hazard", "mtn_obsc", "--now", "2026-09-05T00:00:00Z"]) == SKIP
-    assert "attempt 4/4" in capsys.readouterr().err
+    assert guard.main(["--new", new, "--existing", existing, "--hazard", "mtn_obsc",
+                       "--polled", "yes", "--now", "2026-09-05T00:30:00Z"]) == SKIP
+    err = capsys.readouterr().err
+    assert "MISSED" in err
+    assert "2026-09-04 21Z" in err, "the target should be yesterday's 21Z, not today's 03Z"
 
 
 def test_a_skip_without_a_hazard_says_unknown_rather_than_guessing(tmp_path, capsys):
     """
-    Without --hazard there is no attempt schedule to compare against.
-    Reporting "routine" would be a guess, and the wrong one half the time.
+    Without --hazard there is no schedule to compare against. Reporting
+    "routine" would be a guess, and the wrong one half the time.
     """
     new, existing = _skip_pair(tmp_path, "2026-09-04T03:00:00Z")
     assert guard.main(["--new", new, "--existing", existing]) == SKIP
@@ -209,5 +252,73 @@ def test_classification_never_changes_the_publish_decision(tmp_path):
     """
     existing = _manifest(tmp_path, "existing.json", "2026-09-04T09:00:00Z")
     newer = _manifest(tmp_path, "new.json", "2026-09-04T15:00:00Z", "2026-09-04T03:00:00Z")
-    assert guard.main(["--new", newer, "--existing", existing,
-                       "--hazard", "ifr", "--now", "2026-09-04T11:45:00Z"]) == PUBLISH
+    assert guard.main(["--new", newer, "--existing", existing, "--hazard", "ifr",
+                       "--polled", "yes", "--now", "2026-09-04T11:45:00Z"]) == PUBLISH
+
+
+# ---------------------------------------------------------------------------
+# The pre-flight call.
+#
+# The guard now runs TWICE per workflow: once against the poller's result
+# file before `pip install`, and again against the real manifest at
+# publish time. The first call is what makes a non-publishing run cost
+# seconds instead of 15-20 minutes of fetch and generation, so the shape
+# the poller writes has to keep satisfying it.
+# ---------------------------------------------------------------------------
+
+def _preflight(tmp_path, nbm_source_cycle, deadline_reached=False):
+    """The file .github/scripts/await_nbm_cycle.py writes, as it writes it."""
+    from datetime import datetime, timedelta
+
+    nbm = datetime.fromisoformat(nbm_source_cycle.replace("Z", "+00:00"))
+    path = tmp_path / "nbm_preflight.json"
+    path.write_text(json.dumps({
+        "target_nbm_cycle": "2026-09-04T09:00:00Z",
+        "nbm_source_cycle": nbm_source_cycle,
+        "model_cycle": (nbm + timedelta(hours=6)).isoformat().replace("+00:00", "") + "Z",
+        "found": not deadline_reached,
+        "deadline_reached": deadline_reached,
+    }))
+    return str(path)
+
+
+def test_the_preflight_file_is_a_manifest_as_far_as_the_guard_is_concerned(tmp_path):
+    """
+    No special case in the guard: the poller writes model_cycle and
+    nbm_source_cycle, which is all the comparison and the classification
+    read. That is why the pre-flight needed no new code here.
+    """
+    new = _preflight(tmp_path, "2026-09-04T09:00:00Z")
+    existing = _manifest(tmp_path, "existing.json", "2026-09-04T09:00:00Z")
+    assert guard.main(["--new", new, "--existing", existing, "--hazard", "ifr",
+                       "--now", "2026-09-04T10:45:00Z"]) == PUBLISH
+
+
+def test_the_preflight_skips_a_cycle_that_is_already_on_the_branch(tmp_path, capsys):
+    """
+    The single highest-value case: the run ends here, green, in seconds,
+    having installed nothing and fetched no NBM data.
+    """
+    new = _preflight(tmp_path, "2026-09-04T09:00:00Z")
+    existing = _manifest(tmp_path, "existing.json", "2026-09-04T15:00:00Z")
+    assert guard.main(["--new", new, "--existing", existing, "--hazard", "ifr",
+                       "--now", "2026-09-04T10:45:00Z"]) == SKIP
+    assert "already-published" in capsys.readouterr().out
+
+
+def test_the_preflight_publishes_the_first_time_a_branch_is_seen(tmp_path):
+    """An absent branch must never be able to wedge the pipeline shut."""
+    new = _preflight(tmp_path, "2026-09-04T09:00:00Z")
+    assert guard.main(["--new", new, "--hazard", "ifr"]) == PUBLISH
+
+
+def test_a_preflight_that_never_found_its_cycle_is_an_error_not_a_silent_skip(tmp_path, capsys):
+    """
+    nbm_source_cycle=None means the poller could not reach ANY aligned
+    cycle -- a NOAA outage, not a late run. await_nbm_cycle.py exits 1 on
+    that before the guard is reached, but if it ever were, an unusable
+    manifest is an error rather than something to publish.
+    """
+    path = tmp_path / "nbm_preflight.json"
+    path.write_text(json.dumps({"model_cycle": None, "nbm_source_cycle": None}))
+    assert guard.main(["--new", str(path), "--hazard", "ifr"]) == ERROR

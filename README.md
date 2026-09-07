@@ -73,7 +73,13 @@ Currently working:
       float32 storage) so parameters can be re-applied later without
       re-fetching from NBM.
 - [x] **Scheduled generation** (`.github/workflows/generate_ifr.yml`) —
-      runs every 6 hours and force-pushes `ifr_f00.geojson` through
+      runs every 6 hours. It starts ~45 minutes before its NBM cycle is
+      due, checks whether the package it would build is newer than what
+      is already published *before* installing anything or fetching any
+      data (so a run with nothing to do ends in seconds), and otherwise
+      polls the NBM `.idx` every 5 minutes until the cycle appears or a
+      +3:30 deadline passes ([METHODS §8.8](docs/METHODS.md)). Then it
+      force-pushes `ifr_f00.geojson` through
       `ifr_f12.geojson`, their cached `*_grid.npz` grids, and
       `ifr_manifest.json` to the **`data-ifr`** branch (Mountain
       Obscuration publishes the same way to **`data-mtnobsc`**). Nothing

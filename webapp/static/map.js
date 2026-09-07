@@ -190,9 +190,14 @@ function formatValidTime(iso) {
 //
 //     What "stale" means instead: the loaded cycle is older than the
 //     newest one that should have PUBLISHED by now. A cycle should have
-//     published once every scheduled attempt at it has been and gone --
-//     the publish window runs +1:15 to +3:00 after its NBM synoptic hour
-//     (pipeline/publish_schedule.py; four retries, IFR then MTN OBSC).
+//     published once the window for publishing it has been and gone --
+//     one polling job per hazard, starting +0:43 (IFR) and +0:58
+//     (MTN OBSC) after its NBM synoptic hour and waiting for that cycle
+//     to post until a shared +3:30 deadline
+//     (pipeline/publish_schedule.py). Past that deadline nothing else is
+//     coming for that cycle, which is exactly what makes it the right
+//     anchor: it was +3:00 when four retry crons closed the window, and
+//     it moves with POLL_DEADLINE_OFFSET_MINUTES now.
 //
 //     Two ways to end up stale, and the indicator does not care which:
 //       - a browser serving the manifest from cache (what prompted this:
@@ -207,13 +212,20 @@ function formatValidTime(iso) {
 // pipeline/gairmet_cycle.py; tests/test_publish_schedule.py fails if they
 // drift.
 const CYCLE_HOURS = [3, 9, 15, 21];
-const PUBLISH_WINDOW_CLOSE_MINUTES = 180;
+const PUBLISH_WINDOW_CLOSE_MINUTES = 210;
 const NBM_LEAD_OFFSET_HOURS = 6;
 const STALENESS_RECHECK_MS = 5 * 60 * 1000;
 
 // The newest G-AIRMET cycle that should be published by `now`: the last
 // NBM synoptic hour whose publish window has fully closed, shifted by the
 // lead offset to the package built from it.
+//
+// Mirrored in Python as pipeline.publish_schedule.expected_gairmet_cycle(),
+// which tests/test_publish_schedule.py exercises against frozen clocks --
+// including the boundary either side of the deadline and the midnight
+// rollover. This copy exists because the check runs in the browser, with
+// nothing to call; the constants above are pinned against the Python ones
+// by the same test file.
 function expectedGairmetCycle(now) {
   const cutoff = new Date(now.getTime() - PUBLISH_WINDOW_CLOSE_MINUTES * 60 * 1000);
   const midnight = new Date(Date.UTC(
