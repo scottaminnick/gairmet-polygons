@@ -20,18 +20,17 @@ from pathlib import Path
 
 import requests
 
-NOMADS_URL_TMPL = (
-    "https://nomads.ncep.noaa.gov/pub/data/nccf/com/blend/prod/"
-    "blend.{date:%Y%m%d}/{date:%H}/core/blend.t{date:%H}z.core.f{fxx:03d}.co.grib2"
+# The URL templates live in pipeline/nbm_urls.py, which is stdlib-only so
+# the pre-install poller (.github/scripts/await_nbm_cycle.py) can reach
+# them without dragging `requests` into a step that runs before
+# dependencies are installed. Re-exported here under their original names
+# because every existing caller imports them from this module.
+from pipeline.nbm_urls import (  # noqa: F401  (re-exported for callers)
+    AWS_URL_TMPL,
+    NOMADS_URL_TMPL,
+    candidate_grib_urls,
+    candidate_idx_urls,
 )
-AWS_URL_TMPL = (
-    "https://noaa-nbm-grib2-pds.s3.amazonaws.com/"
-    "blend.{date:%Y%m%d}/{date:%H}/core/blend.t{date:%H}z.core.f{fxx:03d}.co.grib2"
-)
-
-
-def candidate_grib_urls(date: datetime, fxx: int) -> list[str]:
-    return [NOMADS_URL_TMPL.format(date=date, fxx=fxx), AWS_URL_TMPL.format(date=date, fxx=fxx)]
 
 
 def fetch_idx(date: datetime, fxx: int) -> tuple[str, str]:

@@ -643,93 +643,281 @@ cycle serving rather than blanking the site
 silent. So the panel now computes the cycle that *should* be published
 from the clock and warns when the loaded one is older.
 
-Cycles are 03/09/15/21Z, with `PUBLISH_GRACE_MINUTES = 90` covering the
-run and publish (the crons fire at :20 and :35). The warning triggers only
+Cycles are 03/09/15/21Z. The expectation is derived from the publish
+window rather than from a fixed grace period — see §8.8 for how that
+window is now defined. The warning triggers only
 at a **full cycle** behind: the comparison uses the browser's clock, and a
 modest clock error should not be able to raise a false alarm. It names the
 loaded cycle, the expected one, how far behind, and both remedies — a hard
 reload for a cache, `/api/data/status` for a failed publish. A timer
 re-checks, so a page left open across a boundary notices.
 
-## 8.8 Publish schedule, retries, and NBM arrival
+## 8.8 Publish schedule, polling, and NBM arrival
 
-The crons used to fire at **+0:20** past each synoptic hour. At that point
-the matching NBM run is not posted, so `find_latest_gairmet_cycle()` fell
-back to the previous NBM cycle and, with the +6h lead offset, rebuilt the
-G-AIRMET cycle that was **already current**. The 15Z first guess did not
-appear until 15:20Z — thirty-five minutes *after* the 1445Z issuance it
-exists to seed.
+The crons originally fired at **+0:20** past each synoptic hour. At that
+point the matching NBM run is not posted, so `find_latest_gairmet_cycle()`
+fell back to the previous NBM cycle and, with the +6h lead offset, rebuilt
+the G-AIRMET cycle that was **already current**. The 15Z first guess did
+not appear until 15:20Z — thirty-five minutes *after* the 1445Z issuance
+it exists to seed.
 
-Runs now start at **+1:15** and retry every 30 minutes to **+3:00**: four
-attempts per hazard per cycle, IFR first and MTN OBSC fifteen minutes
-behind throughout (it fetches ten NBM fields per hour to IFR's four, and
-the two force-push separate data branches).
+The fix for that was a ladder of four retry crons per hazard, +1:15 to
++3:00. That is gone too, for reasons §8.9 covers: the attempts were not
+arriving when they were scheduled, and each one did a full fetch and
+generation before discovering it had nothing to publish.
 
-Retries are **separate cron entries, not a sleep/poll loop**. A job that
-sleeps burns billable minutes holding a runner and turns a late NBM into a
-timeout rather than a clean no-op. An attempt that runs before its NBM has
-landed falls back, rebuilds the already-published cycle, and
-`should_publish_cycle.py` skips it. The cost is a wasted fetch-and-process,
-which is why attempts stop at +3:00 rather than running to the next cycle.
+### Check before doing the work
+
+The single highest-value change, and what makes everything else
+affordable. Each generate workflow now, **before `pip install`, before
+waiting for NBM, and before fetching any data**:
+
+1. resolves which NBM cycle it is for and which package that would
+   produce — pure arithmetic, no network
+   (`.github/scripts/resolve_target_cycle.py`);
+2. reads the cycle currently on its data branch;
+3. asks `should_publish_cycle.py` whether that package is newer.
+
+If it would not publish, the job exits successfully in seconds. That
+ordering — publish check *before* the poll — is deliberate: the +3:37
+backstop's normal outcome is "already published", and it must not spend
+an hour waiting for a cycle nobody is going to use.
+
+Everything those steps import is **stdlib-only**, which is what lets them
+run above the install, and `tests/test_workflow_dependencies.py` fails if
+a third-party import ever creeps into their reach or the steps get
+reordered.
+
+### Polling for the target cycle
+
+Once the run knows it *would* publish, it waits for its NBM cycle:
+
+- probe whether the cycle is posted — an HTTP `HEAD` on the `.idx`, so
+  nothing is downloaded, not even the index;
+- if not, sleep `POLL_INTERVAL_MINUTES` (5) and re-check;
+- continue until found, or until `POLL_WINDOW_MINUTES` (60) from **job
+  start**;
+- on finding it, run the pipeline once and publish;
+- on running out of window, log the `nbm-not-yet` WARNING and exit
+  successfully, having built nothing.
+
+The window is measured from job start rather than from the synoptic hour
+because job start *is* dispatch time now (§8.9) — it is a statement about
+how long we are willing to wait after asking, and the backstop gets the
+same 60 minutes from its own later start.
+
+**It does not fall back to an older cycle.** The old behaviour, when the
+target had not posted, was to rebuild the package from the previous NBM
+run — which is the package already live, so the publish guard skipped it
+after a full fetch and generation had been paid for. A run now builds the
+cycle it came for or builds nothing.
+
+`timeout-minutes` is derived from the schedule
+(`job_timeout_minutes(hazard)` = poll window + work allowance = 90 for
+IFR, 105 for MTN OBSC), so a wedged poll cannot sit on GitHub's
+360-minute default and retuning the window moves the timeout with it.
+
+**The two hazards are no longer staggered**, and that is a finding rather
+than a simplification. The 15-minute gap existed to keep their pushes and
+NBM fetches from overlapping. Checked directly: they force-push separate
+orphan branches with disjoint file globs, their `concurrency:` groups are
+separate, each job runs on its own runner with its own IP (so there is no
+shared rate-limit bucket at NOAA), and only MTN OBSC reads the terrain
+grid. The decisive point is that the stagger never prevented overlap
+anyway — MTN OBSC runs 30+ minutes against IFR's 15–20, so under the old
++1:15/+1:30 crons the two were fetching from NOAA simultaneously on most
+cycles. `scripts/dispatch_workflows.py` keeps a `--stagger-seconds` knob
+at 0 in case that stops being true.
 
 `NBM_LEAD_TIME_OFFSET_HOURS` stays at **6** — the forecaster has accepted
 ~4.5 hours of lead for fresher guidance.
 
 The schedule lives in `pipeline/publish_schedule.py` (stdlib-only, so the
-publish guard can share it without the fetch stack) and the crons are
-*generated* from it; `tests/test_publish_schedule.py` fails if the YAML
-drifts. The offsets past +2:00 roll into later hours, and MTN OBSC's +3:00
-attempt after 21Z rolls into hour 0 of the next day — the part that gets
-silently wrong when eight cron lines are hand-edited.
+poller, the publish guard and the Railway dispatcher can all share it
+without the fetch stack). The backstop cron, the Railway cron in
+`railway.dispatch.json`, the job timeouts and the browser's staleness
+constants are all generated or derived from it;
+`tests/test_publish_schedule.py` fails if any of them drift.
+
+The generate step is told which cycle to build via `NBM_SOURCE_CYCLE`
+rather than re-deriving one: up to an hour passes between the pre-flight
+and the fetch, and a newer cycle posting in between would produce a
+package no guard had approved.
 
 ### Two skips that used to look the same
 
-"Branch holds X; not publishing" now distinguishes:
+"Branch holds X; not publishing" distinguishes:
 
-- **`already-published`** — the target NBM arrived, this run built the
-  right cycle, an earlier attempt got there first. Routine.
-- **`nbm-not-yet`** — the target NBM had not arrived, so the run fell back
-  and rebuilt the already-live cycle. Expected on attempt one. On the
-  **final** attempt it means no further attempt is scheduled and that cycle
-  is *missed*, not delayed — so it logs `WARNING` to stderr. A
-  systematically missed cycle previously read as a routine no-op.
+- **`already-published`** — the run's target cycle is one whose package is
+  already on the branch. This is now the *routine* outcome for the
+  backstop, and the message says so, because a log where the common case
+  looks alarming is a log where the alarming case gets missed.
+- **`nbm-not-yet`** — the run would build from an **older** NBM cycle than
+  the one it is chasing. The workflows cannot produce this any more, so it
+  means a hand-run pipeline fell back through
+  `find_latest_gairmet_cycle()`. Warned about: nothing publishes either
+  way, but a rebuild of the live package is never what anyone wanted.
 
-Classified from `nbm_source_cycle` in the manifest the run just built
-against the synoptic hour it should have been chasing — the G-AIRMET cycle
-is identical in both cases and cannot tell them apart. A manual
-`workflow_dispatch` is reported as `unknown` rather than guessed at, and is
-never treated as a final attempt.
+The separate case of "the cycle never posted" is now the poller's, not the
+guard's — it is the `nbm-not-yet` WARNING on stderr from
+`await_nbm_cycle.py`, and it names the backstop that will try again.
 
 ### NBM arrival instrumentation
 
-+1:15 is an **estimate**. NBM 03Z's arrival could only be bracketed between
-+20 minutes and +3h30m from existing logs, which is far too wide to
-schedule against. Every run now emits one greppable line:
+Every run emits one greppable line. The old `attempt=N/4` label described
+a retry ladder that no longer exists; what replaced it answers the two
+questions that actually matter, separately:
 
 ```
-NBM-ARRIVAL hazard=ifr attempt=1/4 target=...09:00:00Z found=...09:00:00Z \
-            on_target=yes delta_min=75 behind_min=0 run=...10:15:00Z
+NBM-ARRIVAL hazard=ifr trigger=railway-cron target=...03:00:00Z \
+            package=...09:00:00Z posted=yes job_start=...03:46:00Z \
+            start_delay_min=1 detected=...04:18:00Z poll_wait_min=32 \
+            arrival_min=78 arrival_measured=yes
 ```
 
-`delta_min` is from the target cycle's nominal time to the run; on an
-`on_target=yes` line that is an upper bound on arrival latency, and across
-attempts the yes/no boundary brackets it. After a week, `grep NBM-ARRIVAL`
-over the job logs gives a real distribution to set the crons from.
-`on_target=no` is not a failure — only its persistence to attempt four is.
+- `trigger` — `railway-cron`, `schedule-backstop` or `manual`. If
+  `schedule-backstop` lines start appearing regularly, the Railway service
+  is broken and the pipeline is running on its safety net.
+- `start_delay_min` — job start minus that trigger's nominal time. **The
+  number that says whether §8.9 worked.** It was ~95 minutes on
+  2026-09-07 and up to 4.5 hours by 2026-09-10; on a `workflow_dispatch`
+  it should be ~0. `-` for a manual run, which has no schedule to be late
+  against — a zero there would read as "started on time".
+- `poll_wait_min` — how long we then waited for NBM.
+- `arrival_min` — when the cycle appeared, measured from its own synoptic
+  hour. NBM's latency and nothing else.
+- `arrival_measured` — whether `arrival_min` is a real measurement or only
+  an upper bound. It is a measurement when the poll actually *watched* the
+  cycle appear. Found on the first probe, all we know is "at or before
+  then" — and conflating those two is exactly how a platform delay came to
+  look like an NBM delay.
 
 ### What this does to the staleness indicator
 
-The app now **normally holds a cycle ahead of the wall clock**: at 10:15Z
-it serves the 15Z package, 4h45m before 15Z. Comparing the loaded cycle to
+The app **normally holds a cycle ahead of the wall clock**: at 10:15Z it
+serves the 15Z package, 4h45m before 15Z. Comparing the loaded cycle to
 "now" would call every healthy state stale.
 
-Stale now means: the loaded cycle is older than the newest one that should
-have *published* — the G-AIRMET package (synoptic hour + 6h) of the newest
-synoptic hour whose publish window (+1:15 to +3:00) has closed. So at
-11:59Z holding the 09Z package is fine; at 12:00Z, when NBM 09Z's window
-shuts, the 15Z package is due and 09Z becomes stale. The threshold is still
-a full cycle, so browser clock skew cannot raise a false alarm, and the
-frozen-clock browser cases were rechosen for this schedule.
+Stale means: the loaded cycle is older than the newest one that should
+have *published*, following the normal path end to end —
+
+| | |
+|---|---|
+| +0:45 | Railway POSTs `workflow_dispatch` to both hazards |
+| +1:45 | the 60-minute poll for the NBM cycle closes |
+| +2:30 | 45 more minutes to install, generate and push |
+
+so `PUBLISH_WINDOW_CLOSE_MINUTES` is 45 + 60 + 45 = 150.
+
+**Deliberately not the +3:37 backstop.** That backstop could still publish
+the cycle at ~+4:22, and waiting for it before saying anything would mean
+hiding a real failure for nearly two hours to avoid one honest warning.
+Past +2:30 the package genuinely *is* late; the backstop is a recovery,
+not extra runway.
+
+`expected_gairmet_cycle()` is the Python mirror of the browser's
+`expectedGairmetCycle()`, exercised against frozen clocks either side of
+the boundary and across midnight. The threshold is still a full cycle
+behind, so browser clock skew cannot raise a false alarm.
+
+## 8.9 Why the trigger lives on Railway
+
+### What was measured
+
+GitHub delays `schedule:` runs, and on this repository the delay is
+**growing**:
+
+| Date | Observed |
+|---|---|
+| 2026-09-07 | the 03Z package's four IFR attempts were scheduled at 22:15 / 22:45 / 23:15 / 23:45Z and **started** at 23:54 / 00:22 / 01:01 / 01:18Z — ~95 minutes late, every one |
+| 2026-09-10 | up to **4.5 hours** late |
+
+The consistency is the tell. All four attempts were delayed by nearly the
+same amount, which is not what a busy runner pool looks like — it is what
+a queue with a fixed backlog looks like.
+
+### Why scheduled events cannot be relied on at this granularity
+
+GitHub documents `schedule:` as best-effort and says runs may be delayed
+during periods of high load, with scheduled events queued at the lowest
+priority. That is fine for a nightly cleanup and useless for a product
+with a deadline: the 03Z package exists to seed the **0245Z** issuance,
+and a package that was designed to land ~4 hours ahead of it instead
+arrived 2h45m ahead (Sep 7) and, at 4.5 hours of delay, would arrive
+*after* the issuance it exists to seed.
+
+No cron expression fixes this, because the expression is not what is
+late. Moving the time earlier just moves the queue entry earlier; the
+backlog is still in front of it.
+
+Worse, we were contributing to it. The four-attempt retry ladder
+quadrupled the number of scheduled runs this repository was putting into
+that queue — eight per cycle across both hazards, thirty-two a day —
+which very plausibly made our own delays worse. The instinct to add
+scheduled attempts when scheduled runs are late is exactly backwards.
+
+`workflow_dispatch` is not queued that way and starts promptly. So the
+trigger moved off the platform's scheduler entirely.
+
+### What runs instead
+
+A **Railway cron service** in the same project as the web app runs
+`scripts/dispatch_workflows.py` at `45 3,9,15,21 * * *`. It POSTs to
+`/repos/{owner}/{repo}/actions/workflows/{file}/dispatches` for both
+hazards with `ref: main` and an input `trigger: railway-cron`, so the run
+can identify itself in the logs. It exits non-zero on any non-204 so
+Railway marks the job failed rather than the pipeline silently going
+quiet.
+
+Deliberately stdlib-only (`urllib`, not `requests`): it runs in a minimal
+container whose whole job is two HTTP POSTs, and making the one thing
+that must not fail install the web app's dependency stack would give it a
+large surface to fail on.
+
+Setup is four fields in the Railway UI — config file, `GITHUB_TOKEN`,
+cron schedule, start command — documented in
+[`RAILWAY_DISPATCH.md`](../RAILWAY_DISPATCH.md) and in the script's own
+header, which is where somebody debugging it at 3am will actually look.
+The token is a fine-grained PAT scoped to this repository with a single
+permission, `Actions: Read and write`; nothing here needs contents write.
+
+### What the backstop is for
+
+Moving the trigger off GitHub means a new single point of failure: if
+Railway is down, the token expires, or the dispatch is simply never sent,
+nothing happens at all. So each workflow keeps **one** `schedule:` entry,
+at +3:37, and that is its entire purpose.
+
+It is cheap precisely because of check-before-work. On a normal day the
+Railway dispatch published the package around +1:30, so the backstop
+resolves its cycle, reads the branch, sees `[already-published]` and exits
+in seconds having installed nothing. On a bad day it publishes the package
+late, which beats not publishing it.
+
+Three details matter:
+
+- **One entry, not a ladder.** Adding scheduled runs to work around
+  scheduled-run delay is what got us here.
+- **:37, not :30.** `:00`, `:15`, `:30` and `:45` are the platform's most
+  oversubscribed scheduled slots. This is the one trigger still exposed to
+  that queue, so it is the one that can least afford to sit behind
+  everybody else's cron. It does not fix the delay; it is free.
+- **+3:37 after 21Z is 00:37 the next day.** The cron is generated by
+  `cron_entries()` rather than hand-written, and the round-trip test fires
+  each generated line at its own minute and asserts it reads back as the
+  cycle it encodes — which is what catches that rollover.
+
+### How we will know whether it worked
+
+`start_delay_min` on the `NBM-ARRIVAL` lines (§8.8). A week of
+`grep NBM-ARRIVAL` over the job logs should show it near zero for
+`trigger=railway-cron`. If it does not, `workflow_dispatch` is being
+queued too and this design needs revisiting rather than tuning.
+
+The second thing to watch is how often `trigger=schedule-backstop`
+appears at all. It should be rare; a run of them means the Railway
+service needs attention, and the non-zero exit on a failed dispatch is
+what should have said so first.
 
 ## 9. Known limits
 

@@ -73,7 +73,18 @@ Currently working:
       float32 storage) so parameters can be re-applied later without
       re-fetching from NBM.
 - [x] **Scheduled generation** (`.github/workflows/generate_ifr.yml`) —
-      runs every 6 hours and force-pushes `ifr_f00.geojson` through
+      runs every 6 hours, triggered by a Railway cron service that POSTs
+      a `workflow_dispatch` at +0:45 after each synoptic hour
+      (`scripts/dispatch_workflows.py`, [setup](RAILWAY_DISPATCH.md)).
+      GitHub delays `schedule:` runs by 2–4.5 hours and the delay is
+      growing, so the trigger lives off-platform and one `schedule:`
+      backstop per hazard remains for the case where the dispatch fails
+      ([METHODS §8.9](docs/METHODS.md)). Each run checks whether the
+      package it would build is newer than what is already published
+      *before* installing anything, waiting for anything, or fetching any
+      data — so a run with nothing to do ends in seconds — then polls the
+      NBM `.idx` every 5 minutes for up to an hour until its cycle
+      appears. Then it force-pushes `ifr_f00.geojson` through
       `ifr_f12.geojson`, their cached `*_grid.npz` grids, and
       `ifr_manifest.json` to the **`data-ifr`** branch (Mountain
       Obscuration publishes the same way to **`data-mtnobsc`**). Nothing

@@ -22,23 +22,41 @@ Exit codes:
         this one. A correct outcome, not a failure; the caller turns
         this into a clean exit.
 
-        Since the move to retry crons there are TWO ways to reach it, and
-        the log has to say which:
+        There are TWO ways to reach it, and the log has to say which:
 
-          already-published  the target NBM had arrived, this run built
-                             the right cycle, and an earlier attempt (or
-                             the other hazard's run) got there first.
-                             Routine.
+          already-published  this run's target NBM cycle is one whose
+                             package is already on the branch. Under the
+                             dispatch design this is the ROUTINE outcome
+                             for the +3:37 backstop: the Railway-
+                             dispatched run did its job an hour earlier,
+                             and the backstop correctly does nothing.
 
-          nbm-not-yet        the target NBM had NOT arrived, so the run
-                             fell back to an older one and rebuilt the
-                             cycle that is already live. Expected on
-                             attempt one; on the FINAL attempt it means
-                             that cycle is being missed outright, and it
-                             logs at warning level so it does not read
-                             like the routine case.
+          nbm-not-yet        the run would build from an OLDER NBM cycle
+                             than the one it should be chasing. The
+                             workflows cannot produce this any more --
+                             they poll for their target and build nothing
+                             if it does not post (await_nbm_cycle.py) --
+                             so it means a hand-run pipeline that fell
+                             back through find_latest_gairmet_cycle().
+                             Warned about, because publishing a rebuild
+                             of the already-live package is never what
+                             anyone wanted.
     1   error -- the manifest being published is missing or unparseable,
         which means the generate step produced something broken
+
+WHERE THIS RUNS, AND WHY TWICE. It is called at TWO points in each
+generate workflow:
+
+  - as the PRE-FLIGHT, against what resolve_target_cycle.py worked out,
+    before `pip install`, before the NBM poll, and before any data is
+    fetched. A skip there ends the run in seconds. This is the single
+    highest-value step in the workflow -- it is what makes both the
+    +3:37 backstop and waiting for NBM affordable -- and it is why this
+    script and everything it imports must stay stdlib-only.
+  - again at publish time, against the manifest actually produced,
+    because the pre-flight answer is up to an hour old by then and the
+    force-push has to be guarded on what is true at the moment it
+    happens.
 
 Deliberately a repo script rather than inline YAML in both workflows:
 one copy of the comparison, and it can be unit-tested (see
@@ -55,9 +73,8 @@ from pathlib import Path
 # schedule numbers without dragging requests/numpy into the publish step.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from pipeline.publish_schedule import (  # noqa: E402
-    ATTEMPTS_PER_CYCLE,
-    attempt_number,
-    is_final_attempt,
+    BACKSTOP_OFFSET_MINUTES,
+    TRIGGERS,
     target_nbm_cycle,
 )
 
@@ -110,14 +127,21 @@ def _read_field(path, field):
         return None
 
 
-def describe_skip(new_manifest_path, hazard, now):
+def describe_skip(new_manifest_path, hazard, now, trigger=None):
     """
     Which of the two skips this is, as (label, message, is_warning).
 
-    Decided from the NBM cycle the run actually used (nbm_source_cycle in
-    the manifest it just built) against the one it should have been
-    looking for at this time -- not from the G-AIRMET cycle, which is the
+    Decided from the NBM cycle the run would build from (nbm_source_cycle
+    in the pre-flight file or the manifest) against the one it should be
+    chasing at this time -- not from the G-AIRMET cycle, which is the
     same in both cases and so cannot tell them apart.
+
+    The weighting flipped with the move to a dispatched trigger. The
+    routine case is now the +3:37 backstop finding that the Railway
+    dispatch already published this cycle an hour ago -- that is the
+    backstop working, not a problem. What is NOT routine is a run
+    building from an older cycle than its target, which the workflows can
+    no longer do.
     """
     found = parse_cycle(_read_field(new_manifest_path, "nbm_source_cycle"))
     if found is None or hazard is None:
@@ -127,34 +151,33 @@ def describe_skip(new_manifest_path, hazard, now):
     if found.tzinfo is not None:
         found = found.replace(tzinfo=None)
 
+    trigger_note = f" (trigger={trigger})" if trigger else ""
     if found >= target:
+        backstop = f"+{BACKSTOP_OFFSET_MINUTES // 60}:{BACKSTOP_OFFSET_MINUTES % 60:02d}"
+        routine = (
+            f"That is exactly what the {backstop} backstop is for: it checks, finds the "
+            f"Railway-dispatched run already did the work, and stops here having cost "
+            f"seconds."
+            if trigger == "schedule-backstop"
+            else "Routine."
+        )
         return (
             "already-published",
-            f"The target NBM cycle ({target:%Y-%m-%d %H}Z) had arrived and this run built from "
-            f"it; an earlier attempt already published the result. Routine.",
+            f"The target NBM cycle ({target:%Y-%m-%d %H}Z) is the one this run is chasing "
+            f"and its package is already on the branch{trigger_note}. {routine}",
             False,
         )
 
-    attempt = attempt_number(now, hazard)
-    final = is_final_attempt(now, hazard)
-    attempt_str = f"attempt {attempt}/{ATTEMPTS_PER_CYCLE}" if attempt else "a manual run"
-    if final:
-        return (
-            "nbm-not-yet",
-            f"NBM {target:%Y-%m-%d %H}Z was STILL not posted on the final attempt "
-            f"({attempt_str}); this run fell back to {found:%Y-%m-%d %H}Z and rebuilt the "
-            f"cycle that is already live. No further attempt is scheduled, so the G-AIRMET "
-            f"cycle seeded by NBM {target:%H}Z is being MISSED, not delayed. If this repeats, "
-            f"the publish window (+1:15 to +3:00) is too early for NBM's real arrival -- see "
-            f"the NBM-ARRIVAL lines in this run's log.",
-            True,
-        )
     return (
         "nbm-not-yet",
-        f"NBM {target:%Y-%m-%d %H}Z is not posted yet ({attempt_str}), so this run fell back "
-        f"to {found:%Y-%m-%d %H}Z and rebuilt the already-live cycle. Expected; a later "
-        f"attempt will pick up the target.",
-        False,
+        f"This run would build from NBM {found:%Y-%m-%d %H}Z, which is OLDER than the "
+        f"{target:%Y-%m-%d %H}Z cycle it should be chasing{trigger_note}, so it would "
+        f"rebuild the package that is already live. The scheduled workflows cannot do this "
+        f"-- they poll for their target and build nothing if it does not post -- so this is "
+        f"a hand-run pipeline that fell back through find_latest_gairmet_cycle(). Nothing "
+        f"is published either way; the warning is here because a rebuild of the live "
+        f"package is never what anyone wanted.",
+        True,
     )
 
 
@@ -170,6 +193,14 @@ def main(argv=None):
         choices=["ifr", "mtn_obsc"],
         help="which hazard's schedule this run belongs to; without it a skip cannot be "
              "classified and is reported as unknown rather than guessed at",
+    )
+    parser.add_argument(
+        "--trigger",
+        choices=list(TRIGGERS),
+        help="which trigger started this run, as classified by "
+             "pipeline.publish_schedule.classify_trigger(). Used only to phrase the skip "
+             "message -- a backstop finding the cycle already published is the backstop "
+             "working, and should not read like the same event on a dispatched run",
     )
     parser.add_argument("--now", help="ISO timestamp to evaluate against (testing)")
     args = parser.parse_args(argv)
@@ -191,7 +222,7 @@ def main(argv=None):
         return 0
 
     if existing_cycle >= new_cycle:
-        label, explanation, is_warning = describe_skip(args.new, args.hazard, now)
+        label, explanation, is_warning = describe_skip(args.new, args.hazard, now, args.trigger)
         header = "WARNING -- SKIPPING PUBLISH" if is_warning else "SKIPPING PUBLISH"
         message = (
             f"{header} [{label}]: the branch already holds {existing_cycle.isoformat()}, which is "

@@ -54,7 +54,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pipeline.gairmet_cycle import FORECAST_HOURS, NBM_LEAD_TIME_OFFSET_HOURS, find_latest_gairmet_cycle
+from pipeline.gairmet_cycle import FORECAST_HOURS, NBM_LEAD_TIME_OFFSET_HOURS, resolve_nbm_cycle
 from pipeline.hazards.mtn_obsc import (
     CEILING_PROB_THRESHOLDS_FT,
     DEFAULT_CLEARANCE_MARGIN_FT,
@@ -118,7 +118,7 @@ def main():
     )
 
     try:
-        nbm_cycle_date = find_latest_gairmet_cycle(hazard="mtn_obsc")
+        nbm_cycle_date = resolve_nbm_cycle(hazard="mtn_obsc")
     except Exception:
         print("FAILED to find any available cycle. Full traceback:\n")
         traceback.print_exc()
