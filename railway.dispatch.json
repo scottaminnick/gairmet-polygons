@@ -1,0 +1,11 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS"
+  },
+  "deploy": {
+    "startCommand": "python3 scripts/dispatch_workflows.py",
+    "cronSchedule": "45 3,9,15,21 * * *",
+    "restartPolicyType": "NEVER"
+  }
+}

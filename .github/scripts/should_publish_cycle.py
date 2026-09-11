@@ -24,38 +24,37 @@ Exit codes:
 
         There are TWO ways to reach it, and the log has to say which:
 
-          already-published  the target NBM had arrived, this run built
-                             the right cycle, and something got there
-                             first -- a manual run, a re-run, or the
-                             cycle simply having been published already.
-                             Routine.
+          already-published  this run's target NBM cycle is one whose
+                             package is already on the branch. Under the
+                             dispatch design this is the ROUTINE outcome
+                             for the +3:37 backstop: the Railway-
+                             dispatched run did its job an hour earlier,
+                             and the backstop correctly does nothing.
 
-          nbm-not-yet        the target NBM had NOT arrived, so the run
-                             fell back to an older one and would rebuild
-                             the cycle that is already live. Under the
-                             polling schedule this can only happen after
-                             the poll ran all the way to its +3:30
-                             deadline (see pipeline/publish_schedule.py),
-                             so there is no later attempt behind it: the
-                             cycle is being MISSED, not delayed, and it
-                             logs at warning level. A manual run, which
-                             does not poll, is the one exception and is
-                             reported as such rather than alarmed about.
+          nbm-not-yet        the run would build from an OLDER NBM cycle
+                             than the one it should be chasing. The
+                             workflows cannot produce this any more --
+                             they poll for their target and build nothing
+                             if it does not post (await_nbm_cycle.py) --
+                             so it means a hand-run pipeline that fell
+                             back through find_latest_gairmet_cycle().
+                             Warned about, because publishing a rebuild
+                             of the already-live package is never what
+                             anyone wanted.
     1   error -- the manifest being published is missing or unparseable,
         which means the generate step produced something broken
 
 WHERE THIS RUNS, AND WHY TWICE. It is called at TWO points in each
 generate workflow:
 
-  - as a PRE-FLIGHT, against the poller's result file
-    (.github/scripts/await_nbm_cycle.py writes a model_cycle /
-    nbm_source_cycle pair shaped exactly like the front of a manifest),
-    before `pip install` and before any NBM data is fetched. A skip
-    there ends the run in seconds. This is what makes polling
-    affordable, and it is why this script and everything it imports must
-    stay stdlib-only.
+  - as the PRE-FLIGHT, against what resolve_target_cycle.py worked out,
+    before `pip install`, before the NBM poll, and before any data is
+    fetched. A skip there ends the run in seconds. This is the single
+    highest-value step in the workflow -- it is what makes both the
+    +3:37 backstop and waiting for NBM affordable -- and it is why this
+    script and everything it imports must stay stdlib-only.
   - again at publish time, against the manifest actually produced,
-    because the pre-flight answer is minutes old by then and the
+    because the pre-flight answer is up to an hour old by then and the
     force-push has to be guarded on what is true at the moment it
     happens.
 
@@ -74,8 +73,8 @@ from pathlib import Path
 # schedule numbers without dragging requests/numpy into the publish step.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from pipeline.publish_schedule import (  # noqa: E402
-    POLL_DEADLINE_OFFSET_MINUTES,
-    poll_start_offset_minutes,
+    BACKSTOP_OFFSET_MINUTES,
+    TRIGGERS,
     target_nbm_cycle,
 )
 
@@ -128,41 +127,21 @@ def _read_field(path, field):
         return None
 
 
-def _did_poll(new_manifest_path, polled_flag):
-    """
-    Whether this run actually waited for its target cycle.
-
-    A scheduled run polls to the +3:30 deadline; workflow_dispatch probes
-    once and proceeds, because a person pressing the button wants output
-    now, not a runner held for three hours. The distinction decides
-    whether falling back to an older NBM is an alarm or a shrug, so it is
-    never guessed: the workflow passes --polled explicitly, and the
-    poller's own result file carries deadline_reached as a cross-check
-    for the pre-flight call. Absent both -- an older manifest, a hand
-    invocation -- the conservative answer is "yes", which alarms rather
-    than staying quiet about a possibly-missed cycle.
-    """
-    if polled_flag is not None:
-        return polled_flag == "yes"
-    reached = _read_field(new_manifest_path, "deadline_reached")
-    if reached is None:
-        return True
-    return bool(reached)
-
-
-def describe_skip(new_manifest_path, hazard, now, polled_flag=None):
+def describe_skip(new_manifest_path, hazard, now, trigger=None):
     """
     Which of the two skips this is, as (label, message, is_warning).
 
-    Decided from the NBM cycle the run actually used (nbm_source_cycle in
-    the manifest or pre-flight file it just built) against the one it
-    should have been looking for at this time -- not from the G-AIRMET
-    cycle, which is the same in both cases and so cannot tell them apart.
+    Decided from the NBM cycle the run would build from (nbm_source_cycle
+    in the pre-flight file or the manifest) against the one it should be
+    chasing at this time -- not from the G-AIRMET cycle, which is the
+    same in both cases and so cannot tell them apart.
 
-    Under the polling schedule the second case carries much more weight
-    than it used to. There is one job per hazard per cycle, so a run that
-    fell back to an older NBM has already polled to its deadline and
-    given up; nothing else is coming.
+    The weighting flipped with the move to a dispatched trigger. The
+    routine case is now the +3:37 backstop finding that the Railway
+    dispatch already published this cycle an hour ago -- that is the
+    backstop working, not a problem. What is NOT routine is a run
+    building from an older cycle than its target, which the workflows can
+    no longer do.
     """
     found = parse_cycle(_read_field(new_manifest_path, "nbm_source_cycle"))
     if found is None or hazard is None:
@@ -172,39 +151,32 @@ def describe_skip(new_manifest_path, hazard, now, polled_flag=None):
     if found.tzinfo is not None:
         found = found.replace(tzinfo=None)
 
+    trigger_note = f" (trigger={trigger})" if trigger else ""
     if found >= target:
+        backstop = f"+{BACKSTOP_OFFSET_MINUTES // 60}:{BACKSTOP_OFFSET_MINUTES % 60:02d}"
+        routine = (
+            f"That is exactly what the {backstop} backstop is for: it checks, finds the "
+            f"Railway-dispatched run already did the work, and stops here having cost "
+            f"seconds."
+            if trigger == "schedule-backstop"
+            else "Routine."
+        )
         return (
             "already-published",
-            f"The target NBM cycle ({target:%Y-%m-%d %H}Z) had arrived and this run built from "
-            f"it; that package is already on the branch. Routine.",
+            f"The target NBM cycle ({target:%Y-%m-%d %H}Z) is the one this run is chasing "
+            f"and its package is already on the branch{trigger_note}. {routine}",
             False,
         )
 
-    # A run that never polled -- workflow_dispatch, which probes once and
-    # proceeds rather than holding a runner for hours. Falling back is
-    # then just what the button does before NBM has posted, and no cycle
-    # is being missed: the scheduled job for it is still to come, or
-    # still waiting.
-    if not _did_poll(new_manifest_path, polled_flag):
-        return (
-            "nbm-not-yet",
-            f"NBM {target:%Y-%m-%d %H}Z is not posted yet and this run did not poll for it "
-            f"(a manual run); it fell back to {found:%Y-%m-%d %H}Z, which is already live. "
-            f"The scheduled polling job for this cycle is unaffected.",
-            False,
-        )
-
-    window = f"+{poll_start_offset_minutes(hazard) // 60}:{poll_start_offset_minutes(hazard) % 60:02d}"
-    deadline = f"+{POLL_DEADLINE_OFFSET_MINUTES // 60}:{POLL_DEADLINE_OFFSET_MINUTES % 60:02d}"
     return (
         "nbm-not-yet",
-        f"NBM {target:%Y-%m-%d %H}Z was STILL not posted when the poll hit its {deadline} "
-        f"deadline; this run fell back to {found:%Y-%m-%d %H}Z and would rebuild the cycle "
-        f"that is already live. There is no further run scheduled for this cycle, so the "
-        f"G-AIRMET package seeded by NBM {target:%H}Z is being MISSED, not delayed. If this "
-        f"repeats, the poll window ({window} to {deadline}) closes too early for NBM's real "
-        f"arrival -- see the NBM-ARRIVAL lines in this run's log, whose arrival_min field is "
-        f"exactly the number to set it from.",
+        f"This run would build from NBM {found:%Y-%m-%d %H}Z, which is OLDER than the "
+        f"{target:%Y-%m-%d %H}Z cycle it should be chasing{trigger_note}, so it would "
+        f"rebuild the package that is already live. The scheduled workflows cannot do this "
+        f"-- they poll for their target and build nothing if it does not post -- so this is "
+        f"a hand-run pipeline that fell back through find_latest_gairmet_cycle(). Nothing "
+        f"is published either way; the warning is here because a rebuild of the live "
+        f"package is never what anyone wanted.",
         True,
     )
 
@@ -223,11 +195,12 @@ def main(argv=None):
              "classified and is reported as unknown rather than guessed at",
     )
     parser.add_argument(
-        "--polled",
-        choices=["yes", "no"],
-        help="whether this run waited for its target NBM cycle. The workflows pass 'yes' for "
-             "scheduled runs and 'no' for workflow_dispatch; omitted, it is read from the "
-             "poller's result file, and failing that assumed 'yes'",
+        "--trigger",
+        choices=list(TRIGGERS),
+        help="which trigger started this run, as classified by "
+             "pipeline.publish_schedule.classify_trigger(). Used only to phrase the skip "
+             "message -- a backstop finding the cycle already published is the backstop "
+             "working, and should not read like the same event on a dispatched run",
     )
     parser.add_argument("--now", help="ISO timestamp to evaluate against (testing)")
     args = parser.parse_args(argv)
@@ -249,7 +222,7 @@ def main(argv=None):
         return 0
 
     if existing_cycle >= new_cycle:
-        label, explanation, is_warning = describe_skip(args.new, args.hazard, now, args.polled)
+        label, explanation, is_warning = describe_skip(args.new, args.hazard, now, args.trigger)
         header = "WARNING -- SKIPPING PUBLISH" if is_warning else "SKIPPING PUBLISH"
         message = (
             f"{header} [{label}]: the branch already holds {existing_cycle.isoformat()}, which is "

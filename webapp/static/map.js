@@ -189,15 +189,21 @@ function formatValidTime(iso) {
 //     would call every healthy state stale.
 //
 //     What "stale" means instead: the loaded cycle is older than the
-//     newest one that should have PUBLISHED by now. A cycle should have
-//     published once the window for publishing it has been and gone --
-//     one polling job per hazard, starting +0:43 (IFR) and +0:58
-//     (MTN OBSC) after its NBM synoptic hour and waiting for that cycle
-//     to post until a shared +3:30 deadline
-//     (pipeline/publish_schedule.py). Past that deadline nothing else is
-//     coming for that cycle, which is exactly what makes it the right
-//     anchor: it was +3:00 when four retry crons closed the window, and
-//     it moves with POLL_DEADLINE_OFFSET_MINUTES now.
+//     newest one that should have PUBLISHED by now, following the
+//     NORMAL publish path end to end (pipeline/publish_schedule.py):
+//
+//       +0:45  a Railway cron POSTs workflow_dispatch to both hazards
+//       +1:45  the job's 60-minute poll for its NBM cycle closes
+//       +2:30  45 more minutes to install, generate and push
+//
+//     so PUBLISH_WINDOW_CLOSE_MINUTES is 45 + 60 + 45.
+//
+//     DELIBERATELY NOT THE +3:37 BACKSTOP. Each workflow keeps one
+//     `schedule:` entry as a safety net for a failed dispatch, and it
+//     could still publish this cycle at ~+4:22. Waiting for that before
+//     saying anything would mean hiding a real failure for two hours to
+//     avoid one honest warning. Past +2:30 the package IS late; the
+//     backstop is a recovery, not extra runway.
 //
 //     Two ways to end up stale, and the indicator does not care which:
 //       - a browser serving the manifest from cache (what prompted this:
@@ -212,7 +218,7 @@ function formatValidTime(iso) {
 // pipeline/gairmet_cycle.py; tests/test_publish_schedule.py fails if they
 // drift.
 const CYCLE_HOURS = [3, 9, 15, 21];
-const PUBLISH_WINDOW_CLOSE_MINUTES = 210;
+const PUBLISH_WINDOW_CLOSE_MINUTES = 150;
 const NBM_LEAD_OFFSET_HOURS = 6;
 const STALENESS_RECHECK_MS = 5 * 60 * 1000;
 
