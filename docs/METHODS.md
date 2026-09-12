@@ -429,6 +429,64 @@ The check exists because three separate times a vector operation
 downstream of a sound polygonization has quietly undone it. An upstream
 invariant that is not re-checked at the boundary is folklore.
 
+### Tags
+
+The `tag` attribute is the thread linking F00/F03/F06/F09/F12 into one
+time-evolving hazard. NMAP2 draws polygons sharing a tag as one feature
+through time, and the BUFR smear — the swept area between consecutive
+snapshots — is built by walking a tag from hour to hour. A tag scheme
+that cannot say "this is the same area, three hours later" cannot produce
+a smear at all.
+
+`pipeline/tag_tracking.py` implements the five rules from the AWC
+G-AIRMET snapshot/tagging training document:
+
+1. **Continuation** — a polygon at hour N that intersects a polygon at
+   hour N−1 inherits that polygon's tag.
+2. **Ending** — a hazard ends by *absence*: no polygon carries its tag at
+   the next hour. There is nothing to write for this; it falls out of
+   rule 1.
+3. **Split** — one parent, several children: all children take the
+   parent's tag. Several polygons sharing a tag within one hour is legal.
+4. **Merge** — several parents, one child: the child takes the **lowest**
+   parent tag; the others end by absence.
+5. **New** — no intersection with any previous-hour polygon: the next
+   unused integer. Numbers belonging to ended tags are never reused.
+
+`min()` over the intersecting tags implements rules 3 and 4 at once,
+without either case being detected — a split is several children each
+finding one parent, a merge is one child finding several. That matters
+more than it sounds: the messy real cases are simultaneous splits and
+merges, and a classifier would have to pick one label for them.
+
+Settled decisions, deliberately not configurable:
+
+- **"Intersects" is any contact, boundary touching included** —
+  shapely's `.intersects`, not an area threshold. Two areas meeting along
+  a shared edge intersect in zero area but are plainly one hazard
+  continuing, and the label-grid polygonizer produces that contact
+  routinely.
+- **Each hazard layer is independent and starts at 1.** The IFR file and
+  the MT_OBSC file do not share a counter.
+- **Only the previous hour is consulted.** A feature absent for one
+  snapshot returns with a new tag — per the doc, a three-hour gap is a
+  new hazard, not a continuation.
+- **Standard hours only** (0/3/6/9/12). No specials.
+- **`tag` stays numeric.** The desk letter is already a separate `Gfa`
+  attribute.
+
+This replaced unique-sequential numbering, which gave every polygon its
+own tag and so asserted that nothing was ever the same hazard twice. That
+scheme was adopted after an August run produced heavy overlapping smears,
+on the reasoning that a shared tag makes NMAP2 draw the polygons as one
+evolving feature — **which is the intended behaviour, not the defect**.
+What actually broke was the assigner: centroid-proximity matching, which
+paired polygons nowhere near each other, on top of within-hour overlaps
+that were a polygonization bug. Both are fixed — overlaps are now
+rejected at the export boundary by `assert_rings_disjoint()` — so the
+reason for avoiding reuse is gone, and avoiding it costs the snapshot
+relationship the format exists to carry.
+
 ---
 
 ## 7. Legacy MTN OBSC overlay

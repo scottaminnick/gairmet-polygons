@@ -26,16 +26,12 @@ downloads next to the XML.
 """
 
 from pipeline.pgen_xml import assert_rings_disjoint, build_product_xml, gfa_element
+from pipeline.tag_tracking import assign_tracked_tags
 
-# The element mapping, reused rather than re-implemented. _centroid is
-# imported despite the underscore: it is part of that mapping (it defines
-# what "this polygon's position" means for tag assignment), and
-# duplicating it here is exactly the drift this module avoids.
+# The element mapping, reused rather than re-implemented.
 from scripts.make_pgen_test import (
     FORECAST_HOURS,
-    _centroid,
     apply_vertex_budget,
-    assign_unique_tags,
     iter_rings,
     rings_are_disjoint_by_construction,
     vertex_budget_for,
@@ -100,10 +96,13 @@ def build_pgen_document(hazard, hours, cycle_hour, desk="E",
 
         rings_by_hour.append(rings)
 
-    # Unique sequential tags across the WHOLE file -- numbering does not
-    # restart per hour, and no tag is reused between hours.
-    tags_by_hour = assign_unique_tags(
-        [[_centroid(points) for points, _ in hour] for hour in rings_by_hour]
+    # Feature-tracked tags: a polygon inherits the tag of a previous-hour
+    # polygon it intersects, so the five snapshots read as one evolving
+    # hazard rather than five unrelated sets. That relationship is what
+    # NMAP2 draws through time and what the BUFR smear is built from --
+    # see pipeline/tag_tracking.py for the five rules and their source.
+    tags_by_hour = assign_tracked_tags(
+        [[points for points, _ in hour] for hour in rings_by_hour]
     )
 
     blocks = []
@@ -123,7 +122,12 @@ def build_pgen_document(hazard, hours, cycle_hour, desk="E",
             "forecast_hour": entry["forecast_hour"],
             "settings": entry["settings"],
             "gfa_elements": len(rings),
-            "tags": [tags[0], tags[-1]] if tags else [],
+            # The distinct tags present this hour. Was [first, last] --
+            # which only ever meant anything while tags were unique and
+            # sequential. With tracking a tag can repeat within an hour
+            # (a split) and recur across hours (a continuation), so the
+            # endpoints of the list describe nothing.
+            "tags": sorted(set(tags)),
         })
 
     sidecar = {
@@ -133,7 +137,7 @@ def build_pgen_document(hazard, hours, cycle_hour, desk="E",
         "model_cycle": model_cycle,
         "max_points_per_ring": budget,
         "rings_verified_disjoint": verify_disjoint,
-        "tagging": "unique sequential across all forecast hours",
+        "tagging": "feature-tracked: intersection with previous hour, lowest tag wins",
         "total_gfa_elements": len(blocks),
         "forecast_hours": hour_summaries,
         "note": (
