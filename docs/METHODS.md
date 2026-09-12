@@ -339,9 +339,9 @@ that, because a later change moving the gate upstream would break the
 slider with no visible symptom — the control would still move and the map
 would simply stop responding.
 
-The viewer carries it as a RELIEF slider (500–5,000 ft, 250 ft steps)
+The viewer carries it as a RELIEF stepper (500–5,000 ft, 250 ft steps)
 directly above CLEARANCE, with the same per-hour state and reset
-semantics as every other slider. Beside it is the **mountainous area at
+semantics as every other parameter. Beside it is the **mountainous area at
 the current threshold**, in square miles, measured after all four gates
 and returned as a `mountainous_area_sq_mi` foreign member on the
 FeatureCollection. It is a collection member rather than a feature
@@ -360,10 +360,10 @@ deliberately left open.**
 
 One consequence worth knowing: no snapshot written before this change
 carries `mountainous_relief_ft`, and the viewer re-seeds an hour's
-sliders from its snapshot's properties. `makeHourStore.fromProps` now
-falls back to the slider's *default* rather than its current value for an
+controls from its snapshot's properties. `makeHourStore.fromProps` now
+falls back to the control's *default* rather than its current value for an
 absent property, so RESET restores 500 ft instead of silently leaving the
-slider where the forecaster put it.
+control where the forecaster put it.
 
 ---
 
@@ -487,7 +487,7 @@ shape matters more than it would for a two-panel rail.
 ```
 LAYERS
   [x] IFR CIG/VIS        ▸     hazard row: expandable
-        ADJUST (LIVE)          ← sliders + RESET THIS HOUR / RESET ALL HOURS
+        ADJUST                 ← steppers, APPLY / REVERT / APPLY ALL HOURS, resets
   [x] MTN OBSC           ▸
   [x] STATE BOUNDARIES         non-hazard row: no adjustors, no disclosure
   [ ] ARTCC BOUNDARIES
@@ -516,9 +516,44 @@ Four rules the structure depends on:
 - **Only hazard rows get a disclosure triangle**, so "this row has
   adjustors" is visible without clicking.
 - **Exports are panel scope, resets are adjustor scope.** RESET THIS HOUR
-  and RESET ALL HOURS undo what the sliders above them did, so they stay
+  and RESET ALL HOURS undo what the controls above them did, so they stay
   in the row; GENERATE and PGEN act on the cycle, so they live once in
   EXPORT rather than repeated per hazard.
+
+### Steppers and APPLY (replacing live sliders)
+
+Each parameter is a **stepper** — a bounded number field with a `−` and
+`+` button either side — rather than a slider. The parameters are
+discrete (5 % probability, 250 ft relief, 500 ft clearance, 5 nm radius,
+250 mi² area) and the rail is about 230 px wide, so a slider thumb moved
+several steps per pixel and could not be set reproducibly. The field can
+also be typed into; a typed value is snapped onto the field's
+min/max/step lattice when editing finishes, so "47" becomes 45 and the
+panel never shows a value the buttons could not have reached.
+
+**Nothing recomputes on input.** Each parameter has two values: the
+*applied* value, held in the per-hour store and matching the polygons on
+the map, and the *pending* value in the field. While they differ the row
+is marked (amber outline, `was N` under the label) and APPLY / REVERT
+light up. APPLY copies pending into the store for the hour on screen and
+fires **one** recompute for the whole parameter set; Enter in any field
+does the same; REVERT copies applied back into the fields with no network
+call. APPLY ALL HOURS writes the pending set against every hour in the
+cycle and recomputes the one on screen — the others pick it up when
+shown. The mountainous-area figure under RELIEF comes back with the
+recompute, so it too updates on APPLY.
+
+Two consequences worth knowing. GENERATE exports the **applied** set, not
+the fields — a pending edit is not on the map, so it is not in a file
+that claims to be the map. And each hazard's recompute carries a sequence
+number, so if an APPLY is still in flight when the forecaster switches
+hours, the slow response is discarded rather than painted over the new
+hour (`recomputeCurrentSnapshot` / `recomputeCurrentMtnSnapshot`).
+
+Wiring is one `ADJUSTORS` entry per hazard in `map.js` (store, buttons,
+recompute function); the `−`/`+` buttons, Enter, dirty marking and all
+three action buttons are driven off that list, so a new hazard's
+adjustor is its markup plus one entry.
 
 The hour checkboxes are present but **disabled**: per-hour file splitting
 isn't built, GENERATE exports the hour on screen and PGEN covers all five,

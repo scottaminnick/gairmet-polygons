@@ -294,23 +294,13 @@ function updateStalenessIndicator(now = new Date()) {
 setInterval(() => updateStalenessIndicator(), STALENESS_RECHECK_MS);
 
 // --- Tracks which forecast hour is currently displayed, so the
-//     live-adjustment sliders know what to recompute against. Also
-//     tracks whether live adjustment is even possible (it isn't in the
-//     demo-fallback case, where there's no cached grid to recompute
-//     from). ---
+//     adjustors know what to recompute against. Also tracks whether
+//     adjustment is even possible (it isn't in the demo-fallback case,
+//     where there's no cached grid to recompute from), and the list of
+//     forecast hours the cycle carries, which APPLY ALL HOURS needs. ---
 let currentFxx = null;
 let liveAdjustAvailable = false;
-
-// --- Simple debounce: waits `delay` ms after the LAST call before
-//     actually running `fn`, so dragging a slider doesn't fire a
-//     network request on every pixel of movement. ---
-function debounce(fn, delay) {
-  let timer = null;
-  return (...args) => {
-    clearTimeout(timer);
-    timer = setTimeout(() => fn(...args), delay);
-  };
-}
+let forecastHours = [];
 
 // --- RIGHT-RAIL ACCORDION ---
 //     Each hazard row in LAYERS owns its adjustors, expanded inline
@@ -393,6 +383,8 @@ function disableLiveAdjust(reason) {
     expander.disabled = true;
     expander.title = reason;
     expander.closest('.layer-row').classList.add('layer-row-disabled');
+    document.getElementById(panel.body).querySelectorAll('button, input')
+      .forEach((control) => { control.disabled = true; });
   });
 
   const exportPanel = document.getElementById('export-panel');
@@ -458,66 +450,93 @@ function checkLegacyFeatureNames(geojson) {
 }
 
 // --- PER-FORECAST-HOUR ADJUSTMENT STATE ---
-//     Each forecast hour keeps its OWN slider settings, per hazard, rather
-//     than one set shared across the whole cycle. Forecasters need this:
+//     Each forecast hour keeps its OWN settings, per hazard, rather than
+//     one set shared across the whole cycle. Forecasters need this:
 //     overnight hours want a lower threshold for radiation fog than the
 //     daytime hours do, and switching hours used to silently discard
 //     whatever had been dialled in.
 //
-//     One store per hazard, built from a field list so IFR's three sliders
-//     and MTN OBSC's four (it has clearance_margin_ft as well) get
-//     identical semantics without duplicating the logic. Each field maps a
-//     store key to its slider element, its live label, and the GeoJSON
-//     property the scheduled snapshot carries it in.
+//     One store per hazard, built from a field list so IFR's three
+//     parameters and MTN OBSC's five get identical semantics without
+//     duplicating the logic. Each field maps a store key to its number
+//     input, the hint element under its label, and the GeoJSON property
+//     the scheduled snapshot carries it in.
+//
+//     TWO VALUES PER PARAMETER. The store holds what is APPLIED -- the
+//     parameters the polygons on the map were actually cut with. The
+//     number inputs hold what is PENDING -- wherever the forecaster has
+//     stepped or typed them since. The two agree except between an edit
+//     and the APPLY that commits it; while they differ the row is marked
+//     dirty and the hint shows the applied value. Nothing recomputes on
+//     input: only APPLY (or Enter in a field) copies pending into the
+//     store and fires ONE recompute for the whole set.
 //
 //     An hour is seeded from its own scheduled snapshot the first time it
-//     is shown, and remembers wherever the sliders were left from then on.
+//     is shown, and remembers what was applied to it from then on.
 //     Keyed by zero-padded forecast hour ("00", "03").
 function hourKey(fxx) {
   return String(fxx).padStart(2, '0');
 }
 
 const IFR_FIELDS = [
-  { key: 'threshold', slider: 'adjust-threshold', label: 'adjust-threshold-val', prop: 'threshold_pct' },
-  { key: 'radius', slider: 'adjust-radius', label: 'adjust-radius-val', prop: 'neighborhood_radius_nm' },
-  { key: 'minArea', slider: 'adjust-minarea', label: 'adjust-minarea-val', prop: 'min_area_sq_mi' },
+  { key: 'threshold', input: 'adjust-threshold', hint: 'adjust-threshold-val', prop: 'threshold_pct' },
+  { key: 'radius', input: 'adjust-radius', hint: 'adjust-radius-val', prop: 'neighborhood_radius_nm' },
+  { key: 'minArea', input: 'adjust-minarea', hint: 'adjust-minarea-val', prop: 'min_area_sq_mi' },
 ];
 
 const MTN_FIELDS = [
-  { key: 'threshold', slider: 'adjust-mtn-threshold', label: 'adjust-mtn-threshold-val', prop: 'threshold_pct' },
-  { key: 'relief', slider: 'adjust-mtn-relief', label: 'adjust-mtn-relief-val', prop: 'mountainous_relief_ft' },
-  { key: 'clearance', slider: 'adjust-mtn-clearance', label: 'adjust-mtn-clearance-val', prop: 'clearance_margin_ft' },
-  { key: 'radius', slider: 'adjust-mtn-radius', label: 'adjust-mtn-radius-val', prop: 'neighborhood_radius_nm' },
-  { key: 'minArea', slider: 'adjust-mtn-minarea', label: 'adjust-mtn-minarea-val', prop: 'min_area_sq_mi' },
+  { key: 'threshold', input: 'adjust-mtn-threshold', hint: 'adjust-mtn-threshold-val', prop: 'threshold_pct' },
+  { key: 'relief', input: 'adjust-mtn-relief', hint: 'adjust-mtn-relief-val', prop: 'mountainous_relief_ft' },
+  { key: 'clearance', input: 'adjust-mtn-clearance', hint: 'adjust-mtn-clearance-val', prop: 'clearance_margin_ft' },
+  { key: 'radius', input: 'adjust-mtn-radius', hint: 'adjust-mtn-radius-val', prop: 'neighborhood_radius_nm' },
+  { key: 'minArea', input: 'adjust-mtn-minarea', hint: 'adjust-mtn-minarea-val', prop: 'min_area_sq_mi' },
 ];
+
+// Snap a typed value onto the input's min/max/step lattice. A number
+// input accepts anything typed into it -- "47" against a 5-step field,
+// "99999" against a 10000 max -- and the server would happily compute
+// that. Snapping keeps the panel honest about what the buttons could
+// have reached, and keeps hour-to-hour settings comparable.
+function normalizeStepInput(el, fallback) {
+  const min = Number(el.min);
+  const max = Number(el.max);
+  const step = Number(el.step) || 1;
+  let v = Number(el.value);
+  if (el.value === '' || Number.isNaN(v)) v = fallback ?? Number(el.defaultValue);
+  v = Math.min(max, Math.max(min, v));
+  v = min + Math.round((v - min) / step) * step;
+  el.value = v;
+  return v;
+}
 
 function makeHourStore(fields) {
   const byHour = {};
   return {
     fields,
 
-    // The hazard's sliders, read as numbers, as one settings object.
+    // The hazard's inputs, read as numbers, as one settings object. This
+    // is the PENDING set.
     read() {
       const out = {};
-      fields.forEach((f) => { out[f.key] = Number(document.getElementById(f.slider).value); });
+      fields.forEach((f) => { out[f.key] = Number(document.getElementById(f.input).value); });
       return out;
     },
 
-    // Push a settings object onto the sliders and their live labels.
+    // Push a settings object onto the inputs. Used when an hour is shown
+    // (its applied settings become the pending ones) and by REVERT.
     apply(settings) {
       if (!settings) return;
       fields.forEach((f) => {
         if (settings[f.key] == null) return;
-        document.getElementById(f.slider).value = settings[f.key];
-        document.getElementById(f.label).textContent = settings[f.key];
+        document.getElementById(f.input).value = settings[f.key];
       });
     },
 
     // Starting settings for an hour, from its scheduled snapshot's
     // properties.
     //
-    // A property the snapshot does not carry falls back to the slider's
-    // DEFAULT, not to where the slider currently sits. This path is also
+    // A property the snapshot does not carry falls back to the input's
+    // DEFAULT, not to where the input currently sits. This path is also
     // what RESET runs through, and resetting to "wherever you left it" is
     // not a reset. It matters for any parameter added after a snapshot was
     // written -- mountainous_relief_ft is the first -- where every cached
@@ -528,7 +547,7 @@ function makeHourStore(fields) {
       if (!props) return null;
       const out = {};
       fields.forEach((f) => {
-        const el = document.getElementById(f.slider);
+        const el = document.getElementById(f.input);
         out[f.key] = props[f.prop] ?? Number(el.defaultValue);
       });
       return out;
@@ -537,11 +556,27 @@ function makeHourStore(fields) {
     get(fxx) { return byHour[hourKey(fxx)]; },
     set(fxx, settings) { byHour[hourKey(fxx)] = settings; },
 
-    // Persist the sliders against an hour. Called on every slider input --
-    // NOT debounced, so a fast switch away cannot lose the value.
+    // Commit the inputs against an hour: pending becomes applied. Called
+    // by APPLY, never by input events.
     saveCurrent(fxx) {
       if (fxx == null) return;
       byHour[hourKey(fxx)] = this.read();
+    },
+
+    // Commit the inputs against EVERY hour of the cycle. Hours never
+    // visited get an entry too, so showForecastHour() finds saved settings
+    // for them and recomputes rather than loading the scheduled file.
+    saveAll(hours) {
+      const settings = this.read();
+      hours.forEach((fxx) => { byHour[hourKey(fxx)] = { ...settings }; });
+    },
+
+    // Whether the inputs differ from what is applied to this hour.
+    isDirty(fxx) {
+      const applied = this.get(fxx);
+      if (!applied) return false;
+      const pending = this.read();
+      return fields.some((f) => applied[f.key] !== pending[f.key]);
     },
 
     clear(fxx) { delete byHour[hourKey(fxx)]; },
@@ -558,18 +593,25 @@ const mtnHours = makeHourStore(MTN_FIELDS);
 
 
 // --- Re-processes the CURRENTLY selected forecast hour's cached grid
-//     with whatever the sliders currently say, and swaps in the
-//     result. Does NOT re-fit the map view or touch the fxx button
-//     state -- this is the same forecast hour, just re-drawn with
-//     different parameters. ---
+//     with the given settings (or, absent those, the hour's APPLIED
+//     settings) and swaps in the result. Does NOT re-fit the map view or
+//     touch the fxx button state -- this is the same forecast hour, just
+//     re-drawn with different parameters.
+//
+//     The sequence counter guards against out-of-order responses: two
+//     recomputes in flight (APPLY, then a quick hour switch) have no
+//     guaranteed arrival order, and a slow earlier one landing last would
+//     paint polygons that match nothing on the panel. Only the newest
+//     request is allowed to draw. ---
+let ifrRecomputeSeq = 0;
+
 async function recomputeCurrentSnapshot(settings = null) {
   if (currentFxx == null || !liveAdjustAvailable) return;
 
-  // Slider-driven calls pass nothing and read the DOM; hour switches pass
-  // that hour's stored settings explicitly.
-  const { threshold, radius, minArea } = settings || ifrHours.read();
+  const { threshold, radius, minArea } = settings || ifrHours.get(currentFxx) || ifrHours.read();
   const statusEl = document.getElementById('adjust-status');
   const fxxStr = String(currentFxx).padStart(2, '0');
+  const seq = ++ifrRecomputeSeq;
 
   statusEl.textContent = 'computing...';
   try {
@@ -577,6 +619,7 @@ async function recomputeCurrentSnapshot(settings = null) {
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(`recompute failed (${resp.status})`);
     const geojson = await resp.json();
+    if (seq !== ifrRecomputeSeq) return; // superseded while in flight
 
     layers.ifr.clearLayers();
     layers.ifr.addData(geojson);
@@ -590,21 +633,20 @@ async function recomputeCurrentSnapshot(settings = null) {
     }
     statusEl.textContent = '';
   } catch (err) {
+    if (seq !== ifrRecomputeSeq) return;
     console.error('Recompute failed:', err);
     statusEl.textContent = 'error (see console)';
   }
 }
 
-const debouncedRecompute = debounce(recomputeCurrentSnapshot, 300);
-
 // --- Same idea as recomputeCurrentSnapshot() above, but for the
-//     Mountain Obscuration layer and its own sliders. Kept as a separate
-//     function (and a separate panel) rather than having one set of
-//     sliders drive both layers: MTN OBSC has a parameter IFR doesn't
-//     (clearance_margin_ft), and the two hazards are genuinely tuned
-//     independently -- a forecaster dialing in an IFR threshold
+//     Mountain Obscuration layer and its own parameters. Kept as a
+//     separate function (and a separate panel) rather than having one set
+//     of controls drive both layers: MTN OBSC has parameters IFR doesn't
+//     (relief, clearance_margin_ft), and the two hazards are genuinely
+//     tuned independently -- a forecaster dialing in an IFR threshold
 //     shouldn't silently move the mountain obscuration boundaries too. ---
-// --- The mountainous-area readout under the RELIEF slider.
+// --- The mountainous-area readout under RELIEF.
 //
 //     The figure is a FeatureCollection foreign member rather than a
 //     feature property, because it describes the mask the polygons were
@@ -621,7 +663,7 @@ function setMountainousArea(geojson) {
   const sqMi = geojson?.mountainous_area_sq_mi;
   if (sqMi == null) {
     el.textContent = '--';
-    el.title = 'not measured in this snapshot -- move a slider to recompute';
+    el.title = 'not measured in this snapshot -- APPLY any change to recompute';
     return;
   }
   el.textContent = sqMi >= 1e6
@@ -630,14 +672,16 @@ function setMountainousArea(geojson) {
   el.title = `${Math.round(sqMi).toLocaleString()} sq mi of the grid is mountainous at this relief threshold`;
 }
 
+let mtnRecomputeSeq = 0;
+
 async function recomputeCurrentMtnSnapshot(settings = null) {
   if (currentFxx == null || !liveAdjustAvailable) return;
 
-  // Slider-driven calls pass nothing and read the DOM; hour switches pass
-  // that hour's stored settings explicitly.
-  const { threshold, relief, clearance, radius, minArea } = settings || mtnHours.read();
+  const { threshold, relief, clearance, radius, minArea } =
+    settings || mtnHours.get(currentFxx) || mtnHours.read();
   const statusEl = document.getElementById('adjust-mtn-status');
   const fxxStr = String(currentFxx).padStart(2, '0');
+  const seq = ++mtnRecomputeSeq;
 
   statusEl.textContent = 'computing...';
   try {
@@ -646,6 +690,7 @@ async function recomputeCurrentMtnSnapshot(settings = null) {
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(`MTN OBSC recompute failed (${resp.status})`);
     const geojson = await resp.json();
+    if (seq !== mtnRecomputeSeq) return; // superseded while in flight
 
     layers.mtn.clearLayers();
     layers.mtn.addData(geojson);
@@ -653,50 +698,138 @@ async function recomputeCurrentMtnSnapshot(settings = null) {
     setMountainousArea(geojson);
     statusEl.textContent = '';
   } catch (err) {
+    if (seq !== mtnRecomputeSeq) return;
     console.error('MTN OBSC recompute failed:', err);
     statusEl.textContent = 'error (see console)';
   }
 }
 
-const debouncedMtnRecompute = debounce(recomputeCurrentMtnSnapshot, 300);
+// --- ADJUSTOR WIRING ---
+//     One entry per hazard binds its store to its buttons and recompute.
+//     Everything below is driven off this list, so a new hazard's
+//     adjustor is an entry here plus its markup -- no per-hazard handlers.
+const ADJUSTORS = [
+  { hazard: 'ifr', store: ifrHours, body: 'adjust-ifr-body',
+    apply: 'adjust-apply', applyAll: 'adjust-apply-all', revert: 'adjust-revert',
+    status: 'adjust-status', recompute: recomputeCurrentSnapshot },
+  { hazard: 'mtn', store: mtnHours, body: 'adjust-mtn-body',
+    apply: 'adjust-mtn-apply', applyAll: 'adjust-mtn-apply-all', revert: 'adjust-mtn-revert',
+    status: 'adjust-mtn-status', recompute: recomputeCurrentMtnSnapshot },
+];
 
-// --- Wire up the three sliders: update the live numeric label
-//     immediately (feels responsive even before the network call
-//     resolves), and debounce the actual recompute. ---
-document.getElementById('adjust-threshold').addEventListener('input', (e) => {
-  document.getElementById('adjust-threshold-val').textContent = e.target.value;
-  ifrHours.saveCurrent(currentFxx);
-  debouncedRecompute();
-});
-document.getElementById('adjust-radius').addEventListener('input', (e) => {
-  document.getElementById('adjust-radius-val').textContent = e.target.value;
-  ifrHours.saveCurrent(currentFxx);
-  debouncedRecompute();
-});
-document.getElementById('adjust-minarea').addEventListener('input', (e) => {
-  document.getElementById('adjust-minarea-val').textContent = e.target.value;
-  ifrHours.saveCurrent(currentFxx);
-  debouncedRecompute();
-});
+// Re-derive the dirty marks, hints and button states from the inputs vs
+// the store. Cheap, so it runs after every input event and every store
+// change rather than trying to track deltas.
+function syncAdjustor(adj) {
+  const applied = adj.store.get(currentFxx);
+  const pending = adj.store.read();
+  let anyDirty = false;
 
-// --- MTN OBSC sliders: same pattern as the IFR ones above (immediate
-//     label update, debounced recompute). ---
-[
-  ['adjust-mtn-threshold', 'adjust-mtn-threshold-val'],
-  ['adjust-mtn-relief', 'adjust-mtn-relief-val'],
-  ['adjust-mtn-clearance', 'adjust-mtn-clearance-val'],
-  ['adjust-mtn-radius', 'adjust-mtn-radius-val'],
-  ['adjust-mtn-minarea', 'adjust-mtn-minarea-val'],
-].forEach(([sliderId, labelId]) => {
-  document.getElementById(sliderId).addEventListener('input', (e) => {
-    document.getElementById(labelId).textContent = e.target.value;
-    mtnHours.saveCurrent(currentFxx);
-    debouncedMtnRecompute();
+  adj.store.fields.forEach((f) => {
+    const input = document.getElementById(f.input);
+    const hint = document.getElementById(f.hint);
+    const dirty = !!applied && applied[f.key] !== pending[f.key];
+    anyDirty = anyDirty || dirty;
+    input.closest('.adjust-row').classList.toggle('is-dirty', dirty);
+    hint.textContent = dirty ? `was ${applied[f.key]}` : '';
   });
+
+  const canAct = liveAdjustAvailable && currentFxx != null;
+  document.getElementById(adj.apply).disabled = !(canAct && anyDirty);
+  document.getElementById(adj.revert).disabled = !(canAct && anyDirty);
+  // APPLY ALL HOURS is useful even when this hour is clean -- it is how a
+  // setting dialled in on F06 gets pushed to F00..F12 -- so it is live
+  // whenever adjustment is.
+  document.getElementById(adj.applyAll).disabled = !canAct;
+}
+
+function syncAllAdjustors() {
+  ADJUSTORS.forEach(syncAdjustor);
+}
+
+// APPLY: commit pending to this hour and recompute once.
+async function applyAdjustor(adj) {
+  if (currentFxx == null || !liveAdjustAvailable) return;
+  adj.store.fields.forEach((f) => {
+    const el = document.getElementById(f.input);
+    normalizeStepInput(el, adj.store.get(currentFxx)?.[f.key]);
+  });
+  adj.store.saveCurrent(currentFxx);
+  syncAdjustor(adj);
+  await adj.recompute(adj.store.get(currentFxx));
+}
+
+// APPLY ALL HOURS: commit pending to every hour of the cycle, recompute
+// the one on screen. The others pick their settings up when shown.
+async function applyAdjustorAllHours(adj) {
+  if (currentFxx == null || !liveAdjustAvailable) return;
+  adj.store.fields.forEach((f) => {
+    const el = document.getElementById(f.input);
+    normalizeStepInput(el, adj.store.get(currentFxx)?.[f.key]);
+  });
+  const hours = forecastHours.length ? forecastHours : [currentFxx];
+  adj.store.saveAll(hours);
+  syncAdjustor(adj);
+  await adj.recompute(adj.store.get(currentFxx));
+  const statusEl = document.getElementById(adj.status);
+  if (!statusEl.textContent) {
+    statusEl.textContent = `applied to ${hours.length} hours`;
+    setTimeout(() => { if (statusEl.textContent.startsWith('applied')) statusEl.textContent = ''; }, 3000);
+  }
+}
+
+// REVERT: pending goes back to applied. No network.
+function revertAdjustor(adj) {
+  adj.store.apply(adj.store.get(currentFxx));
+  syncAdjustor(adj);
+}
+
+ADJUSTORS.forEach((adj) => {
+  const body = document.getElementById(adj.body);
+
+  // Stepper buttons: +/- one step, via the input's own stepping so the
+  // min/max/step attributes are the single source of bounds.
+  body.querySelectorAll('.step-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const input = btn.parentElement.querySelector('.step-input');
+      if (input.disabled) return;
+      // A typed off-lattice value is snapped first, so a click always
+      // lands on a reachable step rather than 47 -> 52.
+      const field = adj.store.fields.find((f) => f.input === input.id);
+      normalizeStepInput(input, adj.store.get(currentFxx)?.[field.key]);
+      if (btn.dataset.step === 'up') input.stepUp(); else input.stepDown();
+      syncAdjustor(adj);
+    });
+  });
+
+  adj.store.fields.forEach((f) => {
+    const input = document.getElementById(f.input);
+    // Typing: mark dirty as they go, but do not snap until they finish --
+    // snapping mid-keystroke would fight "3" on the way to "3000".
+    input.addEventListener('input', () => syncAdjustor(adj));
+    // Finished (blur or Enter): snap to the lattice.
+    input.addEventListener('change', () => {
+      normalizeStepInput(input, adj.store.get(currentFxx)?.[f.key]);
+      syncAdjustor(adj);
+    });
+    // Enter applies. The `change` above fires first on Enter in browsers
+    // that fire it, so the value is already normalized here.
+    input.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      input.blur();
+      applyAdjustor(adj);
+    });
+  });
+
+  document.getElementById(adj.apply).addEventListener('click', () => applyAdjustor(adj));
+  document.getElementById(adj.applyAll).addEventListener('click', () => applyAdjustorAllHours(adj));
+  document.getElementById(adj.revert).addEventListener('click', () => revertAdjustor(adj));
 });
 
 // --- Reset button: reloads the ORIGINAL scheduled snapshot (its
-//     committed parameters, not whatever the sliders currently say). ---
+//     committed parameters, not whatever is applied or pending). Reloading
+//     re-seeds the store and the inputs, so pending edits are dropped too. ---
 document.getElementById('adjust-reset').addEventListener('click', async () => {
   if (currentFxx == null) return;
   // This hour only -- other hours keep their own adjustments.
@@ -736,16 +869,16 @@ function downloadTextFile(content, filename, mimeType) {
   URL.revokeObjectURL(url);
 }
 
-// --- Generate button: downloads BOTH GeoJSON and XML for whatever the
-//     sliders currently say -- lets a forecaster dial in thresholds,
+// --- Generate button: downloads BOTH GeoJSON and XML for whatever is
+//     APPLIED to this hour -- lets a forecaster dial in thresholds,
 //     review the result, then hand off exactly that draft rather than
 //     only ever being able to export the default scheduled version. ---
 async function generateIfrFiles(statusEl) {
   if (currentFxx == null || !liveAdjustAvailable) return;
 
-  const threshold = document.getElementById('adjust-threshold').value;
-  const radius = document.getElementById('adjust-radius').value;
-  const minArea = document.getElementById('adjust-minarea').value;
+  // APPLIED settings, not the inputs: the export must match the polygons
+  // on screen, and a pending edit that was never applied is not on screen.
+  const { threshold, radius, minArea } = ifrHours.get(currentFxx) || ifrHours.read();
   const fxxStr = String(currentFxx).padStart(2, '0');
   const baseName = `ifr_f${fxxStr}_t${threshold}_r${radius}_a${minArea}`;
 
@@ -787,16 +920,13 @@ document.getElementById('adjust-mtn-reset-all').addEventListener('click', async 
   await loadMtnObscSnapshot(currentFxx);
 });
 
-// --- MTN OBSC generate: downloads GeoJSON + XML for whatever the MTN
-//     sliders currently say, same as the IFR generate button. ---
+// --- MTN OBSC generate: downloads GeoJSON + XML for whatever MTN OBSC
+//     settings are applied to this hour, same as the IFR generate button. ---
 async function generateMtnFiles(statusEl) {
   if (currentFxx == null || !liveAdjustAvailable) return;
 
-  const threshold = document.getElementById('adjust-mtn-threshold').value;
-  const relief = document.getElementById('adjust-mtn-relief').value;
-  const clearance = document.getElementById('adjust-mtn-clearance').value;
-  const radius = document.getElementById('adjust-mtn-radius').value;
-  const minArea = document.getElementById('adjust-mtn-minarea').value;
+  // APPLIED settings, as in generateIfrFiles.
+  const { threshold, relief, clearance, radius, minArea } = mtnHours.get(currentFxx) || mtnHours.read();
   const fxxStr = String(currentFxx).padStart(2, '0');
   const baseName = `mtn_obsc_f${fxxStr}_t${threshold}_e${relief}_c${clearance}_r${radius}_a${minArea}`;
 
@@ -963,6 +1093,7 @@ async function loadIfrSnapshot(requestedFxx, { refit = true } = {}) {
     ifrHours.set(requestedFxx, seeded);
     ifrHours.apply(seeded);
   }
+  syncAllAdjustors();
 
   // Only re-fit the view the FIRST time data loads (on subsequent
   // snapshot switches, keep whatever pan/zoom the person already has --
@@ -995,7 +1126,7 @@ async function loadMtnObscSnapshot(requestedFxx) {
     setMountainousArea(geojson);
 
     // First visit to this hour (or a reset): seed its settings from the
-    // scheduled snapshot and sync the sliders to what's actually on
+    // scheduled snapshot and sync the inputs to what's actually on
     // screen. Hours with saved settings go through showForecastHour() and
     // never reach here, so switching hours no longer clobbers them.
     if (firstProps) {
@@ -1003,6 +1134,7 @@ async function loadMtnObscSnapshot(requestedFxx) {
       mtnHours.set(requestedFxx, seeded);
       mtnHours.apply(seeded);
     }
+    syncAllAdjustors();
   } catch (err) {
     console.warn('Mountain Obscuration layer unavailable:', err);
     layers.mtn.clearLayers();
@@ -1031,6 +1163,7 @@ async function showIfrForHour(fxx, { refit = true } = {}) {
   const saved = ifrHours.get(fxx);
   if (saved && liveAdjustAvailable) {
     ifrHours.apply(saved);
+    syncAllAdjustors();
     await recomputeCurrentSnapshot(saved);
     return;
   }
@@ -1043,6 +1176,7 @@ async function showMtnForHour(fxx) {
   const saved = mtnHours.get(fxx);
   if (saved && liveAdjustAvailable) {
     mtnHours.apply(saved);
+    syncAllAdjustors();
     await recomputeCurrentMtnSnapshot(saved);
     return;
   }
@@ -1062,6 +1196,8 @@ function buildFxxSelector(manifest) {
   document.getElementById('nbm-source-cycle').textContent = manifest.nbm_source_cycle
     ? formatValidTime(manifest.nbm_source_cycle)
     : '--------Z'; // older manifests generated before this field existed
+
+  forecastHours = manifest.snapshots.map((snap) => snap.requested_forecast_hour);
 
   manifest.snapshots.forEach((snap, i) => {
     const btn = document.createElement('button');
@@ -1165,6 +1301,7 @@ async function loadData() {
       loadMtnObscSnapshot(manifest.snapshots[0].requested_forecast_hour),
     ]);
     liveAdjustAvailable = true;
+    syncAllAdjustors();
   } catch (err) {
     console.warn('No forecast-hour manifest available, falling back to single snapshot:', err);
     document.getElementById('valid-time').textContent = '--------Z'; // clear any "loading" text

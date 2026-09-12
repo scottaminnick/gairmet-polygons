@@ -97,7 +97,7 @@ Currently working:
       without reloading the page, with graceful fallback to demo data if
       the pipeline hasn't produced output yet
 - [x] **Live parameter adjustment** (`/api/hazards/ifr/{fxx}/recompute`) —
-      sliders in the map viewer let you adjust threshold/neighborhood-
+      stepper controls in the map viewer let you adjust threshold/neighborhood-
       radius/min-area and see results in about a second, by re-running
       just the cheap threshold→merge→filter→smooth steps
       (`pipeline.hazards.ifr.polygonize_ifr_grid`) against the cached
@@ -185,11 +185,11 @@ Currently working:
       not just a combined max. Benchmarked at under 1 second on
       realistic full-CONUS-scale data despite running the full merge/
       filter/smooth pipeline three times instead of once — still within
-      the "feels live" range for the slider-adjustment UI.
+      the range where an APPLY in the adjustment UI feels immediate.
 - [x] **"Generate" button** in the ADJUST panel — downloads both
-      GeoJSON and XML for whatever the sliders currently say, not just
+      GeoJSON and XML for whatever is applied in the adjustor, not just
       the default scheduled version. Client-side only (fetches from the
-      same `/recompute` endpoint the sliders already use); nothing is
+      same `/recompute` endpoint APPLY already uses); nothing is
       saved server-side.
 - [x] **Raster-to-vector polygonization uses scikit-image, not rasterio** —
       rasterio bundles GDAL, which broke Railway deployment
