@@ -321,12 +321,23 @@ html, body {
   margin-left: 6px;
 }
 
+/* --- Adjustor rows: label on the left, stepper on the right. ---
+   Steppers replaced sliders because these parameters are discrete
+   (5 %, 250 ft, 500 mi² steps) and the rail is ~230px wide, which made a
+   slider thumb move several steps per pixel. The buttons are 24px
+   targets; the value is typed or arrowed rather than dragged. */
 .adjust-row {
   display: grid;
-  grid-template-columns: 62px 1fr 56px;
+  grid-template-columns: minmax(58px, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.adjust-label-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .adjust-label {
@@ -334,10 +345,148 @@ html, body {
   color: var(--text-muted);
 }
 
-.adjust-value {
-  font-size: 11px;
+/* Shows the APPLIED value while the field holds something else, so the
+   forecaster can always see what an APPLY would replace. Empty (and
+   collapsed to nothing) when field and map agree. */
+.adjust-hint {
+  font-size: 9px;
+  line-height: 1.1;
+  color: var(--text-muted);
+  opacity: 0.85;
+}
+
+.adjust-hint:empty {
+  display: none;
+}
+
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--panel-border);
+  border-radius: 3px;
+  background: rgba(10, 15, 26, 0.6);
+}
+
+.step-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.step-btn:hover {
+  color: var(--text-primary);
+  background: rgba(245, 166, 35, 0.12);
+}
+
+.step-btn:active {
+  background: rgba(245, 166, 35, 0.25);
+}
+
+.step-btn:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  background: transparent;
+}
+
+.step-input {
+  width: 3.2ch;
+  height: 24px;
+  padding: 0 2px;
+  border: none;
+  border-left: 1px solid var(--panel-border);
+  background: transparent;
   color: var(--accent-ifr);
+  font-family: var(--font-mono);
+  font-size: 12px;
   text-align: right;
+  /* Bounds come from min/max; the native spinner is the small, hard-to-hit
+     control this replaces, so it is hidden and the +/- buttons stand in. */
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.step-input::-webkit-outer-spin-button,
+.step-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.step-input:focus {
+  outline: none;
+  background: rgba(245, 166, 35, 0.08);
+}
+
+.step-input-wide {
+  width: 5.2ch;
+}
+
+.step-unit {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 0 4px 0 2px;
+  border-right: 1px solid var(--panel-border);
+  height: 24px;
+  line-height: 24px;
+}
+
+/* A row whose field differs from what is applied. Amber rule on the
+   left so the eye finds every pending change at a glance. */
+.adjust-row.is-dirty .step-input {
+  color: var(--text-primary);
+}
+
+.adjust-row.is-dirty .stepper {
+  border-color: var(--accent-ifr);
+}
+
+/* Dim the whole stepper (not just the buttons) when adjustment is off. */
+.stepper:has(.step-input:disabled) {
+  opacity: 0.5;
+}
+
+.adjust-apply-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.adjust-apply-btn,
+.adjust-revert-btn,
+.adjust-apply-all-btn {
+  width: 100%;
+  text-align: center;
+}
+
+.adjust-apply-btn {
+  border-color: var(--accent-ifr);
+  color: var(--accent-ifr);
+  font-weight: 500;
+}
+
+.adjust-apply-btn:hover:not(:disabled) {
+  background: rgba(245, 166, 35, 0.15);
+}
+
+.adjust-apply-all-btn {
+  margin-top: 4px;
+  margin-bottom: 6px;
+}
+
+.adjust-apply-btn:disabled,
+.adjust-revert-btn:disabled,
+.adjust-apply-all-btn:disabled {
+  border-color: var(--panel-border);
+  color: var(--text-muted);
+  cursor: not-allowed;
+  background: transparent;
 }
 
 /* The mountainous-area readout under RELIEF. Indented to the slider
@@ -365,13 +514,8 @@ html, body {
   opacity: 0.7;
 }
 
-.adjust-row input[type="range"] {
-  width: 100%;
-  accent-color: var(--accent-ifr);
-  background: transparent;
-}
-
-#adjust-status {
+#adjust-status,
+#adjust-mtn-status {
   font-size: 9px;
   color: var(--text-muted);
   text-transform: none;

@@ -49,13 +49,13 @@ def test_every_element_map_js_reaches_for_exists_in_the_markup():
     assert not missing, f"map.js reaches for ids that index.html does not define: {missing}"
 
 
-def test_slider_and_reset_ids_survived_the_restructure():
+def test_control_and_reset_ids_survived_the_restructure():
     """
-    Presentation-only means exactly that: every control the per-hour
-    state machinery drives still exists, under the same id. These are the
-    ids makeHourStore's field lists and the reset handlers hard-code, so
-    a rename here silently changes slider values and reset semantics --
-    the two things the restructure was explicitly not allowed to touch.
+    Every control the per-hour state machinery drives still exists, under
+    the same id. These are the ids makeHourStore's field lists and the
+    reset handlers hard-code, so a rename here silently changes parameter
+    values and reset semantics. The sliders became number inputs in the
+    stepper rework; the ids deliberately did not change.
     """
     required = [
         # IFR_FIELDS
@@ -70,6 +70,9 @@ def test_slider_and_reset_ids_survived_the_restructure():
         "adjust-mtn-minarea", "adjust-mtn-minarea-val",
         # per-hazard recompute status
         "adjust-status", "adjust-mtn-status",
+        # apply / revert -- the batching controls the steppers feed
+        "adjust-apply", "adjust-apply-all", "adjust-revert",
+        "adjust-mtn-apply", "adjust-mtn-apply-all", "adjust-mtn-revert",
         # resets stay in the adjustor, not the export panel
         "adjust-reset", "adjust-reset-all",
         "adjust-mtn-reset", "adjust-mtn-reset-all",
@@ -208,15 +211,88 @@ def test_panel_structure_is_documented_for_the_next_five_hazards():
     assert "HAZARD_PANELS" in methods, "docs/METHODS.md should name the list a new hazard is added to"
 
 
-# --- The mountainous relief threshold -------------------------------------
-#     A slider like the others, but the only one whose effect a forecaster
-#     cannot judge from the map alone -- it changes how much of the CONUS
-#     the hazard is allowed to claim before any weather is consulted -- so
-#     the panel carries a live figure next to it.
+# --- Steppers, not sliders ---------------------------------------------------
+#     The parameters are discrete (5 %, 250 ft, 500 mi² steps) and the rail
+#     is ~230px wide, so a slider thumb moved several steps per pixel. Each
+#     parameter is now a number input with a -/+ button either side, and
+#     nothing recomputes until APPLY, so several parameters cost one round
+#     trip. The input keeps the slider's id and bounds.
 
-def test_relief_slider_covers_the_requested_range_at_its_current_default():
-    slider = re.search(r'<input type="range" id="adjust-mtn-relief"[^>]*>', HTML)
-    assert slider, "the RELIEF slider is missing from the MTN OBSC adjustor"
+STEPPER_INPUTS = [
+    "adjust-threshold", "adjust-radius", "adjust-minarea",
+    "adjust-mtn-threshold", "adjust-mtn-relief", "adjust-mtn-clearance",
+    "adjust-mtn-radius", "adjust-mtn-minarea",
+]
+
+
+def test_every_parameter_is_a_bounded_number_input_not_a_slider():
+    assert 'type="range"' not in HTML, "a slider survived the stepper rework"
+    for element_id in STEPPER_INPUTS:
+        tag = re.search(rf'<input type="number" id="{element_id}"[^>]*>', HTML)
+        assert tag, f"{element_id} is not a number input"
+        attrs = dict(re.findall(r'(\w+)="([^"]+)"', tag.group(0)))
+        for bound in ("min", "max", "step", "value"):
+            assert bound in attrs, f"{element_id} has no {bound} -- the buttons would have nothing to step against"
+
+
+def test_every_number_input_has_a_minus_and_a_plus_button():
+    for element_id in STEPPER_INPUTS:
+        row = _slice_between(HTML, f'id="{element_id}"', "</div>")
+        # The buttons are siblings inside the same .stepper; the slice
+        # above starts at the input, so look at the whole stepper instead.
+        start = HTML.rfind('<div class="stepper">', 0, HTML.index(f'id="{element_id}"'))
+        stepper = _slice_between(HTML[start:], '<div class="stepper">', "</div>")
+        assert 'data-step="down"' in stepper and 'data-step="up"' in stepper, (
+            f"{element_id} is missing a -/+ button"
+        )
+        assert stepper.count("<button") == 2, f"{element_id}: expected exactly two step buttons"
+        del row
+
+
+def test_nothing_recomputes_on_input_only_on_apply():
+    """
+    The point of batching: input events may mark a row dirty, but the only
+    paths to a recompute are APPLY, APPLY ALL HOURS, Enter, and an hour
+    switch. The old debounced live recompute is gone.
+    """
+    code = re.sub(r"//[^\n]*", "", re.sub(r"/\*.*?\*/", "", JS, flags=re.S))
+    assert "debounce" not in code, "the live debounced recompute is still wired"
+    wiring = _slice_between(JS, "ADJUSTORS.forEach((adj) => {", "\n});")
+    input_handler = _slice_between(wiring, "addEventListener('input'", ");")
+    assert "recompute" not in input_handler and "saveCurrent" not in input_handler, (
+        "an input event commits or recomputes -- that is live adjustment, not batching"
+    )
+    assert "applyAdjustor(adj)" in _slice_between(wiring, "e.key !== 'Enter'", "});"), "Enter does not apply"
+
+
+def test_apply_controls_sit_in_each_adjustor_above_the_resets():
+    for hazard in HAZARD_ROWS:
+        body = _hazard_body(hazard)
+        assert "APPLY ALL HOURS" in body and ">APPLY<" in body and "REVERT" in body, f"{hazard}: apply controls missing"
+        assert body.index(">APPLY<") < body.index("RESET THIS HOUR"), f"{hazard}: APPLY should come before the resets"
+        assert "(LIVE)" not in body, f"{hazard}: the body still claims to adjust live"
+
+
+def test_exports_send_what_is_applied_not_what_is_pending():
+    """
+    A pending edit is not on the map, so it must not be in a file that
+    claims to be the map.
+    """
+    for fn in ("generateIfrFiles", "generateMtnFiles"):
+        body = _slice_between(JS, f"async function {fn}(", "\n}")
+        assert "Hours.get(currentFxx)" in body, f"{fn} does not read the applied settings"
+        assert "getElementById('adjust-" not in body, f"{fn} reads the inputs (pending) directly"
+
+
+# --- The mountainous relief threshold -------------------------------------
+#     A parameter like the others, but the only one whose effect a
+#     forecaster cannot judge from the map alone -- it changes how much of
+#     the CONUS the hazard is allowed to claim before any weather is
+#     consulted -- so the panel carries a figure next to it.
+
+def test_relief_control_covers_the_requested_range_at_its_current_default():
+    slider = re.search(r'<input type="number" id="adjust-mtn-relief"[^>]*>', HTML)
+    assert slider, "the RELIEF control is missing from the MTN OBSC adjustor"
     attrs = dict(re.findall(r'(\w+)="([^"]+)"', slider.group(0)))
     assert (attrs["min"], attrs["max"], attrs["step"]) == ("500", "5000", "250")
     assert attrs["value"] == "500", (
@@ -237,7 +313,7 @@ def test_relief_sits_directly_above_clearance():
     assert order == ["threshold", "relief", "clearance", "radius", "minarea"], order
 
 
-def test_the_mountainous_area_figure_is_next_to_the_slider_with_its_references():
+def test_the_mountainous_area_figure_is_next_to_the_control_with_its_references():
     """
     The number is meaningless without something to compare it against, so
     the legacy broad-brush total and CONUS land area travel with it.
@@ -252,20 +328,19 @@ def test_the_mountainous_area_figure_is_next_to_the_slider_with_its_references()
     )
 
 
-def test_relief_is_wired_through_the_same_machinery_as_every_other_slider():
+def test_relief_is_wired_through_the_same_machinery_as_every_other_parameter():
     """
-    Per-hour state, live recompute and both resets are all driven off
-    MTN_FIELDS and the shared slider wiring, so being in those two lists
-    IS being wired up -- there is no separate path to forget.
+    Per-hour state, apply and both resets are all driven off MTN_FIELDS
+    and the shared ADJUSTORS wiring, so being in that list IS being wired
+    up -- there is no separate path to forget.
     """
     fields = _slice_between(JS, "const MTN_FIELDS = [", "];")
     assert "'adjust-mtn-relief'" in fields, "RELIEF is not in MTN_FIELDS (no per-hour state, no reset)"
     assert "'mountainous_relief_ft'" in fields, "RELIEF is not mapped to its GeoJSON property"
-    assert "['adjust-mtn-relief', 'adjust-mtn-relief-val']" in JS, "the RELIEF slider has no input handler"
     assert "mountainous_relief_ft=${relief}" in JS, "recompute does not send the relief threshold"
 
 
-def test_an_absent_property_resets_to_the_default_not_to_the_current_slider():
+def test_an_absent_property_resets_to_the_default_not_to_the_current_input():
     """
     fromProps is the reset path. Every cached snapshot predates
     mountainous_relief_ft, so its fallback branch is the only one relief
@@ -274,7 +349,7 @@ def test_an_absent_property_resets_to_the_default_not_to_the_current_slider():
     """
     from_props = _slice_between(JS, "fromProps(props) {", "\n    },")
     assert "defaultValue" in from_props, (
-        "fromProps falls back to the live slider value, so RESET cannot restore a "
+        "fromProps falls back to the live input value, so RESET cannot restore a "
         "parameter the snapshot does not carry"
     )
     assert "this.read()" not in from_props
@@ -318,7 +393,7 @@ def test_markup_defaults_match_the_route_defaults_that_reset_relies_on():
 
     markup = {
         re.search(r'id="([^"]+)"', tag).group(1): float(re.search(r'value="([^"]+)"', tag).group(1))
-        for tag in re.findall(r'<input type="range"[^>]*>', HTML)
+        for tag in re.findall(r'<input type="number"[^>]*>', HTML)
     }
     expected = {
         "recompute_ifr_snapshot": {
