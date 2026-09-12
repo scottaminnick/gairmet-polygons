@@ -10,10 +10,21 @@ emits every polygon as a <Gfa> element via pipeline/pgen_xml.py.
 Example:
     python scripts/make_pgen_test.py --hazard IFR --cycle-hour 21 --out 21Z_IFR.xml
 
-NOTE ON TAGS: every polygon gets its own unique tag by default, with no
-reuse across forecast hours (assign_unique_tags). The forecaster renumbers in
-NMAP2 anyway, so guessing at AWC's convention buys nothing. The older
-tag-reusing assigner is still here behind --naive-tags; see assign_naive_tags.
+NOTE ON TAGS: tags are feature-tracked across the five forecast hours by
+pipeline/tag_tracking.py -- a polygon inherits the tag of a previous-hour
+polygon it intersects, lowest tag wins on a merge.
+
+This corrects an inverted reading. Unique-sequential tags were adopted after
+an August run produced heavy overlapping smears, on the reasoning that a tag
+shared across hours makes NMAP2 draw the polygons as one evolving feature.
+That IS the intended behaviour -- it is the whole purpose of the attribute,
+and the BUFR smear is built by walking a tag from hour to hour. What actually
+broke was the assigner: centroid proximity matching, which paired polygons
+that were nowhere near each other, on top of within-hour overlaps that were a
+polygonization bug. Both have since been fixed -- overlaps are now rejected
+at the export boundary by assert_rings_disjoint() -- so the reason for
+avoiding reuse is gone, and avoiding it costs the snapshot relationship the
+format exists to carry.
 
 NOTE ON SIMPLIFICATION: rings are thinned to a vertex budget on the way out
 (see simplify_to_budget) ONLY on the v1 vector path. Label-grid output
@@ -33,6 +44,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from pipeline.pgen_xml import assert_rings_disjoint, gfa_element, build_product_xml
+from pipeline.tag_tracking import assign_tracked_tags
 
 # The five snapshots the pipeline writes per cycle.
 FORECAST_HOURS = (0, 3, 6, 9, 12)
@@ -47,34 +59,12 @@ HAZARDS = {
     "MT_OBSC": {"stem": "mtn_obsc", "geojson_hazard": "MTN_OBSC"},
 }
 
-# Centroid separation under which a polygon inherits the previous hour's tag.
-TAG_MATCH_RADIUS_NM = 300.0
-
 # Ring simplification. Tolerances are in degrees, which is crude near the
 # poles but fine over CONUS and keeps this dependency-free.
 SIMPLIFY_START_TOLERANCE = 0.005
 SIMPLIFY_GROWTH = 1.5
 SIMPLIFY_MAX_PASSES = 60
 MIN_RING_POINTS = 4
-
-_EARTH_RADIUS_NM = 3440.065
-
-
-def _distance_nm(a, b):
-    """Great-circle distance in nautical miles between two (lat, lon) pairs."""
-    lat1, lon1 = math.radians(a[0]), math.radians(a[1])
-    lat2, lon2 = math.radians(b[0]), math.radians(b[1])
-    h = (math.sin((lat2 - lat1) / 2) ** 2
-         + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2)
-    return 2 * _EARTH_RADIUS_NM * math.asin(math.sqrt(h))
-
-
-def _centroid(points):
-    """Unweighted mean of the ring vertices -- same convention pgen_xml uses
-    for its default latText/lonText label anchor."""
-    return (sum(p[0] for p in points) / len(points),
-            sum(p[1] for p in points) / len(points))
-
 
 def _segment_distance(point, start, end):
     """Distance from `point` to the segment start-end, in degrees."""
@@ -202,95 +192,6 @@ def apply_vertex_budget(ring, budget):
     return list(ring) if budget is None else simplify_to_budget(ring, budget)
 
 
-def assign_unique_tags(centroids_by_hour):
-    """
-    DEFAULT tag assignment: one unique integer per polygon, numbered
-    sequentially across the whole cycle and never reused between forecast
-    hours.
-
-    These are first-guess polygons that the forecaster renumbers in NMAP2, so
-    matching AWC's tag convention is not a goal. Reuse is not merely
-    unnecessary here, it is harmful: a tag shared across hours tells NMAP2 the
-    polygons are one evolving feature, which is what made the naive assigner
-    render heavily overlapping smears. Unique tags cannot express that
-    relationship, so they cannot get it wrong.
-
-    Accepts centroids_by_hour purely so it is drop-in interchangeable with
-    assign_naive_tags. The geometry is not used -- only the per-hour counts.
-
-    centroids_by_hour : list, one entry per forecast hour in order, each a
-                        list of (lat, lon) polygon centroids.
-    returns           : list of the same shape, holding integer tags.
-    """
-    tags_by_hour = []
-    next_tag = 1
-
-    for centroids in centroids_by_hour:
-        tags_by_hour.append(list(range(next_tag, next_tag + len(centroids))))
-        next_tag += len(centroids)
-
-    return tags_by_hour
-
-
-def assign_naive_tags(centroids_by_hour):
-    """
-    OPT-IN tag assignment, unused by default -- enable with --naive-tags.
-
-    Superseded by assign_unique_tags(), which is now the default. Tag reuse
-    turned out to be the wrong thing to approximate: the forecaster renumbers
-    these first-guess polygons in NMAP2, so matching AWC's convention was
-    never a goal, and reusing a tag across hours made NMAP2 draw the polygons
-    as one evolving feature -- 15 overlapping tag pairs in IFR's F00/F03/F06
-    window alone. Unique tags avoid that by construction. This is kept only
-    in case tag grouping later becomes a real requirement.
-
-    Deliberately naive. Walks the forecast hours in order. For each polygon, if its centroid lies
-    within TAG_MATCH_RADIUS_NM of a polygon at the PREVIOUS hour, it reuses
-    that polygon's tag; otherwise it takes the next unused integer.
-
-    This is NOT feature tracking. Specifically, it does NOT:
-      - test overlap, area, or shape similarity (centroid proximity only),
-      - do any geographic/named-area lookup,
-      - handle splits or merges,
-      - resolve contention -- the first previous-hour polygon within range
-        wins by input order, and one predecessor may be claimed by several
-        successors, so two polygons at the same hour can share a tag,
-      - look back further than one hour, so a feature that drops out for a
-        single snapshot comes back with a brand-new tag.
-
-    The resulting tags are plausible, not correct. They exist so the NMAP2
-    file carries stable-looking identifiers for the forecaster to redraw
-    against. Swap this out when real tracking lands; nothing else in this
-    script depends on how the tags are chosen.
-
-    centroids_by_hour : list, one entry per forecast hour in order, each a
-                        list of (lat, lon) polygon centroids.
-    returns           : list of the same shape, holding integer tags.
-    """
-    tags_by_hour = []
-    previous = []          # [(centroid, tag)] carried from the prior hour
-    next_tag = 1
-
-    for centroids in centroids_by_hour:
-        tags = []
-        current = []
-        for centroid in centroids:
-            tag = None
-            for prev_centroid, prev_tag in previous:
-                if _distance_nm(centroid, prev_centroid) <= TAG_MATCH_RADIUS_NM:
-                    tag = prev_tag         # first match wins -- see docstring
-                    break
-            if tag is None:
-                tag = next_tag
-                next_tag += 1
-            tags.append(tag)
-            current.append((centroid, tag))
-        tags_by_hour.append(tags)
-        previous = current
-
-    return tags_by_hour
-
-
 def weather_type_string(hazard, properties):
     """
     Compose the Gfa `type` string the way the reference samples spell it.
@@ -407,9 +308,6 @@ def main(argv=None):
                         help="vertex budget per ring on the v1 path (default: "
                              "25); ignored for label-grid output, which is "
                              "never simplified")
-    parser.add_argument("--naive-tags", action="store_true",
-                        help="reuse tags across forecast hours via "
-                             "assign_naive_tags (default: unique tags)")
     args = parser.parse_args(argv)
 
     # Cycles are 03/09/15/21Z; zero-pad so "9" and "09" produce the same file.
@@ -419,9 +317,8 @@ def main(argv=None):
 
     by_hour = load_hazard_polygons(args.hazard, args.max_points)
 
-    assign_tags = assign_naive_tags if args.naive_tags else assign_unique_tags
-    tags_by_hour = assign_tags(
-        [[_centroid(points) for _, points, _, _ in hour] for hour in by_hour])
+    tags_by_hour = assign_tracked_tags(
+        [[points for _, points, _, _ in hour] for hour in by_hour])
 
     blocks = []
     for hour, tags in zip(by_hour, tags_by_hour):

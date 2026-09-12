@@ -121,6 +121,17 @@ Currently working:
       pinching a thin-necked shape into two pieces — so the converter
       splits those into separate `<Polygon>` elements rather than
       assuming every feature is already simple.
+- [x] **PGEN feature tracking** (`pipeline/tag_tracking.py`) — the `tag`
+      on each `Gfa` element links F00/F03/F06/F09/F12 into one evolving
+      hazard, which is what NMAP2 draws through time and what the BUFR
+      smear is built from. A polygon inherits the tag of a previous-hour
+      polygon it intersects (any contact, edge-touching included); a
+      split gives every child the parent's tag, a merge takes the lowest
+      parent tag, anything touching nothing takes the next unused
+      integer, and ended numbers are never reused. Rules and decisions
+      are from the AWC snapshot/tagging training doc — see
+      [METHODS §6](docs/METHODS.md). Replaces unique-sequential tags,
+      which could not express "same hazard, three hours later" at all.
 - [x] **Ceiling vs. visibility cause attribution** — each polygon
       carries a `cause` property ("CIG", "VIS", or "CIG/VIS"), matching
       how real forecaster-drawn G-AIRMET graphics annotate what's

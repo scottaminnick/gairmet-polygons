@@ -4,8 +4,11 @@ document per hazard holding all five forecast hours.
 
 Deliberately built from synthetic FeatureCollections rather than real
 pipeline output: this exercises the GeoJSON -> Gfa mapping, tagging and
-vertex budgeting, none of which need numpy, shapely or a fetched data
-branch. That keeps it runnable in the light CI environment.
+vertex budgeting, none of which need numpy or a fetched data branch.
+(Tagging does reach shapely, via pipeline/tag_tracking.py -- but shapely
+is in requirements.txt, the light set CI installs, because the webapp's
+recompute endpoint already needs it.) That keeps it runnable in the light
+CI environment.
 """
 import math
 import sys
@@ -81,11 +84,63 @@ def test_all_forecast_hours_land_in_one_document():
     assert sorted({int(g.get("fcstHr")) for g in gfas}) == list(FORECAST_HOURS)
 
 
-def test_tags_are_unique_and_sequential_across_the_whole_file():
-    """Not restarting per hour, and never reused between hours."""
+def test_tags_track_features_across_forecast_hours():
+    """
+    Tags are the thread linking the five snapshots into one evolving
+    hazard -- the relationship NMAP2 draws through time and the BUFR
+    smear is built from. They were unique-sequential, which asserted that
+    nothing was ever the same hazard twice; the rules now live in
+    pipeline/tag_tracking.py and are tested against the doc's cases in
+    tests/test_tag_tracking.py.
+
+    This fixture happens to exercise three of them end to end through the
+    real export path. _fc() places feature i at lat 35 + 3i, so with
+    counts [2, 3, 1, 4, 2]:
+
+      F00  lat 35 -> 1, lat 38 -> 2
+      F03  both continue; lat 41 is new -> 3
+      F06  only lat 35 survives, still 1
+      F09  lat 35 continues as 1; lat 38 was ABSENT at F06, so it comes
+           back as a new tag rather than reclaiming 2 -- and 2 is retired,
+           so it takes 4. lat 41 -> 5, lat 44 -> 6.
+      F12  lat 35 -> 1, lat 38 -> 4
+    """
     xml, _ = build_pgen_document("IFR", _hours([2, 3, 1, 4, 2]), "21")
-    tags = [int(g.get("tag")) for g in _gfas(xml)]
-    assert tags == list(range(1, len(tags) + 1))
+    gfas = _gfas(xml)
+    by_hour = {
+        fxx: [int(g.get("tag")) for g in gfas if int(g.get("fcstHr")) == fxx]
+        for fxx in FORECAST_HOURS
+    }
+    assert by_hour == {0: [1, 2], 3: [1, 2, 3], 6: [1], 9: [1, 4, 5, 6], 12: [1, 4]}
+
+
+def test_a_tag_that_ended_is_not_reclaimed_by_the_same_ground_later():
+    """
+    The half of the above worth stating on its own, because it is the one
+    a reader is most likely to assume works the other way. Only the
+    previous hour is consulted, so the lat-38 feature returning at F09
+    after a gap at F06 is a NEW hazard -- and the number it vacated stays
+    retired rather than being handed back to it.
+    """
+    xml, _ = build_pgen_document("IFR", _hours([2, 3, 1, 4, 2]), "21")
+    gfas = _gfas(xml)
+    assert 2 not in [int(g.get("tag")) for g in gfas if int(g.get("fcstHr")) >= 6]
+
+
+def test_the_sidecar_reports_the_distinct_tags_present_each_hour():
+    """
+    Was [first, last], which only meant anything while tags were unique
+    and sequential. A tag can now repeat within an hour (a split) and
+    recur across hours (a continuation), so the endpoints of the list
+    describe nothing.
+    """
+    _xml, sidecar = build_pgen_document("IFR", _hours([2, 3, 1, 4, 2]), "21")
+    assert [h["tags"] for h in sidecar["forecast_hours"]] == [
+        [1, 2], [1, 2, 3], [1], [1, 4, 5, 6], [1, 4],
+    ]
+    assert sidecar["tagging"] == (
+        "feature-tracked: intersection with previous hour, lowest tag wins"
+    )
 
 
 def test_v1_rings_are_thinned_to_the_vertex_budget():
