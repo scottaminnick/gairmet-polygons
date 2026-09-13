@@ -270,6 +270,38 @@ span valleys), but it is a visible change: expect more, smaller polygons
 than 09Z produced. §4.5 and §4.6 are the two follow-ons that fall out of
 it.
 
+**Small enclosed valleys are filled back in.** The mountainous re-mask is
+right at the scale of the Central Valley and wrong at the scale of the
+Shenandoah: inside a mountain mass it punches out every valley floor under
+the relief threshold, and the Appalachian polygon came out as Swiss cheese
+— on the 13/03Z cycle, 39 holes carrying 234 vertices against a
+159-vertex outline. No hand-drawn G-AIRMET shows that, none of it is
+legible on aviationweather.gov, and a downstream converter crashed on the
+point count. `fill_enclosed_gaps()` (pipeline/polygons.py) now runs after
+the re-mask: connected regions of excluded cells that are completely
+surrounded by hazard and smaller than **`min_area_sq_mi`** are set back
+to hazard. Same number as the polygon filter, on purpose — a gap too
+small to be a polygon is too small to be a gap — and no new control.
+Gaps that reach the outside (bays in the outline) are never filled, so the
+Central Valley test above still holds; gaps at or over the limit survive.
+
+Measured on the 13/03Z cycle, all five hours: 47–316 enclosed gaps per
+hour, median 2 sq mi, 90th percentile under 25; the fill adds 0.4–1.6 %
+to the hazard area. The only gap over 3,000 sq mi in the whole cycle is
+the Columbia Basin at F09 (12,700 sq mi), which is kept. Small inland
+lakes inside a mountain mass are filled too, which is the right call for
+an obscuration area. The mountainous-area figure (§4.7) deliberately does
+**not** count filled ground — a filled valley is inside the polygon and
+still not mountainous. `tests/test_mtn_obsc_gap_fill.py` pins the fill,
+its ordering after the re-mask, and that figure.
+
+Left open: the *outline* is still notched wherever a valley reaches the
+edge of the mass, since those are bays rather than holes. If the vertex
+count is still a problem after this, the next lever is
+`FINAL_SIMPLIFY_TOLERANCE_DEG` for MTN OBSC (0.05° now); its polygons do
+not share edges, so simplifying them harder is safe in a way IFR's
+label-grid output is not.
+
 ### 4.5 The ridge search footprint is a circle
 
 `maximum_filter(size=...)` is a rectangle, so the search reached √2 ≈

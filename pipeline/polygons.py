@@ -65,6 +65,8 @@ import math
 
 import numpy as np
 from scipy.ndimage import distance_transform_edt
+from scipy.ndimage import label as ndimage_label
+from scipy.ndimage import sum_labels as ndimage_sum_labels
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry import mapping as shapely_mapping
 from shapely.ops import transform as shapely_transform
@@ -240,6 +242,78 @@ def close_mask(
     closed = (distance_to_outside > radius_km) | mask
 
     return (closed, nearest) if return_indices else closed
+
+
+# Background components are 4-connected so that a diagonal chain of
+# hazard cells still encloses what it surrounds -- the usual pairing with
+# an 8-connected foreground, and the one marching squares agrees with.
+_FOUR_CONNECTED = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool)
+
+
+def fill_enclosed_gaps(mask: np.ndarray, cell_areas: np.ndarray, max_area_sq_mi: float) -> np.ndarray:
+    """
+    Fill every hole in a boolean mask whose area is under max_area_sq_mi.
+
+    A hole is a connected region of unset cells that is completely
+    surrounded by set cells -- it does not reach the edge of the array,
+    so there is no path from it to the outside. Holes at least
+    max_area_sq_mi in size are left alone; a region that touches the
+    array edge is never a hole, whatever its size.
+
+    WHY THIS EXISTS. MTN OBSC re-applies the relief gate after the
+    neighborhood closing, so the closing cannot bridge a real valley
+    (pipeline/hazards/mtn_obsc.py). The same re-mask also punches out
+    every small valley floor INSIDE a mountain mass -- the Shenandoah,
+    the Mohawk, a hundred hollows in West Virginia -- and re-notches the
+    outline wherever one reaches the edge. Measured on the 13/03Z cycle:
+    137 enclosed gaps over the Appalachians, median 2 sq mi, largest
+    101, carrying more vertices in the GeoJSON than the outline itself. A
+    hand-drawn G-AIRMET never shows them, and downstream consumers choke
+    on the point count. Filling gaps smaller than the minimum polygon
+    area keeps the Central Valley (~20,000 sq mi) and Lake Superior
+    excluded while removing the Swiss cheese, with one threshold the
+    forecaster already understands: a gap smaller than what would count
+    as a polygon does not count as a gap either.
+
+    Done on the raster, before contouring, rather than by discarding
+    interior rings afterwards: the polygon, the weather-type attribution
+    (which rasterizes the polygon back onto the grids) and the export all
+    then agree about what is inside. It runs after the closing and the
+    re-mask, so the cells it adds are exactly the enclosed ones; the
+    caller pins their contour value the same way it pins closing-added
+    cells. The mountainous-area figure is deliberately NOT changed by
+    this -- a filled valley is inside the polygon but is still not
+    mountainous, and that figure reports land passing the relief gate.
+
+    Parameters
+    ----------
+    mask : 2D bool array
+    cell_areas : array broadcastable to mask.shape, square miles per cell
+        (cell_areas_sq_mi() gives one per row).
+    max_area_sq_mi : float
+        Holes strictly smaller than this are filled. 0 or less is a
+        no-op.
+    """
+    if max_area_sq_mi <= 0 or not mask.any():
+        return mask
+
+    labels, count = ndimage_label(~mask, structure=_FOUR_CONNECTED)
+    if count == 0:
+        return mask
+
+    # Anything touching the array edge is the outside, not a hole.
+    edge_labels = np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))
+    index = np.arange(1, count + 1)
+    areas = ndimage_sum_labels(np.broadcast_to(cell_areas, mask.shape), labels, index=index)
+
+    is_hole = np.ones(count + 1, dtype=bool)
+    is_hole[0] = False
+    is_hole[edge_labels] = False
+    fill = is_hole[1:] & (areas < max_area_sq_mi)
+    if not fill.any():
+        return mask
+
+    return mask | np.isin(labels, index[fill])
 
 
 def geodesic_area_sq_mi(polygon) -> float:
