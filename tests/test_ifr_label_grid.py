@@ -418,6 +418,12 @@ def test_closing_does_not_spill_across_the_artcc_boundary(monkeypatch):
             threshold_pct=50.0, neighborhood_radius_nm=100.0, min_area_sq_mi=3000.0,
         )
 
+    import pipeline.hazards.ifr as ifr_module
+
+    # THE CLOSING, on its own: with arc simplification off, the only
+    # thing that can reach past the line is the closing, and the bound is
+    # the corner artefact alone.
+    monkeypatch.setattr(ifr_module, "ARC_SIMPLIFY_TOLERANCE_DEG", 0.0)
     covered, worst_distance = _covered_outside_cells(run(), spec, shape, inside_artcc)
     print(f"\n[border] {covered} cells outside the boundary covered, worst {worst_distance:.1f} cells out")
 
@@ -426,6 +432,23 @@ def test_closing_does_not_spill_across_the_artcc_boundary(monkeypatch):
         "ARTCC boundary -- the closing is getting across the line, not just cutting a corner"
     )
     assert covered <= 5, f"{covered} cells outside the ARTCC boundary are covered; expected a corner sliver at most"
+
+    # THE SHIPPED OUTPUT: shared-arc simplification replaces runs of
+    # vertices with chords, and a chord across a concave stretch of the
+    # boundary can sit up to ARC_SIMPLIFY_TOLERANCE_DEG past the line.
+    # That is the tolerance's meaning, not a leak in the mask -- the same
+    # excursion happens on every edge, inward and outward -- so the bound
+    # here is the corner artefact plus the tolerance in cells. A change
+    # that let the closing itself across would fail the exact bound above.
+    monkeypatch.undo()
+    tolerance_cells = ifr_module.ARC_SIMPLIFY_TOLERANCE_DEG / spec.dx
+    covered, worst_distance = _covered_outside_cells(run(), spec, shape, inside_artcc)
+    print(f"[border] simplified: {covered} cells outside covered, worst {worst_distance:.1f} cells out "
+          f"(tolerance {tolerance_cells:.1f} cells)")
+    assert worst_distance <= 1.0 + tolerance_cells, (
+        f"a simplified polygon reaches {worst_distance:.1f} cells past the ARTCC boundary, more than the "
+        f"{tolerance_cells:.1f}-cell simplification tolerance can explain"
+    )
 
     # Control: without the coarse-grid mask (i.e. the fine-grid clip
     # alone, which is all v1 can manage), the majority reduce pulls in

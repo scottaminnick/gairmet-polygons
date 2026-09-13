@@ -42,13 +42,15 @@ from scripts.make_pgen_test import (
 # run 6-26 points per element, and v1's rings are already simplified, so
 # thinning them further costs nothing it hasn't already lost.
 #
-# NOT applied to label-grid output. There is no PGEN or NMAP2 vertex limit
-# -- confirmed with the forecaster; this number was an invented constraint
-# -- and Douglas-Peucker run per ring separates the boundaries adjacent
-# label-grid regions share, which is the one thing that polygonizer exists
-# to guarantee. See rings_are_disjoint_by_construction() for the full
-# reasoning, and pipeline.hazards.ifr.CONTOUR_RESOLUTION_DEG for what
-# governs vertex count on that path instead.
+# NOT applied to label-grid output. Douglas-Peucker run per ring separates
+# the boundaries adjacent label-grid regions share, which is the one thing
+# that polygonizer exists to guarantee. See
+# rings_are_disjoint_by_construction() for the full reasoning. Vertex
+# count on that path is governed upstream instead, by
+# pipeline.hazards.ifr.CONTOUR_RESOLUTION_DEG and the shared-arc
+# simplification behind ARC_SIMPLIFY_TOLERANCE_DEG, which thins rings
+# WITHOUT unsharing their edges -- the NMAP2 VG converter did turn out to
+# choke on several-hundred-vertex rings.
 PGEN_MAX_POINTS = 25
 
 

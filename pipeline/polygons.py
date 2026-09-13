@@ -316,6 +316,161 @@ def fill_enclosed_gaps(mask: np.ndarray, cell_areas: np.ndarray, max_area_sq_mi:
     return mask | np.isin(labels, index[fill])
 
 
+def _douglas_peucker(points: np.ndarray, tolerance: float) -> np.ndarray:
+    """
+    Douglas-Peucker on an open polyline, endpoints always kept. Returns
+    the retained points. Iterative rather than recursive so a long arc
+    cannot hit the recursion limit.
+    """
+    n = len(points)
+    if n <= 2:
+        return points
+    keep = np.zeros(n, dtype=bool)
+    keep[0] = keep[-1] = True
+    stack = [(0, n - 1)]
+    while stack:
+        a, b = stack.pop()
+        if b - a < 2:
+            continue
+        p, q = points[a], points[b]
+        segment = q - p
+        length_sq = float(segment @ segment)
+        middle = points[a + 1:b]
+        if length_sq == 0.0:
+            distances = np.linalg.norm(middle - p, axis=1)
+        else:
+            t = np.clip(((middle - p) @ segment) / length_sq, 0.0, 1.0)
+            distances = np.linalg.norm(middle - (p + t[:, None] * segment), axis=1)
+        i = int(np.argmax(distances))
+        if distances[i] > tolerance:
+            split = a + 1 + i
+            keep[split] = True
+            stack.append((a, split))
+            stack.append((split, b))
+    return points[keep]
+
+
+def simplify_shared_arcs(rings: list, tolerance_deg: float) -> list:
+    """
+    Simplify a set of rings that share edges EXACTLY, without unsharing
+    them: every boundary arc is simplified once and every ring that
+    contains it reuses the same result.
+
+    THE PROBLEM THIS SOLVES. IFR's label-grid polygonizer partitions the
+    raster, so two adjacent areas trace the same boundary vertex for
+    vertex -- the property that guarantees no overlaps in the export.
+    Simplifying each ring on its own (shapely's simplify, the PGEN
+    vertex budget) moves each ring's copy of that boundary independently
+    and the two areas come apart into slivers and overlaps. But marching
+    squares emits a staircase with a vertex at every cell step, so a
+    CONUS-scale area at the 0.1 deg contour grid carries several hundred
+    vertices, and the NMAP2 VG converter fell over on the count.
+
+    HOW. An "arc" is a maximal run of edges with the same set of owning
+    rings: the stretch where A meets the outside, where A meets B, and
+    so on. Its endpoints are the junctions where that set changes, and a
+    junction is by definition a vertex every neighbouring ring also
+    passes through, so keeping arc endpoints and simplifying the interior
+    keeps every ring consistent with its neighbours. Rings are then
+    rebuilt by concatenating their (simplified) arcs. Rings that share
+    nothing are split into two arcs at the vertex farthest from the
+    first, so Douglas-Peucker has two real endpoints to work between.
+
+    Exact sharing is required: edges are matched on coordinate equality,
+    which holds for label-grid output because both sides of a boundary
+    come from the same pixel_to_lonlat() calls. An edge that is shared
+    but not bit-identical simply becomes two arcs simplified separately,
+    which degrades to the per-ring behaviour for that stretch; the
+    caller's validity check is what catches the consequences.
+
+    Douglas-Peucker on an arc can, at a large enough tolerance, pinch a
+    narrow neck into a crossing. This function does not check for that
+    -- geometry validation needs shapely and belongs with the caller,
+    which retries at a smaller tolerance (see
+    pipeline.hazards.ifr.polygonize_ifr_grid_v2).
+
+    Parameters
+    ----------
+    rings : list of sequences of (lon, lat), each an unclosed ring
+        (first vertex not repeated at the end).
+    tolerance_deg : Douglas-Peucker tolerance in degrees; 0 returns the
+        rings unchanged.
+
+    Returns
+    -------
+    list of rings in the same order, each an unclosed list of (lon, lat)
+    tuples, at least 3 vertices long wherever the input was.
+    """
+    if tolerance_deg <= 0 or not rings:
+        return [[tuple(map(float, v)) for v in ring] for ring in rings]
+
+    clean = []
+    for ring in rings:
+        pts = [tuple(map(float, v)) for v in ring]
+        if len(pts) > 1 and pts[0] == pts[-1]:
+            pts = pts[:-1]
+        clean.append(pts)
+
+    def edge_key(a, b):
+        return (a, b) if a <= b else (b, a)
+
+    owners: dict = {}
+    for index, ring in enumerate(clean):
+        n = len(ring)
+        for i in range(n):
+            owners.setdefault(edge_key(ring[i], ring[(i + 1) % n]), set()).add(index)
+
+    arcs: dict = {}           # canonical arc key -> np.ndarray of its points
+    ring_arcs: list = []      # per ring: [(arc key, reversed?), ...]
+    for ring in clean:
+        n = len(ring)
+        if n < 3:
+            ring_arcs.append(None)
+            continue
+        owner_of_edge = [frozenset(owners[edge_key(ring[i], ring[(i + 1) % n])]) for i in range(n)]
+        # A junction is a vertex where the owner set of the edge coming
+        # in differs from the edge going out.
+        junctions = [i for i in range(n) if owner_of_edge[i - 1] != owner_of_edge[i]]
+        if len(junctions) < 2:
+            pts = np.asarray(ring, dtype=float)
+            start = junctions[0] if junctions else 0
+            far = int(np.argmax(((pts - pts[start]) ** 2).sum(axis=1)))
+            junctions = sorted({start, far}) if far != start else [start]
+        sequence = []
+        for k, start in enumerate(junctions):
+            end = junctions[(k + 1) % len(junctions)]
+            indices = [start]
+            i = start
+            while True:
+                i = (i + 1) % n
+                indices.append(i)
+                if i == end:
+                    break
+            coords = [ring[i] for i in indices]
+            forward = coords[0] <= coords[-1]
+            key = tuple(coords if forward else reversed(coords))
+            if key not in arcs:
+                arcs[key] = np.asarray(key, dtype=float)
+            sequence.append((key, not forward))
+        ring_arcs.append(sequence)
+
+    simplified = {key: _douglas_peucker(points, tolerance_deg) for key, points in arcs.items()}
+
+    result = []
+    for ring, sequence in zip(clean, ring_arcs):
+        if sequence is None:
+            result.append(ring)
+            continue
+        out: list = []
+        for key, reverse in sequence:
+            arc = simplified[key][::-1] if reverse else simplified[key]
+            out.extend(tuple(map(float, v)) for v in arc[:-1])   # next arc starts at this endpoint
+        # Degenerate collapse (a tiny ring reduced to its two junctions):
+        # keep the original rather than emit an invalid ring.
+        result.append(out if len(out) >= 3 else ring)
+    return result
+
+
 def geodesic_area_sq_mi(polygon) -> float:
     """
     True area of a shapely polygon on the Earth's surface, in square
