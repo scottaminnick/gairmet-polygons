@@ -161,7 +161,8 @@ def rings_are_disjoint_by_construction(hazard):
         the XML the vendor actually receives. There is no PGEN or NMAP2
         vertex limit to justify paying that -- the 25 was invented, and
         vertex count on this path is governed upstream by
-        pipeline.hazards.ifr.CONTOUR_RESOLUTION_DEG instead.
+        pipeline.hazards.ifr.CONTOUR_RESOLUTION_DEG and the shared-arc
+        simplification (ARC_SIMPLIFY_TOLERANCE_DEG) instead.
       - THE DISJOINTNESS CHECK RUNS. See
         pipeline.pgen_xml.assert_rings_disjoint().
 

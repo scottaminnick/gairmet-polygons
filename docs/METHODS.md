@@ -99,7 +99,7 @@ absorbed and does not need to be: neither neighbour ends up with a hole, so
 every region still contours to a single ring. Both cases are pinned in
 `tests/test_ifr_label_grid.py`.
 
-**Why nothing is smoothed or simplified afterwards:** adjacent regions
+**Why nothing is smoothed or simplified per polygon:** adjacent regions
 share their boundary exactly, because the 0.5 isoline between an A cell and
 a B cell is the same geometric line from either side. Per-polygon smoothing
 moves each polygon's copy of that shared edge independently, which is
@@ -108,6 +108,33 @@ precisely what would break it. `BOUNDARY_SMOOTHING_DEG` and
 `ADJACENT_REGION_EROSION_DEG` exists as an escape hatch (shrink each region
 by a hairline if some downstream tool ever rejects coincident vertices) and
 is deliberately 0.
+
+**Vertices are thinned by shared arc instead.** Marching squares emits a
+staircase — one vertex per coarse cell step of perimeter — so a
+CONUS-scale area still carried several hundred vertices at the 0.1°
+contour grid (484 across F03 and 1,064 across F09 on the 13/03Z cycle,
+largest ring 615), and the NMAP2 VG converter fell over on the count while
+MTN OBSC, thinned to 25 per ring on export, went through.
+`simplify_shared_arcs()` (pipeline/polygons.py) cuts every ring into arcs
+between junctions — the points where the set of neighbouring areas
+changes — simplifies each arc **once** with Douglas-Peucker, and rebuilds
+every ring from the same simplified arcs. Two areas that shared an edge
+still share it vertex for vertex, because both read the same arc. Arc
+endpoints are never moved, so three-way junctions stay points. A ring that
+shares nothing is split into two arcs at its farthest vertex so
+Douglas-Peucker has real endpoints.
+
+`ARC_SIMPLIFY_TOLERANCE_DEG` is 0.15° (~9 nm), chosen against the real
+cycle: F03 484 → 45 vertices, F09 1,064 → 85, largest ring 44 — in the
+6–26-point range of hand-drawn G-AIRMETs for the typical area. Set it to 0
+to disable. Because Douglas-Peucker can in principle pinch a narrow neck
+into a crossing, `_simplify_regions()` validates the result (every ring
+valid, pairwise disjoint interiors) and halves the tolerance on failure,
+falling back to the raw rings after `ARC_SIMPLIFY_RETRIES`. The invariant
+is therefore checked, not assumed; the export's own
+`assert_rings_disjoint()` still runs after it. Pinned in
+`tests/test_ifr_arc_simplify.py`, with per-ring Douglas-Peucker as the
+control that does unshare an edge.
 
 ### 2.3 Labels
 

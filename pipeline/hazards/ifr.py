@@ -153,6 +153,7 @@ from pipeline.polygons import (
     merge_nearby_polygons,
     polygons_to_feature_collection,
     rasterize_polygon_cells,
+    simplify_shared_arcs,
     smooth_polygon_boundary,
 )
 from pipeline.regrid import regrid_to_regular_latlon
@@ -307,6 +308,24 @@ CONTOUR_RESOLUTION_DEG = 0.1
 # them. Deliberately 0.0 (inert) until something proves it's needed --
 # a sliver is a real geometry defect of its own, just a less visible one.
 ADJACENT_REGION_EROSION_DEG = 0.0
+
+# Vertex reduction that KEEPS the shared boundaries. Marching squares on
+# the coarse grid emits a staircase -- one vertex per cell step of
+# perimeter -- so a CONUS-scale area carried several hundred vertices
+# (484 across F03 and 1,064 across F09 on the 13/03Z cycle, biggest ring
+# 615) and the NMAP2 VG converter fell over on the count. Per-ring
+# simplification was rightly ruled out above; this is arc-based instead:
+# every boundary arc between junctions is simplified ONCE and reused by
+# both rings that contain it (pipeline.polygons.simplify_shared_arcs), so
+# adjacent areas stay vertex-identical along their shared edge.
+#
+# 0.15 deg (~9 nm) was measured against the real cycle: F03 484 -> 43
+# vertices, F09 1,064 -> 85, biggest ring 44 -- in the range of a
+# hand-drawn G-AIRMET (6-26 points typical). Set to 0 to disable. The
+# result is validated (valid rings, pairwise disjoint) and the tolerance
+# halved on failure, so the no-overlap guarantee is checked, not assumed.
+ARC_SIMPLIFY_TOLERANCE_DEG = 0.15
+ARC_SIMPLIFY_RETRIES = 4
 
 # KM_PER_DEG_LAT / KM_PER_NM and the cell sizing and area helpers that use
 # them live in pipeline.polygons, shared with MTN OBSC.
@@ -1156,6 +1175,48 @@ def _contour_region(region_mask: np.ndarray, coarse_spec) -> list:
     return parts
 
 
+def _regions_are_sound(polygons: list) -> bool:
+    """
+    The two things simplification must not break: every ring is a valid
+    simple polygon, and no two share interior area. Rings that share an
+    EDGE intersect in zero area and are fine -- that is the point. The
+    tolerance is floating-point dust on those shared edges, not licence
+    for a real overlap (1e-9 sq deg is around 10 square metres).
+    """
+    if any(not p.is_valid or p.is_empty for p in polygons):
+        return False
+    for i in range(len(polygons)):
+        for j in range(i + 1, len(polygons)):
+            a, b = polygons[i], polygons[j]
+            if not a.envelope.intersects(b.envelope):
+                continue
+            if a.intersection(b).area > 1e-9:
+                return False
+    return True
+
+
+def _simplify_regions(polygons: list, tolerance_deg: float) -> list:
+    """
+    Shared-arc simplification of the contoured regions, with the
+    tolerance halved on any validity or overlap failure and the original
+    rings returned if it never succeeds. See ARC_SIMPLIFY_TOLERANCE_DEG.
+
+    Interior rings cannot occur here (_contour_region raises on them),
+    so only exteriors are handled.
+    """
+    if tolerance_deg <= 0 or not polygons:
+        return polygons
+
+    rings = [list(p.exterior.coords)[:-1] for p in polygons]
+    tolerance = tolerance_deg
+    for _attempt in range(ARC_SIMPLIFY_RETRIES + 1):
+        simplified = [ShapelyPolygon(ring) for ring in simplify_shared_arcs(rings, tolerance)]
+        if _regions_are_sound(simplified):
+            return simplified
+        tolerance /= 2.0
+    return polygons
+
+
 def polygonize_ifr_grid_v2(
     ceil_grid: np.ndarray,
     vis3_grid: np.ndarray,
@@ -1197,11 +1258,16 @@ def polygonize_ifr_grid_v2(
       5. One contour per region, traced from a coarsened copy of the
          region grid. Adjacent regions share boundary vertices exactly,
          because the 0.5 isoline between an A cell and a B cell is the
-         same line from either side. NOTHING is smoothed or simplified
-         afterwards: per-polygon smoothing moves each polygon's copy of
-         a shared edge independently and is precisely what would break
-         that. (BOUNDARY_SMOOTHING_DEG and FINAL_SIMPLIFY_TOLERANCE_DEG
-         are v1-only for this reason.)
+         same line from either side. Nothing is smoothed or simplified
+         PER POLYGON: that moves each polygon's copy of a shared edge
+         independently and is precisely what would break the guarantee
+         (BOUNDARY_SMOOTHING_DEG and FINAL_SIMPLIFY_TOLERANCE_DEG are
+         v1-only for this reason).
+      6. Shared-arc simplification -- _simplify_regions(). Boundary
+         arcs between junctions are thinned once and reused by every
+         ring that contains them, so the staircase goes away and the
+         shared edges stay shared. Validated, with the tolerance backed
+         off on any failure.
 
     Parameters are identical to polygonize_ifr_grid()'s -- see there.
     """
@@ -1334,6 +1400,8 @@ def polygonize_ifr_grid_v2(
         for part in _contour_region(coarse_ids == region_id, coarse_spec):
             polygons.append(part)
             per_polygon_properties.append(dict(properties))
+
+    polygons = _simplify_regions(polygons, ARC_SIMPLIFY_TOLERANCE_DEG)
 
     return _ifr_feature_collection(
         polygons, per_polygon_properties, date, fxx,
