@@ -224,6 +224,7 @@ from pipeline.polygons import (
     cell_areas_sq_mi,
     cell_dimensions_km,
     close_mask,
+    fill_enclosed_gaps,
     filter_polygons_by_area,
     grid_to_polygons,
     merge_nearby_polygons,
@@ -854,11 +855,26 @@ def polygonize_mtn_obsc_grid(
         closed &= within_conus_mask
         closed &= mountainous_mask
 
-        # Cells the closing ADDED were below threshold by definition, so
-        # their real probability cannot carry them past the contour
-        # level. Pin them to a saturated value: the closing has already
-        # decided they are in, and the contour's remaining job is to
-        # place the edge. Pinning just above the threshold instead would
+        # FILL THE SMALL VALLEYS THE RE-MASK JUST PUNCHED OUT. The
+        # mountainous re-mask above is right at the scale of the Central
+        # Valley and wrong at the scale of the Shenandoah: inside a
+        # mountain mass it excludes every valley floor under the relief
+        # threshold, leaving the polygon full of holes that no hand-drawn
+        # G-AIRMET would show and that downstream converters cannot
+        # digest. Enclosed gaps smaller than the minimum polygon area are
+        # filled back in -- the same number, on the grounds that a gap
+        # too small to be a polygon is too small to be a gap. Gaps that
+        # reach the outside (bays in the outline) and gaps at or above
+        # that area (real valleys, big lakes) are untouched. After the
+        # re-mask, not before it, so it can only re-admit ground that is
+        # surrounded by hazard on every side. See fill_enclosed_gaps().
+        closed = fill_enclosed_gaps(closed, cell_areas_sq_mi(grid_spec, closed.shape), min_area_sq_mi)
+
+        # Cells the closing (or the gap fill) ADDED were below threshold
+        # by definition, so their real probability cannot carry them past
+        # the contour level. Pin them to a saturated value: the closing
+        # has already decided they are in, and the contour's remaining
+        # job is to place the edge. Pinning just above the threshold instead would
         # put the isoline almost exactly on the added cell's centre --
         # eroding the closed area by half a cell -- because the contour
         # interpolates between LAYER_OFF and the cell's value.
