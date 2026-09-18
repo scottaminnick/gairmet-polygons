@@ -1,10 +1,13 @@
-# Fetch Terrain Grid dependencies -- what .github/workflows/fetch_terrain.yml
-# installs to run pipeline/fetch_terrain.py.
+# Dependencies for .github/workflows/fetch_terrain.yml (pipeline/fetch_terrain.py)
+# and .github/workflows/terrain_radius_sweep.yml (pipeline/fetch_terrain.py AND
+# scripts/mtn_obsc_area_sweep.py -- the sweep workflow installs this same file
+# for both).
 #
-# Deliberately much lighter than requirements-pipeline.txt: the terrain
-# fetch touches no NBM data, so none of the GRIB2 stack (herbie/xarray/
-# cfgrib/pandas) is needed, and that job downloads 1,708 tiles before it
-# does anything else -- paying an unnecessary install cost on every run.
+# Deliberately much lighter than requirements-pipeline.txt: neither script
+# touches NBM data, so none of the GRIB2 stack (herbie/xarray/cfgrib/pandas)
+# is needed. That matters most for fetch_terrain.yml, which downloads 1,708
+# tiles before it does anything else -- paying an unnecessary install cost
+# on every run.
 #
 # This file exists because the list used to be inline in the workflow
 # (`pip install requests numpy scipy affine`) with nothing checking it.
@@ -12,7 +15,7 @@
 # pipeline.boundaries -> pipeline.polygons, the job began needing shapely
 # and scikit-image, nobody updated the inline list, and the run died with
 # ModuleNotFoundError AFTER downloading all 1,708 tiles.
-# tests/test_workflow_dependencies.py now pins this file against what the
+# tests/test_workflow_dependencies.py now pins this file against what each
 # entry point actually imports.
 
 requests        # tile downloads (imported lazily inside the fetch functions)
@@ -27,8 +30,22 @@ affine          # pipeline.grid_spec.GridSpec.to_affine()
 shapely
 scikit-image
 
-# NOT here, deliberately: geojson and pyproj. pipeline/polygons.py imports
-# both lazily, inside the functions that wrap or measure finished polygons
-# -- strictly hazard-output work, downstream of anything terrain does. If
-# either becomes a module-level import there again, this job breaks; see
-# that file's note and the test above.
+# pyproj and geojson are NOT needed by pipeline/fetch_terrain.py itself --
+# pipeline/polygons.py imports both lazily, inside the functions that wrap
+# or measure finished polygons, strictly hazard-output work downstream of
+# anything terrain does (see that file's note, and
+# test_the_terrain_job_does_not_quietly_acquire_the_hazard_output_stack
+# above, which still guards fetch_terrain.py specifically). But
+# scripts/mtn_obsc_area_sweep.py -- the other entry point this file now
+# serves -- calls pipeline.hazards.mtn_obsc.polygonize_mtn_obsc_grid
+# unconditionally, which reaches both of those lazy imports on every run
+# that produces at least one polygon (filter_polygons_by_area's geodesic
+# area calc needs pyproj; polygons_to_feature_collection needs geojson).
+# Both hops are function-level imports inside a NON-entry-point file
+# (pipeline/polygons.py), which is exactly the shape of import
+# tests/test_workflow_dependencies.py's static walker cannot see --
+# confirmed missing only by actually running the sweep script, not by
+# that test. Keep both declared here for that script's sake even though
+# fetch_terrain.py never touches them.
+pyproj
+geojson
