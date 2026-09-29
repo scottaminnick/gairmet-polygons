@@ -56,11 +56,11 @@ addBasemap();
 // can never paint over a polygon. pointer-events are off so it never
 // swallows a click meant for a polygon popup.
 //
-// The relief is light-toned grayscale, which washes out on a dark base if
-// simply laid on top. The pane's CSS blend mode (style.css, .terrain-pane
-// rule) lets the base show through and adds only the light/shadow
-// texture. If it looks too faint or too harsh, tune TERRAIN_OPACITY here
-// first, then the blend mode in the CSS.
+// Drawn with plain alpha blending at TERRAIN_OPACITY. Do not add a CSS
+// blend mode such as overlay/soft-light/multiply: on this near-black
+// basemap they multiply the relief away to nothing (see the .terrain-pane
+// comment in style.css). If the relief is too faint, raise the opacity;
+// if flat terrain reads as a gray haze, lower it.
 const TERRAIN_OPACITY = 0.35;
 map.createPane('terrain');
 map.getPane('terrain').style.zIndex = 250;
