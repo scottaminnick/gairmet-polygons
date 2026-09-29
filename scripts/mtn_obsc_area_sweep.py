@@ -101,7 +101,15 @@ def main():
                              "probability field, which fragments the areas the way a real "
                              "morning does and is where the small-polygon population shows up")
     parser.add_argument("--seed", type=int, default=20260814)
+    parser.add_argument("--tsv", action="store_true",
+                        help="--sweep relief only: emit tab-separated 'TSV\\t...' rows instead "
+                             "of the formatted table, one per relief threshold, reporting BOTH "
+                             "an unfiltered view (no min-area filter) and the filtered view at "
+                             "--min-area-sq-mi -- for a caller that wants the numbers rather "
+                             "than a table to scrape")
     args = parser.parse_args()
+    if args.tsv and args.sweep != "relief":
+        raise SystemExit("--tsv is only implemented for --sweep relief")
 
     if not Path(args.terrain).exists():
         raise SystemExit(f"terrain grid not found: {args.terrain}")
@@ -158,6 +166,50 @@ def main():
             reverse=True,
         )
         return polygon_areas, fc.get("mountainous_area_sq_mi")
+
+    if args.sweep == "relief" and args.tsv:
+        # Two full polygonizations per relief threshold, deliberately: the
+        # min-area filter (and, at USE_RASTER_CLOSING_MTNOBSC's default,
+        # the enclosed-gap fill it also feeds) changes the polygon set
+        # itself, not just which polygons survive a post-hoc filter -- so
+        # "unfiltered" has to be a real run at min_area=0, not a re-filter
+        # of the run at args.min_area_sq_mi. mask_area, % CONUS and %
+        # legacy are identical between the two calls (measured before
+        # either the closing or the filter), so they're taken from
+        # whichever call runs first.
+        tsv_header = [
+            "relief_ft", "mountainous_sq_mi", "pct_conus", "pct_legacy",
+            "unfiltered_components", "unfiltered_median_sq_mi", "unfiltered_largest_sq_mi",
+            "unfiltered_largest_over_total",
+            "filtered_components", "filtered_total_sq_mi", "filtered_median_sq_mi",
+            "filtered_largest_sq_mi", "filtered_largest_over_total",
+        ]
+        print("TSV\t" + "\t".join(tsv_header))
+
+        def view_stats(areas):
+            """(n, total, median, largest, largest/total), all 0 if empty."""
+            if not areas:
+                return 0, 0.0, 0.0, 0.0, 0.0
+            total = sum(areas)
+            largest = max(areas)
+            median = float(np.median(areas))
+            return len(areas), total, median, largest, (largest / total if total else 0.0)
+
+        for relief_ft in sorted(args.relief_ft):
+            unfiltered, mask_area = run(relief_ft, 0.0)
+            filtered, _ = run(relief_ft, args.min_area_sq_mi)
+            pct_conus = 100 * mask_area / CONUS_LAND_SQ_MI if mask_area is not None else 0.0
+            pct_legacy = 100 * mask_area / LEGACY_MTNOBSC_SQ_MI if mask_area is not None else 0.0
+
+            u_n, _u_total, u_median, u_largest, u_ratio = view_stats(unfiltered)
+            f_n, f_total, f_median, f_largest, f_ratio = view_stats(filtered)
+            row = [
+                relief_ft, mask_area if mask_area is not None else 0.0, pct_conus, pct_legacy,
+                u_n, u_median, u_largest, u_ratio,
+                f_n, f_total, f_median, f_largest, f_ratio,
+            ]
+            print("TSV\t" + "\t".join(str(v) for v in row))
+        return
 
     if args.sweep == "relief":
         # No shortcut here, unlike the area sweep below: relief changes the

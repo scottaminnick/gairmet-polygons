@@ -108,6 +108,16 @@ WORKFLOWS = {
     # pipeline dependencies lazily, which is why tests.yml also imports
     # them explicitly.
     "webapp/main.py": "requirements.txt",
+    # .github/workflows/terrain_radius_sweep.yml installs the same file as
+    # fetch_terrain.yml for this entry point. This walker cannot see the
+    # reason it also needs pyproj and geojson -- both are reached only
+    # through pipeline.polygons.filter_polygons_by_area /
+    # polygons_to_feature_collection's own function-level imports, which
+    # are invisible to a walker that only follows module-scope imports
+    # past the entry point itself (see _reachable_third_party's
+    # docstring). Confirmed by actually running the script; see
+    # requirements-terrain.txt's own comment on this entry.
+    "scripts/mtn_obsc_area_sweep.py": "requirements-terrain.txt",
 }
 
 
@@ -393,6 +403,34 @@ def test_no_workflow_interpolates_an_expression_into_a_shell_script():
         + "\n".join(offenders)
         + "\nMove each one into the step's `env:` and reference it as a shell variable."
     )
+
+
+def test_the_terrain_radius_sweep_workflow_never_gains_write_permission():
+    """
+    terrain_radius_sweep.yml exists specifically so comparing
+    TERRAIN_RADIUS_NM values never touches data/terrain/terrain_grid.npz
+    on main (which the webapp reads live), never costs a Railway
+    redeploy, and never adds a binary commit to history -- see its own
+    header comment. contents: write would turn "an accidental `git push`
+    added to this workflow later" from a loud failure into a silent
+    success; contents: read is what keeps that failure loud.
+    """
+    import yaml
+
+    workflow = WORKFLOW_DIR / "terrain_radius_sweep.yml"
+    spec = yaml.safe_load(workflow.read_text())
+    assert spec.get("permissions") == {"contents": "read"}, (
+        f"{workflow.name} must declare permissions: contents: read and nothing more -- "
+        f"got {spec.get('permissions')!r}"
+    )
+
+    for job_name, job in (spec.get("jobs") or {}).items():
+        for step in job.get("steps") or []:
+            for keyword in ("git add", "git commit", "git push"):
+                assert keyword not in step.get("run", ""), (
+                    f"{workflow.name} job {job_name!r} step {step.get('name', '<unnamed>')!r} "
+                    f"runs {keyword!r} -- this workflow must never write to git"
+                )
 
 
 def test_the_railway_dispatcher_is_not_run_by_any_workflow():

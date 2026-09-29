@@ -1,0 +1,127 @@
+name: Terrain Radius Sweep (Mountain Obscuration)
+
+# MANUAL, READ-ONLY COMPARISON ACROSS TERRAIN_RADIUS_NM VALUES.
+#
+# TERRAIN_RADIUS_NM is baked into ridge_elevation_ft at FETCH time (see
+# pipeline/fetch_terrain.py's module docstring), not applied live the way
+# IFR's neighborhood_radius_nm is. That means dispatching
+# fetch_terrain.yml once per candidate radius would, per run: overwrite
+# data/terrain/terrain_grid.npz on main -- the file webapp/main.py reads
+# live -- trigger a Railway redeploy, and add a ~3.4 MB binary commit to
+# git history that doesn't delta-compress (see that file's own history
+# note on how the repo reached 2.2 GB this way once already).
+#
+# This workflow answers "which radius?" without paying any of that: every
+# candidate grid is built into $RUNNER_TEMP, compared, and thrown away
+# when the runner is. It never writes into data/terrain/, never commits,
+# and never pushes -- contents: read below is not a formality, it is the
+# thing that makes an accidental `git push` here fail loudly instead of
+# quietly landing on main.
+on:
+  workflow_dispatch:
+    inputs:
+      radii_nm:
+        description: "Space-separated TERRAIN_RADIUS_NM values to compare (nm)"
+        required: false
+        default: "6 8 10 12"
+      relief_ft:
+        description: "Space-separated MOUNTAINOUS_RELIEF_THRESHOLD_FT values for the relief sweep run at each radius (ft)"
+        required: false
+        default: "500 1000 1500 2000"
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    # Generous for the same reason fetch_terrain.yml's own timeout is:
+    # a cold mosaic cache means downloading ~1,708 tiles from S3 before
+    # any radius can be tried at all. Once that checkpoint is warm, each
+    # radius is a few minutes of array work (--stage grids) plus two
+    # polygonizations per relief threshold (see
+    # scripts/mtn_obsc_area_sweep.py's --tsv branch) -- no further
+    # network access.
+    timeout-minutes: 120
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Same file fetch_terrain.yml uses, for the same two entry points
+      # this job runs (pipeline/fetch_terrain.py and, new here,
+      # scripts/mtn_obsc_area_sweep.py) -- see requirements-terrain.txt's
+      # own header for why the sweep script also needs pyproj/geojson
+      # that fetch_terrain.py itself never touches.
+      - name: Install dependencies
+        run: pip install -r requirements-terrain.txt
+
+      # Identical checkpoint steps to fetch_terrain.yml, and the same
+      # key (terrain-mosaic-v1) deliberately -- reusing that job's
+      # checkpoint means a sweep run right after a real terrain fetch
+      # costs nothing extra to assemble the mosaic. See that workflow's
+      # own comments for why restore/save (not the plain cache action)
+      # and why the key is coarse.
+      - name: Restore mosaic checkpoint
+        id: mosaic-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data/terrain/mosaic_cache.npz
+          key: terrain-mosaic-v1
+
+      - name: Assemble mosaic (downloads tiles only if the checkpoint missed)
+        run: python3 pipeline/fetch_terrain.py --stage mosaic
+
+      - name: Save mosaic checkpoint
+        if: always() && steps.mosaic-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: data/terrain/mosaic_cache.npz
+          key: terrain-mosaic-v1
+
+      # THE SWEEP ITSELF. Through env: rather than interpolated into the
+      # run: script below, same reasoning as fetch_terrain.yml's commit
+      # step: a ${{ ... }} expansion is substituted before bash sees it,
+      # so a workflow_dispatch input containing a quote and a $(...)
+      # would run as shell. tests/test_workflow_dependencies.py's
+      # test_no_workflow_interpolates_an_expression_into_a_shell_script
+      # checks every workflow's run: blocks for this.
+      #
+      # .github/scripts/terrain_radius_sweep.py does the real work: a
+      # FRESH `python3 pipeline/fetch_terrain.py` subprocess per radius
+      # (never in-process -- see that script's module docstring for why:
+      # TERRAIN_RADIUS_NM is read into a module-level constant at import
+      # time, so reusing one process across radii would silently reuse
+      # whichever radius came first), each writing to
+      # $RUNNER_TEMP/terrain_r<R>.npz and NEVER to data/terrain/; then
+      # scripts/mtn_obsc_area_sweep.py --tsv against that grid; then a
+      # check that the grid's own printed terrain_radius_nm matches the
+      # radius requested, failing the job on a mismatch (the one thing
+      # that would mean the env var silently didn't take effect); then a
+      # combined radius x relief table written to $GITHUB_STEP_SUMMARY,
+      # including a report (not a gate) on how the 12 nm row compares to
+      # the 2026-09-11 sweep of this same cached grid.
+      - name: Run radius x relief sweep
+        env:
+          RADII_NM: ${{ github.event.inputs.radii_nm || '6 8 10 12' }}
+          RELIEF_FT: ${{ github.event.inputs.relief_ft || '500 1000 1500 2000' }}
+        run: python3 .github/scripts/terrain_radius_sweep.py
+
+      # Artifacts, not git -- this is what "compare without touching
+      # production" means in practice. Includes the scratch .npz grids
+      # (one per radius) alongside each radius's raw sweep output, so a
+      # number in the summary table can be traced back to the exact
+      # terrain grid and full (non-TSV-filtered) text it came from.
+      - name: Upload sweep output and scratch terrain grids
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terrain-radius-sweep
+          path: |
+            ${{ runner.temp }}/terrain_r*.npz
+            ${{ runner.temp }}/sweep_output/
+          if-no-files-found: warn
