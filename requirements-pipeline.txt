@@ -20,6 +20,7 @@ xarray
 cfgrib
 pyproj          # regrid.py: reprojecting NBM's native grid; polygons.py: true geodesic area calculation
 scipy           # regrid.py: griddata interpolation; smoothing.py: neighborhood-max + Gaussian filters
+eccodeslib==2.48.2.27   # 2.48.3.28 crashes at exit (double free) -- pinned to last good
 
 # --- Terrain/DEM handling (for Mountain Obscuration) will add here:
 # elevation         # or similar DEM-fetching package, TBD -- pending
