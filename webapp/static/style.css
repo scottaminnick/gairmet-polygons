@@ -731,15 +731,14 @@ html, body {
   border: 1px solid var(--accent-states);
 }
 
-/* The USGS shaded relief is light-toned grayscale. Laid straight over the
-   dark basemap it would wash the map out to gray, so the pane blends with
-   what is underneath: "overlay" leaves the base showing and adds the
-   light/shadow texture of the ridges. Alternatives to try if it looks
-   wrong on a real screen: soft-light (subtler), multiply (shadows only,
-   darker), hard-light (punchier). Opacity is TERRAIN_OPACITY in map.js. */
-.terrain-pane {
-  mix-blend-mode: overlay;
-}
+/* Terrain pane: deliberately NO mix-blend-mode. An earlier version used
+   "overlay", which made the relief invisible on this basemap: overlay
+   MULTIPLIES wherever the layer underneath is darker than 50%, and CARTO
+   Dark Matter is ~5% brightness, so the hillshade was multiplied down to
+   near-black (measured: typical pixel 14 -> 17 of 255). soft-light and
+   multiply fail the same way on a dark base. Plain alpha blending at
+   TERRAIN_OPACITY (map.js) is what actually shows ridges here; tune the
+   opacity, not the blend mode. */
 
 .layer-toggle-disabled {
   opacity: 0.4;
