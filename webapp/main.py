@@ -42,6 +42,7 @@ an explanation from artifacts.not_loaded_detail() rather than a bare
 """
 
 import json
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -737,6 +738,28 @@ def data_status():
     failed but we're still serving the previous good cycle".
     """
     return artifacts.status()
+
+
+@app.get("/api/config")
+def client_config():
+    """
+    Runtime settings the browser needs but that must not live in the
+    (public) git repo. Today that is one thing: the CARTO Basemaps key.
+
+    CARTO's raster tiles require a key, and a tile URL cannot hide one --
+    the browser has to send it, so anyone with dev tools can read it. What
+    this endpoint buys is keeping it OUT OF GIT HISTORY: it is set as
+    CARTO_API_KEY in the Railway service variables and read here at
+    request time. The real protection against someone copying it is the
+    host restriction set on the key in CARTO's Basemaps dashboard.
+
+    Empty string when unset (local dev, or a deploy that forgot the
+    variable); map.js then falls back to the keyless URL, which still
+    works but is watermarked "API KEY REQUIRED", and says so on the
+    console. /api/* is already no-store via the middleware above, so a
+    rotated key is picked up on the next page load.
+    """
+    return {"carto_key": os.environ.get("CARTO_API_KEY", "").strip()}
 
 
 # Mounted LAST and at the root path, so the explicit routes above always
