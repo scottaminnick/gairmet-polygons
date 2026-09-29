@@ -724,6 +724,23 @@ html, body {
   border: 1.5px dashed var(--accent-legacy);
 }
 
+/* Terrain (hillshade) overlay: a light-to-dark ramp, the one swatch that
+   suggests relief rather than an outline or a hazard fill. */
+.swatch-terrain {
+  background: linear-gradient(135deg, #d9dde6 0%, #7c8497 55%, #2b3040 100%);
+  border: 1px solid var(--accent-states);
+}
+
+/* The USGS shaded relief is light-toned grayscale. Laid straight over the
+   dark basemap it would wash the map out to gray, so the pane blends with
+   what is underneath: "overlay" leaves the base showing and adds the
+   light/shadow texture of the ridges. Alternatives to try if it looks
+   wrong on a real screen: soft-light (subtler), multiply (shadows only,
+   darker), hard-light (punchier). Opacity is TERRAIN_OPACITY in map.js. */
+.terrain-pane {
+  mix-blend-mode: overlay;
+}
+
 .layer-toggle-disabled {
   opacity: 0.4;
   cursor: not-allowed;
