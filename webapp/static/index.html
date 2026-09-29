@@ -245,6 +245,14 @@
         <span class="swatch swatch-legacy"></span>
         <span class="mono">LEGACY MTN OBSC</span>
       </label>
+      <!-- Context layer, off by default: USGS shaded relief under the
+           hazard polygons, for judging MTN OBSC areas against the actual
+           ridges. Display only; feeds nothing. -->
+      <label class="layer-row layer-row-static layer-toggle">
+        <input type="checkbox" id="toggle-terrain" />
+        <span class="swatch swatch-terrain"></span>
+        <span class="mono">TERRAIN (HILLSHADE)</span>
+      </label>
       <!-- Shown only when the loaded file has features without a `name`
            property. That used to fail silently: the areas still drew, but
            every tooltip fell back to "legacy area" and the Central Valley
