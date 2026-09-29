@@ -10,12 +10,82 @@ const map = L.map('map', {
   attributionControl: true,
 }).setView([39.5, -98.5], 4.4); // roughly centers on CONUS
 
-// Dark basemap to match the console theme (CARTO's "Dark Matter" tiles).
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-  subdomains: 'abcd',
-  maxZoom: 19,
-}).addTo(map);
+// --- Basemap: CARTO "Dark Matter" raster tiles -------------------------
+// CARTO now requires a key on raster tiles; without one every tile is
+// stamped "API KEY REQUIRED". The key is NOT in this file (this repo is
+// public): the server hands it over from the CARTO_API_KEY environment
+// variable via /api/config. See webapp/main.py.
+//
+// The URL format changed with the key requirement: one host (no {s}
+// subdomains) under /rastertiles/, key as a ?key= query parameter. The
+// old {r} retina suffix is dropped until CARTO documents how it combines
+// with a key.
+const CARTO_TILE_URL =
+  'https://basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png';
+const CARTO_ATTRIBUTION =
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
+
+async function addBasemap() {
+  let key = '';
+  try {
+    const resp = await fetch('/api/config');
+    if (resp.ok) key = ((await resp.json()).carto_key || '').trim();
+  } catch (err) {
+    console.warn('Could not read /api/config for the CARTO key:', err);
+  }
+  if (!key) {
+    console.warn(
+      'No CARTO key configured (set CARTO_API_KEY on the server). ' +
+      'Tiles will load but carry an "API KEY REQUIRED" watermark.'
+    );
+  }
+  L.tileLayer(key ? `${CARTO_TILE_URL}?key=${encodeURIComponent(key)}` : CARTO_TILE_URL, {
+    attribution: CARTO_ATTRIBUTION,
+    maxZoom: 19,
+  }).addTo(map);
+}
+addBasemap();
+
+// --- Terrain (hillshade) overlay ------------------------------------
+// USGS The National Map shaded relief: public data, no key. Off by
+// default; the TERRAIN checkbox in the Layers panel toggles it.
+//
+// It lives in its own pane so the draw order is explicit rather than an
+// accident of add order: base tiles (tilePane, z 200) < terrain (250) <
+// hazard polygons and boundaries (overlayPane, z 400). Terrain therefore
+// can never paint over a polygon. pointer-events are off so it never
+// swallows a click meant for a polygon popup.
+//
+// The relief is light-toned grayscale, which washes out on a dark base if
+// simply laid on top. The pane's CSS blend mode (style.css, .terrain-pane
+// rule) lets the base show through and adds only the light/shadow
+// texture. If it looks too faint or too harsh, tune TERRAIN_OPACITY here
+// first, then the blend mode in the CSS.
+const TERRAIN_OPACITY = 0.35;
+map.createPane('terrain');
+map.getPane('terrain').style.zIndex = 250;
+map.getPane('terrain').style.pointerEvents = 'none';
+map.getPane('terrain').classList.add('terrain-pane');
+
+// Note the tile order in this URL is {z}/{y}/{x} (row before column), the
+// ArcGIS convention -- not the {z}/{x}/{y} used by CARTO.
+const terrainLayer = L.tileLayer(
+  'https://basemap.nationalmap.gov/arcgis/rest/services/USGSShadedReliefOnly/MapServer/tile/{z}/{y}/{x}',
+  {
+    pane: 'terrain',
+    opacity: TERRAIN_OPACITY,
+    maxZoom: 19,
+    attribution: 'Terrain: <a href="https://www.usgs.gov/programs/national-geospatial-program/national-map">USGS The National Map</a> (3DEP, GMTED2010)',
+  }
+);
+// A blocked or unreachable USGS server should not fail silently: the
+// checkbox would appear to work while nothing draws. Warn once.
+let terrainErrorWarned = false;
+terrainLayer.on('tileerror', () => {
+  if (terrainErrorWarned) return;
+  terrainErrorWarned = true;
+  console.warn('USGS shaded relief tiles failed to load (network block or service outage).');
+});
 
 const layers = {
   ifr: L.geoJSON(null, {
@@ -154,6 +224,13 @@ document.getElementById('toggle-artcc').addEventListener('change', (e) => {
 document.getElementById('toggle-legacy-mtnobsc').addEventListener('change', (e) => {
   if (e.target.checked) map.addLayer(layers.legacyMtnObsc);
   else map.removeLayer(layers.legacyMtnObsc);
+});
+
+// Off by default -- a context layer for judging MTN OBSC areas against
+// ridges, not part of the normal view.
+document.getElementById('toggle-terrain').addEventListener('change', (e) => {
+  if (e.target.checked) map.addLayer(terrainLayer);
+  else map.removeLayer(terrainLayer);
 });
 
 document.getElementById('toggle-mtn').addEventListener('change', (e) => {
