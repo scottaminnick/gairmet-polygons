@@ -421,31 +421,27 @@ HAZARD_PANELS.forEach((panel) => {
 // Default state on load: everything collapsed.
 HAZARD_PANELS.forEach((panel) => setHazardExpanded(panel, false));
 
-// --- WHOLE-RAIL COLLAPSE ---
-//     Collapses to a narrow icon strip so the map can go full width.
-//     Session-only by design: this environment has no localStorage, so
-//     the state lives in the DOM for as long as the page does and a
-//     reload comes back expanded.
+// --- WHOLE-RAIL MINIMIZE ---
+//     Minimizing folds the rail upward until only the LAYERS title bar is
+//     left (CSS does the hiding, keyed off .rail-is-collapsed), so the
+//     map gets its space back but the way to restore the panels never
+//     leaves the screen. Session-only by design: this environment has no
+//     localStorage, so the state lives in the DOM for as long as the page
+//     does and a reload comes back expanded.
 function setRailCollapsed(collapsed) {
-  const panels = document.getElementById('rail-panels');
-  const strip = document.getElementById('rail-strip');
-  if (!panels || !strip) return;
-  panels.hidden = collapsed;
-  strip.hidden = !collapsed;
-  document.getElementById('right-rail').classList.toggle('rail-is-collapsed', collapsed);
+  const rail = document.getElementById('right-rail');
+  const button = document.getElementById('rail-collapse');
+  if (!rail || !button) return;
+  rail.classList.toggle('rail-is-collapsed', collapsed);
+  button.setAttribute('aria-expanded', String(!collapsed));
+  button.innerHTML = collapsed ? '&#9660;' : '&#9650;';
+  const label = collapsed ? 'Show panels' : 'Minimize panels';
+  button.title = label;
+  button.setAttribute('aria-label', label);
 }
 
-document.getElementById('rail-collapse').addEventListener('click', () => setRailCollapsed(true));
-document.getElementById('rail-expand').addEventListener('click', () => setRailCollapsed(false));
-
-// The strip's icons re-open the rail and scroll the panel they name into
-// view -- with seven hazards the rail may well be taller than the window.
-document.querySelectorAll('.rail-icon').forEach((button) => {
-  button.addEventListener('click', () => {
-    setRailCollapsed(false);
-    const target = document.getElementById(button.dataset.scrollTo);
-    if (target) target.scrollIntoView({ block: 'nearest' });
-  });
+document.getElementById('rail-collapse').addEventListener('click', () => {
+  setRailCollapsed(!document.getElementById('right-rail').classList.contains('rail-is-collapsed'));
 });
 
 setRailCollapsed(false);

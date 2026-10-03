@@ -677,7 +677,8 @@ isn't built, GENERATE exports the hour on screen and PGEN covers all five,
 exactly as they did before. A control that silently ignored its own state
 would be worse than one that says it isn't ready.
 
-The whole rail collapses to an icon strip. That state is **session-only
+The whole rail minimizes upward (▲/▼ in the LAYERS title bar) until only that
+title bar remains, so the way back is always on screen. That state is **session-only
 and lives in the DOM** — this environment has no `localStorage`, so a
 reload comes back expanded, deliberately.
 
