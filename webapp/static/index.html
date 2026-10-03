@@ -37,18 +37,13 @@
      docs/METHODS.md section 9. -->
 <div class="panel-stack panel-stack-top-right" id="right-rail">
 
-  <!-- Collapsed, this strip is all that remains of the rail. -->
-  <div class="rail-strip" id="rail-strip" hidden>
-    <button type="button" class="rail-btn" id="rail-expand" title="Show panels" aria-label="Show panels">&#9668;</button>
-    <button type="button" class="rail-btn rail-icon" data-scroll-to="layers-panel" title="Layers">&#9776;</button>
-    <button type="button" class="rail-btn rail-icon" data-scroll-to="export-panel" title="Export">&#8595;</button>
-  </div>
-
   <div class="rail-panels" id="rail-panels">
     <div class="panel" id="layers-panel">
       <div class="panel-title">
-        LAYERS
-        <button type="button" class="rail-btn rail-collapse" id="rail-collapse" title="Collapse panels" aria-label="Collapse panels">&#9658;</button>
+        <span>LAYERS</span>
+        <button type="button" class="rail-btn rail-collapse" id="rail-collapse"
+                aria-expanded="true" aria-controls="rail-panels"
+                title="Minimize panels" aria-label="Minimize panels">&#9650;</button>
       </div>
 
       <!-- HAZARD ROW: expandable. The checkbox is a sibling of the

@@ -185,7 +185,10 @@ def test_rail_collapses_without_browser_storage():
     environment, so the collapsed state lives in the DOM and a reload
     comes back expanded.
     """
-    assert "rail-strip" in HTML_IDS and "rail-collapse" in HTML_IDS and "rail-expand" in HTML_IDS
+    assert "rail-collapse" in HTML_IDS
+    # Minimizing leaves the LAYERS title bar; the old icon strip is gone,
+    # because it is what made the box seem to vanish.
+    assert "rail-strip" not in HTML_IDS and "rail-expand" not in HTML_IDS
     assert "setRailCollapsed" in JS
 
     # Checked against CODE, not prose: the comment beside setRailCollapsed

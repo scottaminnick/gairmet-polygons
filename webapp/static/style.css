@@ -107,15 +107,6 @@ html, body {
   max-height: calc(100vh - 28px);
 }
 
-/* An author `display` rule beats the `hidden` attribute's UA styling, so
-   both of these need to opt back out explicitly -- without this the rail
-   "collapses" into a strip that is still full width and still showing
-   every panel. */
-.rail-panels[hidden],
-.rail-strip[hidden] {
-  display: none;
-}
-
 .rail-panels {
   display: flex;
   flex-direction: column;
@@ -124,18 +115,6 @@ html, body {
   max-height: calc(100vh - 28px);
   /* Room for the scrollbar so it never sits on top of a slider. */
   padding-right: 2px;
-}
-
-/* --- Whole-rail collapse: everything folds to this strip. --- */
-.rail-strip {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  background: var(--panel-bg);
-  border: 1px solid var(--panel-border);
-  border-radius: 6px;
-  padding: 6px 4px;
-  backdrop-filter: blur(3px);
 }
 
 .rail-btn {
@@ -155,9 +134,28 @@ html, body {
   border-color: var(--panel-border);
 }
 
+/* --- Whole-rail minimize: only the LAYERS title bar stays. --- */
 .rail-collapse {
-  float: right;
-  margin-top: -2px;
+  font-size: 14px;
+  padding: 3px 8px;
+  border-color: var(--panel-border);
+}
+
+#layers-panel > .panel-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.rail-is-collapsed #export-panel,
+.rail-is-collapsed #layers-panel > :not(.panel-title) {
+  display: none;
+}
+
+.rail-is-collapsed #layers-panel > .panel-title {
+  border-bottom: none;
+  padding-bottom: 0;
+  margin-bottom: 0;
 }
 
 /* --- Hazard rows: header, disclosure, and the adjustors beneath. --- */
@@ -210,14 +208,27 @@ html, body {
 
 .layer-expand .disclosure {
   margin-left: auto;
-  font-size: 9px;
-  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text-primary);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
   transition: transform 0.12s ease-out;
+}
+
+.layer-expand:hover .disclosure {
+  border-color: var(--text-secondary);
 }
 
 .layer-row-open .disclosure {
   transform: rotate(90deg);
-  color: var(--text-secondary);
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
 }
 
 .layer-row-disabled .layer-expand {
