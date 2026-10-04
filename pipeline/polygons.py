@@ -589,7 +589,9 @@ def smooth_polygon_boundary(polygon, smoothing_deg: float, join_style: int = 2):
 # import at the top of this file) -- see that module's docstring for why.
 
 
-def save_grid_cache(path, grids: dict[str, np.ndarray], grid_spec: GridSpec) -> None:
+def save_grid_cache(
+    path, grids: dict[str, np.ndarray], grid_spec: GridSpec, scale: float | None = None
+) -> None:
     """
     Saves one or more NAMED grids + a shared GridSpec to a compressed
     .npz file, so they can be re-processed later (e.g. with different
@@ -615,32 +617,69 @@ def save_grid_cache(path, grids: dict[str, np.ndarray], grid_spec: GridSpec) -> 
     Max error from this rounding is 0.5 percentage points -- negligible
     for a threshold decision, and irrelevant compared to NBM's own
     forecast uncertainty.
+
+    scale : float, optional
+        None (the default) is the behaviour described above, unchanged
+        bit for bit: round to a whole number, store as uint8. That is
+        right for 0-100 percentages and wrong for anything else.
+
+        With a scale, each value is stored as round(value * scale),
+        clipped to 0-255 (NaN stored as 0), and load_grid_cache() divides
+        by the same scale. The Tango wind layers use scale=2 on speeds in
+        knots: 0.5 kt resolution, 127.5 kt ceiling, still uint8. The scale
+        is written into the file so a mismatched load fails loudly instead
+        of returning knots x 2. Clipping is deliberate here -- the default
+        path wraps on overflow, which for a wind speed would turn a 130 kt
+        cell into a 4 kt one.
     """
-    quantized = {name: np.round(g).astype(np.uint8) for name, g in grids.items()}
+    if scale is None:
+        quantized = {name: np.round(g).astype(np.uint8) for name, g in grids.items()}
+        extra = {}
+    else:
+        quantized = {
+            name: np.clip(np.round(np.nan_to_num(g) * scale), 0, 255).astype(np.uint8)
+            for name, g in grids.items()
+        }
+        extra = {"scale": float(scale)}
     np.savez_compressed(
         path,
         west=grid_spec.west,
         north=grid_spec.north,
         dx=grid_spec.dx,
         dy=grid_spec.dy,
+        **extra,
         **quantized,
     )
 
 
-def load_grid_cache(path) -> tuple[dict[str, np.ndarray], GridSpec]:
+def load_grid_cache(path, scale: float | None = None) -> tuple[dict[str, np.ndarray], GridSpec]:
     """
     Loads the named grids + GridSpec previously saved with
     save_grid_cache(). Returns grids as float32 (upcast from the stored
     uint8) so downstream code (thresholding, smoothing) works exactly
     as it does with a freshly-prepared grid, without needing to know
     about the on-disk quantization.
+
+    scale : float, optional
+        None (the default) returns the stored integers as-is, exactly as
+        before. Pass the same scale the file was saved with to get the
+        original units back (stored / scale). A file that records its own
+        scale refuses a different one, and is divided by its own when none
+        is given.
     """
     data = np.load(path)
     grid_spec = GridSpec(
         west=float(data["west"]), north=float(data["north"]), dx=float(data["dx"]), dy=float(data["dy"])
     )
-    reserved_keys = {"west", "north", "dx", "dy"}
+    stored_scale = float(data["scale"]) if "scale" in data.files else None
+    if scale is not None and stored_scale is not None and scale != stored_scale:
+        raise ValueError(f"{path} was saved with scale={stored_scale} but loaded with scale={scale}")
+    if scale is None:
+        scale = stored_scale
+    reserved_keys = {"west", "north", "dx", "dy", "scale"}
     grids = {name: data[name].astype(np.float32) for name in data.files if name not in reserved_keys}
+    if scale is not None:
+        grids = {name: g / np.float32(scale) for name, g in grids.items()}
     return grids, grid_spec
 
 
