@@ -103,6 +103,7 @@ WORKFLOWS = {
     "pipeline/inspect_nbm.py": "requirements-terrain.txt",
     "pipeline/generate_latest_ifr.py": "requirements-pipeline.txt",
     "pipeline/generate_latest_mtn_obsc.py": "requirements-pipeline.txt",
+    "pipeline/generate_latest_tango.py": "requirements-pipeline.txt",
     "pipeline/test_live_ifr_fetch.py": "requirements-pipeline.txt",
     # Railway installs requirements.txt; webapp/main.py imports its
     # pipeline dependencies lazily, which is why tests.yml also imports

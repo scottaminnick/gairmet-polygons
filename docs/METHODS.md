@@ -426,6 +426,216 @@ control where the forecaster put it.
 
 ---
 
+## 4A. TANGO: surface wind and LLWS
+
+Two first-guess layers in the TANGO category: strong surface wind
+(NWSI 10-811 §7.1, "STG SFC WND") and low-level wind shear ("LLWS
+POTENTIAL"). Code: `pipeline/hazards/tango_common.py` holds the logic,
+`sfc_wind.py` and `llws.py` are configs, `pipeline/generate_latest_tango.py`
+is the driver, `.github/workflows/generate_tango.yml` the workflow
+(manual trigger only for now; see the Task 1 report for what scheduling
+needs).
+
+This section records the *reasoning*, because most of these choices look
+arbitrary from the code alone.
+
+### 4A.1 Why NBM core and not the probabilistic (QMD) wind
+
+Both layers are deterministic NBM **core** wind, thresholded to a yes/no
+mask, on the same source cycle as IFR and MTN OBSC (F00..F12 map to NBM
+f006..f018). There are no probabilities.
+
+The probabilistic wind products (QMD) were considered and rejected on
+timing, not quality. QMD posts **7.2–8.4 hours** after the cycle time. The
+run window is built around core data, which is available hours earlier, so
+a QMD-based layer could only use a cycle that has already finished
+posting: the usable cycle would be the **label minus 15 hours** instead of
+the label minus 6. Fifteen-hour-old guidance for a wind forecast whose
+valid times run out to F12 is not a first guess a forecaster would want.
+The deterministic core field is available on the same cycle as everything
+else and keeps the three hazards consistent.
+
+The cost is real and accepted: a deterministic threshold has no notion of
+confidence. Whether that is good enough is a forecaster's call.
+
+### 4A.2 The two fields, and the 610 m trap
+
+| Layer | NBM core field | idx filter |
+| --- | --- | --- |
+| STG SFC WND | `WIND`, 10 m above ground, deterministic | `:WIND:` + `:10 m above ground:`, excluding `std dev` |
+| LLWS POTENTIAL | `WIND`, `surface - 610 m above ground` | `:WIND:` + `surface - 610 m above ground` |
+
+`find_message` matches substrings anywhere in the idx line, and the bare
+text `10 m above ground` is **also inside `surface - 610 m above ground`**.
+A loose surface-wind filter therefore matches the LLWS field as well as the
+10 m field and its ensemble-spread sibling: three lines in the saved idx.
+The filter keeps the colons (`:10 m above ground:`), excludes `std dev`,
+and `tests/test_tango.py` pins each layer to exactly one line of a saved
+real idx (`tests/fixtures/nbm_core_20261004_06z_f006.idx`), with a control
+that proves the trap exists in that file.
+
+Speeds arrive in m/s and are converted with 1.943844 kt per m/s.
+
+### 4A.3 Why `nearest` for LLWS and `linear` for surface wind
+
+The LLWS field is a **sparse event field**: in the case that was studied
+(2026-10-04 06Z f006) about 99.7% of cells are zero and the smallest
+nonzero value is about 30 kt. It behaves like a flag that carries a
+magnitude, not like a wind speed with shoulders. Linear interpolation
+between a 0 and a 30 invents 15 kt values that do not exist in the model
+and blurs thin features into their neighbours, so the regrid is `nearest`:
+every output value is a value NBM actually produced.
+
+Surface wind is an ordinary smooth field, and `linear` is what a smooth
+field wants. It is also the slow path: `linear` builds a Delaunay
+triangulation of the whole native grid (the 140–198 s per field cost
+documented in `pipeline/hazards/mtn_obsc.py`), so the surface-wind job is
+expected to be the long pole of the workflow. The 120-minute job timeout is
+a hand-picked ceiling until a real run has timed it.
+
+### 4A.4 Why the mask is smoothed, not the speeds
+
+Neither layer is smoothed in Phase A. The cache holds the raw speed so
+every Phase B parameter stays live.
+
+In Phase B the smoothing is applied to the **yes/no mask** (a 0/1 grid,
+Gaussian, re-cut at 0.5), not to the speed values:
+
+| Smoothing | Effect on a real LLWS area at sigma 1.5 |
+| --- | --- |
+| Gaussian on the *speed values*, then threshold | area shrank **55%** |
+| Gaussian on the *mask*, re-cut at 0.5 | area shrank **14%** |
+
+Value smoothing fails on a sparse field because a 40 kt cell next to zeros
+averages down below any threshold: the feature's own peak is what gets
+smoothed away. Smoothing the mask asks the question that is actually wanted
+("are most of the cells around here a yes?") and removes single-cell
+specks and ragged edges without eroding the feature. (Figures are from
+testing on that real LLWS area; the synthetic area-retention test in
+`tests/test_tango.py` pins the same behaviour on a constructed field.)
+
+The *unthresholded* smoothed mask is kept and is what gets contoured at
+0.5, which places the polygon edge between cells (sub-pixel) instead of
+on a cell boundary.
+
+### 4A.5 Order of operations, and why
+
+1. `mask = speed_kt >= threshold`
+2. smooth the mask, re-cut at 0.5
+3. re-apply the gate (ARTCC area of responsibility)
+4. raster closing at the neighborhood radius, gate re-applied, then fill
+   enclosed gaps smaller than the minimum area
+5. contour the real-valued layer at 0.5, filter by area, smooth the boundary
+   (0.02°), simplify (0.05°)
+6. per-polygon properties (`peak_speed_kt` from the *raw* grid,
+   `area_sq_mi`, `category`, `phenomenon`)
+
+This is MTN OBSC's raster path (§4.4) with the smoothing step added. The
+gate comes *after* smoothing because smoothing bleeds across the boundary;
+it is applied again after the closing for the reason §4.4 gives. The gate
+is ARTCC only: **no land mask**, because neither hazard is a terrain
+hazard and a coastal-waters wind or shear area is exactly what should be
+drawn. This was confirmed with the forecaster.
+
+### 4A.6 Why `>=`
+
+The directive's wording is "30 knots **or greater**". A cell at exactly the
+threshold is therefore a yes, and `tests/test_tango.py` checks both sides:
+a block at exactly 30.0 kt produces a polygon, one at 29.99 does not.
+
+### 4A.7 Why the cache stores knots × 2
+
+`save_grid_cache` has always quantized to `uint8` and assumed 0–100
+percentages. Wind speed in whole knots would throw away half-knot
+resolution that matters right at a 30 kt threshold, and float32 is ~70×
+larger. The optional `scale` argument stores `round(value × scale)` as
+`uint8` and divides on load; Tango uses `scale=2`: **0.5 kt resolution,
+127.5 kt ceiling**, same file size class as the probability caches. Values
+above the ceiling are clipped, not wrapped (the default path wraps, which
+would turn a 130 kt cell into 4 kt). The scale is written into the file,
+so a mismatched load raises instead of silently returning knots × 2. With
+`scale=None` the function is bit-identical to what it was.
+
+### 4A.8 Uncalibrated placeholders
+
+**Everything below is a first guess. None of it has been checked with a
+forecaster or against legacy products.**
+
+| Parameter | Default | Live range |
+| --- | --- | --- |
+| STG SFC WND threshold | 30 kt (the directive's number, but whether NBM 10 m sustained wind at 30 kt matches the product is untested) | 20–50 |
+| LLWS threshold | 40 kt (a guess above the ~30 kt floor of the field) | 30–60 |
+| Mask smoothing sigma | 1.5 cells | 0–3, step 0.5, 0 = off |
+| Neighborhood radius, STG SFC WND | 50 nm (borrowed from MTN OBSC) | — |
+| Neighborhood radius, LLWS | 25 nm, chosen by eye from two frames in one regime (SW AZ/NM, 2026-10-04); see 4A.9 | — |
+| Minimum area | 1,000 sq mi, both layers | — |
+
+LLWS is the least grounded: NBM's 610 m wind is a *proxy* for shear
+potential, not a shear diagnostic, and the product's meteorological
+criterion has not been mapped onto it.
+
+### 4A.9 What the neighborhood radius does, and two known behaviors
+
+**The radius is a morphological closing, so it bridges gaps up to about
+twice its value.** `close_mask` dilates the mask by `neighborhood_radius_nm`
+and then erodes it by the same amount. Two flagged areas closer together
+than roughly 2 x radius grow into each other during the dilation and stay
+joined after the erosion, and so does any concave notch narrower than that.
+At 50 nm (the surface-wind default) that is up to about 100 nm between
+clusters; at 25 nm (the LLWS default) about 50 nm. This is
+different from a buffer: an isolated cluster comes back to roughly its own
+size, but a *group* of small clusters is joined into one footprint that
+includes the empty ground between them. It is the only parameter that
+joins clusters, and for a sparse field like LLWS it is by far the largest
+influence on polygon area.
+
+Measured on the 2026-10-04 03Z cycle (LLWS, 40 kt, sigma 1.5, minimum area
+1,000 sq mi), from the cached grids:
+
+| Radius | F00 polygons / sq mi | F06 polygons / sq mi |
+| --- | --- | --- |
+| 15 nm | none | none |
+| 25 nm | 1 / 1,716 | 1 / 2,116 |
+| 35 nm | 1 / 2,329 | 1 / 3,340 |
+| 50 nm | 1 / 2,636 | 1 / 5,499 |
+
+At F06 the smoothed mask inside the AOR is **938 sq mi**; the 50 nm closing
+turns it into **5,481 sq mi** (final polygon 5,499), about 5.8 times, while
+the raw cells at or above 40 kt inside the AOR total 1,480 sq mi. The
+polygon is a hull joining three clusters in southern Arizona through a
+thin corridor, and much of its interior holds no flagged cell. At F00 the
+same step takes 535 sq mi to 2,605 (raw in-AOR: 822 sq mi). Filling
+enclosed gaps changed nothing in either case.
+
+**The LLWS default is 25 nm, and it is a placeholder.** It was chosen by eye
+from the F00 and F06 frames above, which are two frames from one regime (SW
+Arizona / New Mexico, 2026-10-04). Nothing here tests it against other
+patterns or against a forecaster's idea of the right footprint, and the
+radius remains a forecaster decision. Surface wind keeps 50 nm, which has
+not been examined for that layer.
+
+**Radius 0 (or 15 nm here) produces no polygon, and that is the minimum
+area at work.** The flagged cells are many small clusters, none of which
+reaches 1,000 sq mi on its own, so without the closing to join them every
+one is dropped. For this field the radius and the minimum area are in
+effect a single decision.
+
+**Known behavior: smoothing can trim a cluster's peak cell.** Smoothing the
+mask re-cuts the edge at 0.5, so a one- or two-cell protrusion is removed
+even when it holds the strongest wind. `peak_speed_kt` is read from the raw
+grid *inside the final polygon*, so it can be lower than the true maximum
+nearby. At F06 the in-AOR maximum is 60.5 kt at 32.47N 110.85W, on the
+polygon's southern edge, and the polygon's own peak is 57.5 kt at 50 nm
+(60.5 kt at 35 nm, where the outline happens to enclose it).
+
+**Known behavior: small isolated clusters are dropped.** Smoothing removes
+clusters of a few cells, and the minimum-area filter removes what is left
+below 1,000 sq mi. At F00 the in-AOR maximum, 47.5 kt at 45.60N 85.03W in
+northern Michigan, is a cluster of five cells and produces no polygon;
+the F00 polygon is the Arizona and New Mexico cluster. A strong but small
+LLWS signal is therefore not guaranteed to be drawn. The size to which
+that matters is the minimum area, which is also uncalibrated.
+
 ## 5. The pixel/lon-lat convention
 
 Two conventions differ by exactly half a cell:

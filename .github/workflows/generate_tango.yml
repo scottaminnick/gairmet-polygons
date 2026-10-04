@@ -1,0 +1,306 @@
+name: Generate Latest TANGO (Surface Wind + LLWS) Polygons
+
+# MANUAL TRIGGER ONLY, for now. There is deliberately no `schedule:` entry
+# and no Railway dispatch: pipeline/publish_schedule.py (HAZARD_WORKFLOWS,
+# the cron generator, job_timeout_minutes) and railway.dispatch.json do not
+# know this workflow exists yet, and tests/test_publish_schedule.py would
+# fail if one were added without them. What scheduling it needs is listed in
+# the Task 1 report; nothing here pretends otherwise.
+#
+# It borrows MTN OBSC's identity for the three pre-flight scripts
+# (`--hazard mtn_obsc`) because TANGO builds from the SAME NBM source cycle
+# as IFR / MTN OBSC and so has the same target cycle, the same posting
+# time, and the same "is this already published" answer. That is a label
+# for those scripts, not a claim that this is the MTN OBSC job.
+#
+# Everything else -- the check-before-work ordering, the one-commit-deep
+# force-pushed data branch, the cycle monotonicity guard, the concurrency
+# group -- is generate_mtn_obsc.yml's design, whose comments carry the
+# reasoning. Only what differs is explained here.
+on:
+  workflow_dispatch:
+    inputs:
+      trigger:
+        description: "Who started this run -- leave as 'manual' when pressing the button yourself"
+        required: false
+        default: "manual"
+      sfc_wind_threshold_kt:
+        description: "STG SFC WND: speed threshold (kt), >= -- blank for the pipeline default (30; UNCALIBRATED; sensible range 20-50)"
+        required: false
+      sfc_wind_smooth_sigma_cells:
+        description: "STG SFC WND: Gaussian sigma (cells) applied to the yes/no mask -- blank for default (1.5); 0 = off"
+        required: false
+      sfc_wind_neighborhood_radius_nm:
+        description: "STG SFC WND: raster closing radius (nm) -- blank for default (50)"
+        required: false
+      sfc_wind_min_area_sq_mi:
+        description: "STG SFC WND: minimum polygon area (sq mi) -- blank for default (1000; UNCALIBRATED)"
+        required: false
+      llws_threshold_kt:
+        description: "LLWS POTENTIAL: speed threshold (kt), >= -- blank for the pipeline default (40; UNCALIBRATED; sensible range 30-60)"
+        required: false
+      llws_smooth_sigma_cells:
+        description: "LLWS POTENTIAL: Gaussian sigma (cells) applied to the yes/no mask -- blank for default (1.5); 0 = off"
+        required: false
+      llws_neighborhood_radius_nm:
+        description: "LLWS POTENTIAL: raster closing radius (nm) -- blank for default (50)"
+        required: false
+      llws_min_area_sq_mi:
+        description: "LLWS POTENTIAL: minimum polygon area (sq mi) -- blank for default (1000; UNCALIBRATED)"
+        required: false
+
+# One run at a time, queued rather than cancelled: of two overlapping runs
+# the last to finish wins the force-push, so queueing is what makes
+# last-to-finish and newest-cycle the same run. Scoped to this workflow
+# alone; the hazards publish to separate branches and cannot collide.
+concurrency:
+  group: generate-tango-polygons
+  cancel-in-progress: false
+
+# Needed to force-push to the data-tango branch. Nothing here writes to main.
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    # NOT derived from publish_schedule.job_timeout_minutes (it has no entry
+    # for this workflow). A hand-picked ceiling: up to 60 minutes polling for
+    # NBM, plus the work. The work is the unknown -- sfc_wind regrids with
+    # method="linear" (a Delaunay triangulation of the whole native grid,
+    # the 140-198 s/field cost documented in pipeline/hazards/mtn_obsc.py)
+    # five times, llws with "nearest". Tighten once a real run has timed it.
+    timeout-minutes: 120
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # CHECK BEFORE DOING THE WORK. The next three steps run BEFORE
+      # `pip install`, before the NBM poll, and before any data is
+      # fetched, and that ordering is the single highest-value thing
+      # about this workflow's shape. The publish decision used to happen
+      # after the fetch and generation, so a run with nothing to publish
+      # did the whole job and discarded it. Deciding first is what makes
+      # both the backstop and waiting for NBM affordable: a run that
+      # would not publish ends green in seconds.
+      #
+      # Everything these steps import is stdlib-only, deliberately, and
+      # tests/test_workflow_dependencies.py fails if that stops being
+      # true.
+      - name: Resolve the target NBM cycle
+        id: resolve
+        env:
+          # Through the environment, NOT interpolated into the script.
+          # `trigger` is free text that anyone able to press Run workflow
+          # supplies, and a ${{ ... }} expansion inside a `run:` block is
+          # substituted before bash ever sees it -- a value containing a
+          # quote and a semicolon would run as shell. As an env var it is
+          # only ever data. github.event_name is safe either way; it goes
+          # the same route so there is one pattern here rather than two.
+          EVENT_NAME: ${{ github.event_name }}
+          TRIGGER_INPUT: ${{ github.event.inputs.trigger }}
+        run: |
+          set -euo pipefail
+          # Pure arithmetic, no network: the synoptic hours are fixed and
+          # the package is the cycle plus the +6h lead, so which package
+          # this run WOULD build is answerable without asking NOAA. That
+          # is what lets the publish decision happen before anything is
+          # installed, fetched, or waited for.
+          #
+          # The trigger is CLASSIFIED in Python rather than trusted --
+          # only the three values publish_schedule knows about can reach
+          # the instrumentation, so a typo cannot look like a measurement.
+          #
+          # Writes $GITHUB_OUTPUT itself (trigger, nbm_source_cycle), so
+          # the two values later steps need come from one place in both
+          # hazards rather than from a shell snippet nobody can test.
+          python3 .github/scripts/resolve_target_cycle.py \
+            --hazard mtn_obsc --out "$RUNNER_TEMP/nbm_preflight.json" \
+            --event-name "$EVENT_NAME" \
+            --trigger-input "$TRIGGER_INPUT"
+
+      - name: Read the cycle currently on the data-tango branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH_BRANCH: data-tango
+        run: |
+          set -euo pipefail
+          # A --depth=1 fetch into a throwaway repo, exactly like the one
+          # in the publish step: this branch is permanently one commit
+          # deep, so it is a few seconds and ~12 MB. Read from the branch
+          # itself rather than raw.githubusercontent.com, whose CDN can
+          # serve a stale copy for minutes -- the whole value of this
+          # step is being right about what is already published.
+          SCRATCH="$(mktemp -d)"
+          git init -q "$SCRATCH"
+          REMOTE="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          : > "$RUNNER_TEMP/existing_manifest.json"
+          if git -C "$SCRATCH" fetch --quiet --depth=1 "$REMOTE" "$PUBLISH_BRANCH" 2>/dev/null; then
+            # Either layer's manifest carries the cycle; sfc_wind first,
+            # llws if only that one made it out of the last run.
+            git -C "$SCRATCH" show "FETCH_HEAD:sfc_wind_manifest.json" > "$RUNNER_TEMP/existing_manifest.json" 2>/dev/null \
+              || git -C "$SCRATCH" show "FETCH_HEAD:llws_manifest.json" > "$RUNNER_TEMP/existing_manifest.json" 2>/dev/null \
+              || : > "$RUNNER_TEMP/existing_manifest.json"
+          else
+            echo "Branch $PUBLISH_BRANCH doesn't exist yet -- nothing to compare against."
+          fi
+
+      - name: Decide whether this cycle would publish at all
+        id: preflight
+        env:
+          TRIGGER: ${{ steps.resolve.outputs.trigger }}
+        run: |
+          set +e
+          python3 .github/scripts/should_publish_cycle.py \
+            --new "$RUNNER_TEMP/nbm_preflight.json" \
+            --existing "$RUNNER_TEMP/existing_manifest.json" \
+            --hazard mtn_obsc --trigger "$TRIGGER"
+          GUARD_STATUS=$?
+          set -e
+          # Exit 10 ("skip") is a correct outcome, not a failure: this
+          # cycle's package is already on the branch. The remaining steps
+          # are skipped and the job ends green in seconds, having
+          # installed nothing and fetched nothing. This is the normal
+          # path for the backstop.
+          if [ "$GUARD_STATUS" -eq 10 ]; then
+            echo "publish=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          elif [ "$GUARD_STATUS" -ne 0 ]; then
+            exit "$GUARD_STATUS"
+          fi
+          echo "publish=yes" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for the target NBM cycle to post
+        id: await_nbm
+        if: steps.preflight.outputs.publish == 'yes'
+        run: |
+          set +e
+          # HEAD on the .idx every 5 minutes for up to 60 minutes from
+          # job start -- which IS dispatch time, since workflow_dispatch
+          # runs start promptly. Nothing is downloaded; the index's
+          # existence is the signal.
+          #
+          # It does NOT fall back to an older cycle. Rebuilding the
+          # package that is already live costs a full fetch and
+          # generation to produce something the publish guard then skips.
+          python3 .github/scripts/await_nbm_cycle.py \
+            --preflight "$RUNNER_TEMP/nbm_preflight.json"
+          POLL_STATUS=$?
+          set -e
+          if [ "$POLL_STATUS" -eq 10 ]; then
+            echo "posted=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          elif [ "$POLL_STATUS" -ne 0 ]; then
+            exit "$POLL_STATUS"
+          fi
+          echo "posted=yes" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        if: steps.await_nbm.outputs.posted == 'yes'
+        run: pip install -r requirements-pipeline.txt
+
+      - name: Generate latest TANGO polygons
+        if: steps.await_nbm.outputs.posted == 'yes'
+        env:
+          # Blank falls back to the layer's default in pipeline/hazards/
+          # sfc_wind.py / llws.py, so each default lives in one place.
+          TANGO_SFC_WIND_THRESHOLD_KT: ${{ github.event.inputs.sfc_wind_threshold_kt }}
+          TANGO_SFC_WIND_SMOOTH_SIGMA_CELLS: ${{ github.event.inputs.sfc_wind_smooth_sigma_cells }}
+          TANGO_SFC_WIND_NEIGHBORHOOD_RADIUS_NM: ${{ github.event.inputs.sfc_wind_neighborhood_radius_nm }}
+          TANGO_SFC_WIND_MIN_AREA_SQ_MI: ${{ github.event.inputs.sfc_wind_min_area_sq_mi }}
+          TANGO_LLWS_THRESHOLD_KT: ${{ github.event.inputs.llws_threshold_kt }}
+          TANGO_LLWS_SMOOTH_SIGMA_CELLS: ${{ github.event.inputs.llws_smooth_sigma_cells }}
+          TANGO_LLWS_NEIGHBORHOOD_RADIUS_NM: ${{ github.event.inputs.llws_neighborhood_radius_nm }}
+          TANGO_LLWS_MIN_AREA_SQ_MI: ${{ github.event.inputs.llws_min_area_sq_mi }}
+          # The cycle this run resolved at its first step and the pre-flight
+          # guard approved, so the generate step cannot re-derive a newer one.
+          NBM_SOURCE_CYCLE: ${{ steps.resolve.outputs.nbm_source_cycle }}
+        run: python3 pipeline/generate_latest_tango.py
+
+      - name: Publish artifacts to the data-tango branch
+        if: steps.await_nbm.outputs.posted == 'yes'
+        # Same shape as generate_mtn_obsc.yml's publish step (rebuilt from
+        # scratch in a throwaway directory, force-pushed, permanently ONE
+        # commit deep; see there for why). Differences:
+        #   * TWO manifests, sfc_wind_manifest.json and llws_manifest.json,
+        #     because the two layers fail independently. Either may be
+        #     absent if its layer produced nothing, so the copies tolerate
+        #     a missing layer and the guard reads whichever manifest exists.
+        #   * Only TANGO's own files are copied (sfc_wind_* / llws_*), never
+        #     another hazard's: each force-push replaces its branch's
+        #     whole contents.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH_BRANCH: data-tango
+          TRIGGER: ${{ steps.resolve.outputs.trigger }}
+        run: |
+          set -euo pipefail
+
+          PUBLISH_DIR="$(mktemp -d)"
+          shopt -s nullglob
+          for f in "$GITHUB_WORKSPACE"/output/sfc_wind_* "$GITHUB_WORKSPACE"/output/llws_*; do
+            cp "$f" "$PUBLISH_DIR/"
+          done
+          shopt -u nullglob
+
+          # The manifest the guard and the model cycle are read from.
+          GUARD_MANIFEST=""
+          for m in sfc_wind_manifest.json llws_manifest.json; do
+            if [ -f "$PUBLISH_DIR/$m" ]; then GUARD_MANIFEST="$m"; break; fi
+          done
+          if [ -z "$GUARD_MANIFEST" ]; then
+            echo "No manifest was produced by either layer -- nothing to publish."
+            exit 1
+          fi
+
+          MODEL_CYCLE="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['model_cycle'])" "$PUBLISH_DIR/$GUARD_MANIFEST")"
+
+          cd "$PUBLISH_DIR"
+          echo "Publishing $(ls | wc -l) file(s) for model cycle $MODEL_CYCLE to $PUBLISH_BRANCH:"
+          ls -la
+
+          git init -q -b "$PUBLISH_BRANCH"
+          REMOTE="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          # Cycle monotonicity guard -- see generate_mtn_obsc.yml.
+          EXISTING_MANIFEST="$(mktemp)"
+          if git fetch --quiet --depth=1 "$REMOTE" "$PUBLISH_BRANCH" 2>/dev/null; then
+            git show "FETCH_HEAD:sfc_wind_manifest.json" > "$EXISTING_MANIFEST" 2>/dev/null \
+              || git show "FETCH_HEAD:llws_manifest.json" > "$EXISTING_MANIFEST" 2>/dev/null \
+              || : > "$EXISTING_MANIFEST"
+          else
+            echo "Branch $PUBLISH_BRANCH doesn't exist yet -- nothing to compare against."
+          fi
+
+          set +e
+          python3 "$GITHUB_WORKSPACE/.github/scripts/should_publish_cycle.py" \
+            --new "$GUARD_MANIFEST" --existing "$EXISTING_MANIFEST" --hazard mtn_obsc \
+            --trigger "$TRIGGER"
+          GUARD_STATUS=$?
+          set -e
+          if [ "$GUARD_STATUS" -eq 10 ]; then
+            exit 0
+          elif [ "$GUARD_STATUS" -ne 0 ]; then
+            exit "$GUARD_STATUS"
+          fi
+
+          git add -A
+          git -c user.name="github-actions[bot]" \
+              -c user.email="github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "data: tango $MODEL_CYCLE"
+
+          for attempt in 1 2 3 4 5; do
+            if git push --force "$REMOTE" "$PUBLISH_BRANCH:$PUBLISH_BRANCH"; then
+              echo "Pushed $PUBLISH_BRANCH successfully on attempt $attempt"
+              exit 0
+            fi
+            echo "Push failed (attempt $attempt/5) -- retrying..."
+            sleep $((attempt * 5))
+          done
+          echo "Failed to push $PUBLISH_BRANCH after 5 attempts"
+          exit 1
