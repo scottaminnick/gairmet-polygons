@@ -52,9 +52,16 @@ DATA_PATHS = [
     "/api/boundaries/states",
     "/api/boundaries/artcc",
     "/api/boundaries/legacy_mtnobsc",
+    "/api/hazards/sfc_wind/manifest",
+    "/api/hazards/llws/manifest",
+    "/api/hazards/sfc_wind/00",
+    "/api/hazards/llws/00",
+    "/api/hazards/sfc_wind/00/recompute?speed_threshold_kt=30&smooth_sigma_cells=1.5&neighborhood_radius_nm=50&min_area_sq_mi=1000",
+    "/api/hazards/llws/00/recompute?speed_threshold_kt=40&smooth_sigma_cells=1.5&neighborhood_radius_nm=25&min_area_sq_mi=1000",
     "/api/hazards/demo",
     "/api/health",
     "/api/data/status",
+    "/api/config",
 ]
 
 APP_PATHS = ["/", "/index.html", "/map.js", "/style.css"]

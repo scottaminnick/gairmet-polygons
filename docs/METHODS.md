@@ -636,6 +636,69 @@ the F00 polygon is the Arizona and New Mexico cluster. A strong but small
 LLWS signal is therefore not guaranteed to be drawn. The size to which
 that matters is the minimum area, which is also uncalibrated.
 
+### 4A.10 Web app routes
+
+`webapp/artifacts.py` lists the two layers as hazards `sfc_wind` and `llws`.
+Both come from the one `data-tango` branch (`ARTIFACT_BRANCH_SFC_WIND` and
+`ARTIFACT_BRANCH_LLWS` override it), each with its own manifest. Sharing a
+branch is safe because every hazard fetches its own manifest URL and files
+and is swapped in under its own cache directory; one layer failing to
+publish leaves the other serving.
+
+`webapp/tango_routes.py` registers three GET routes per layer
+(`register_tango_routes(app)`, called from `webapp/main.py` before the
+static mount):
+
+| Route | Returns |
+| --- | --- |
+| `/api/hazards/{sfc_wind,llws}/manifest` | the loaded manifest (503 until loaded) |
+| `/api/hazards/{key}/{fxx}` | the stored GeoJSON snapshot (404 unknown hour, 503 not loaded) |
+| `/api/hazards/{key}/{fxx}/recompute` | Phase B re-run from the cached grid |
+
+There is no PGEN or XML export for these layers; the export format is
+undecided, so the routes take no `format` parameter.
+
+**Why the paths are literal.** The routes are generated in a loop, but each
+is registered as its own literal string (`/api/hazards/llws/...`), not as
+`/api/hazards/{key}/...`. A `{key}` parameter would also match `ifr` and
+`mtn_obsc` and compete with their routes, whose behavior must not depend on
+registration order. Within a layer, `/manifest` is registered before
+`/{fxx}` for the usual reason: a generic string parameter would otherwise
+take the word "manifest" for an hour.
+
+**Recompute parameters and bounds.** The names match `polygonize_tango_grid`
+and the manifests; the defaults come from the layer's config; out of range
+is a 422 before any computation:
+
+| Parameter | Bound | Why |
+| --- | --- | --- |
+| `speed_threshold_kt` | the layer's own range: sfc_wind 20-50, llws 30-60 | the range the slider is meant to offer; below it the field is mostly noise, above it nothing is left |
+| `smooth_sigma_cells` | 0-3 | past 3 the Gaussian is wider than the features, and cost grows with the kernel |
+| `neighborhood_radius_nm` | 0-150 | the closing runs two distance transforms over a 2.7M-cell grid, and past ~150 nm it joins whole regions (§4A.9) |
+| `min_area_sq_mi` | 0-10,000 | above that nothing survives |
+
+A cache that lacks the `speed_kt` grid, or was written with a different
+scale, is a 409 with a message naming the workflow to re-run, the same way
+the MTN OBSC route reports an outdated cache.
+
+**What recompute costs, measured on the real `data-tango` cycle
+(2026-10-04 15Z).** The first recompute after a process start took about
+8.4 s, of which about 7.1 s was rasterizing the ARTCC boundary onto the grid
+for the first time. That mask is memoized per process by grid shape (a second
+lookup is effectively free), and is shared by both layers and all hours, so
+only the first request per process pays it. Warm calls took roughly
+0.7-1.2 s; most of it is the closing's two distance transforms. An hour with
+nothing flagged returns in about 0.09 s. The cache is per process, so each
+worker pays the first-call cost once.
+
+**Stored snapshot versus default recompute.** The pipeline polygonizes the
+in-memory grid and then writes the knots x 2 cache, so a recompute works
+from values rounded to 0.5 kt. The two agree whenever no cell sits within
+0.25 kt of the threshold or defines a peak; where one does, they can differ
+by that amount (seen once: a peak of 45.9 kt stored, 46.0 kt recomputed).
+On the 2026-10-04 15Z cycle all ten stored snapshots equalled their default
+recompute exactly.
+
 ## 5. The pixel/lon-lat convention
 
 Two conventions differ by exactly half a cell:
