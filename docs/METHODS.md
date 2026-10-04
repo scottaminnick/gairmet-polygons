@@ -566,7 +566,8 @@ forecaster or against legacy products.**
 | STG SFC WND threshold | 30 kt (the directive's number, but whether NBM 10 m sustained wind at 30 kt matches the product is untested) | 20–50 |
 | LLWS threshold | 40 kt (a guess above the ~30 kt floor of the field) | 30–60 |
 | Mask smoothing sigma | 1.5 cells | 0–3, step 0.5, 0 = off |
-| Neighborhood radius | 50 nm (borrowed from MTN OBSC); see 4A.9 | — |
+| Neighborhood radius, STG SFC WND | 50 nm (borrowed from MTN OBSC) | — |
+| Neighborhood radius, LLWS | 25 nm, chosen by eye from two frames in one regime (SW AZ/NM, 2026-10-04); see 4A.9 | — |
 | Minimum area | 1,000 sq mi, both layers | — |
 
 LLWS is the least grounded: NBM's 610 m wind is a *proxy* for shear
@@ -580,7 +581,8 @@ twice its value.** `close_mask` dilates the mask by `neighborhood_radius_nm`
 and then erodes it by the same amount. Two flagged areas closer together
 than roughly 2 x radius grow into each other during the dilation and stay
 joined after the erosion, and so does any concave notch narrower than that.
-At the 50 nm default that is up to about 100 nm between clusters. This is
+At 50 nm (the surface-wind default) that is up to about 100 nm between
+clusters; at 25 nm (the LLWS default) about 50 nm. This is
 different from a buffer: an isolated cluster comes back to roughly its own
 size, but a *group* of small clusters is joined into one footprint that
 includes the empty ground between them. It is the only parameter that
@@ -603,9 +605,14 @@ the raw cells at or above 40 kt inside the AOR total 1,480 sq mi. The
 polygon is a hull joining three clusters in southern Arizona through a
 thin corridor, and much of its interior holds no flagged cell. At F00 the
 same step takes 535 sq mi to 2,605 (raw in-AOR: 822 sq mi). Filling
-enclosed gaps changed nothing in either case. The defaults are placeholders
-and were not changed by this measurement; choosing the radius is a
-forecaster decision.
+enclosed gaps changed nothing in either case.
+
+**The LLWS default is 25 nm, and it is a placeholder.** It was chosen by eye
+from the F00 and F06 frames above, which are two frames from one regime (SW
+Arizona / New Mexico, 2026-10-04). Nothing here tests it against other
+patterns or against a forecaster's idea of the right footprint, and the
+radius remains a forecaster decision. Surface wind keeps 50 nm, which has
+not been examined for that layer.
 
 **Radius 0 (or 15 nm here) produces no polygon, and that is the minimum
 area at work.** The flagged cells are many small clusters, none of which

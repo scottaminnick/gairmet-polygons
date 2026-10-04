@@ -18,8 +18,13 @@ and a 30), and why Phase B smooths the mask rather than the values (see
 tango_common's docstring).
 
 ALL DEFAULTS ARE UNCALIBRATED PLACEHOLDERS. 40 kt is a first guess above
-the 30 kt floor; the range, sigma, radius and the 1,000 sq mi minimum
-area have not been checked with a forecaster.
+the 30 kt floor; the range, sigma and the 1,000 sq mi minimum area have
+not been checked with a forecaster.
+
+The 25 nm radius (surface wind keeps 50) was chosen by eye from two
+frames in one regime -- SW Arizona / New Mexico, 2026-10-04 -- as a
+placeholder. At 50 nm the closing joined separate clusters into hulls
+mostly empty of flagged cells (docs/METHODS.md 4A.9).
 """
 
 from pipeline.hazards.tango_common import TangoLayer
@@ -33,4 +38,5 @@ LLWS = TangoLayer(
     regrid_method="nearest",
     default_threshold_kt=40.0,
     threshold_range_kt=(30.0, 60.0),
+    default_neighborhood_radius_nm=25.0,
 )
