@@ -37,7 +37,7 @@ PHASE B ORDER (each step exists for a reason; do not reorder):
      smooth); smoothing the mask shrank it 14%.
   3. Re-apply the gate AFTER smoothing -- smoothing bleeds across the
      ARTCC boundary. ARTCC area of responsibility ONLY: no land mask,
-     because these are not terrain hazards (CONFIRM with a forecaster).
+     because these are not terrain hazards (confirmed with a forecaster).
   4. Radius merge on the RASTER (close_mask, gate re-applied), then
      fill_enclosed_gaps, exactly as MTN OBSC.
   5. Contour a real-valued layer (the smoothed mask value, LAYER_OFF

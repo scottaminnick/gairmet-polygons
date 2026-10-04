@@ -535,7 +535,7 @@ gate comes *after* smoothing because smoothing bleeds across the boundary;
 it is applied again after the closing for the reason §4.4 gives. The gate
 is ARTCC only: **no land mask**, because neither hazard is a terrain
 hazard and a coastal-waters wind or shear area is exactly what should be
-drawn. *(This is a choice to confirm with a forecaster.)*
+drawn. This was confirmed with the forecaster.
 
 ### 4A.6 Why `>=`
 
@@ -568,7 +568,6 @@ forecaster or against legacy products.**
 | Mask smoothing sigma | 1.5 cells | 0–3, step 0.5, 0 = off |
 | Neighborhood radius | 50 nm (borrowed from MTN OBSC) | — |
 | Minimum area | 1,000 sq mi, both layers | — |
-| ARTCC-only gate, no land mask | — | to confirm |
 
 LLWS is the least grounded: NBM's 610 m wind is a *proxy* for shear
 potential, not a shear diagnostic, and the product's meteorological
