@@ -1,0 +1,52 @@
+{
+  "category": "TANGO",
+  "phenomenon": "STG SFC WND",
+  "model_cycle": "2026-10-04T15:00:00Z",
+  "nbm_source_cycle": "2026-10-04T09:00:00Z",
+  "speed_threshold_kt": 30.0,
+  "smooth_sigma_cells": 1.5,
+  "neighborhood_radius_nm": 50.0,
+  "min_area_sq_mi": 1000.0,
+  "snapshots": [
+    {
+      "requested_forecast_hour": 0,
+      "valid_time": "2026-10-04T15:00:00Z",
+      "filename": "sfc_wind_f00.geojson",
+      "cache_filename": "sfc_wind_f00_grid.npz",
+      "feature_count": 0,
+      "nbm_idx_line": "155:157440497:d=2026100409:WIND:10 m above ground:6 hour fcst:"
+    },
+    {
+      "requested_forecast_hour": 3,
+      "valid_time": "2026-10-04T18:00:00Z",
+      "filename": "sfc_wind_f03.geojson",
+      "cache_filename": "sfc_wind_f03_grid.npz",
+      "feature_count": 0,
+      "nbm_idx_line": "204:185493007:d=2026100409:WIND:10 m above ground:9 hour fcst:"
+    },
+    {
+      "requested_forecast_hour": 6,
+      "valid_time": "2026-10-04T21:00:00Z",
+      "filename": "sfc_wind_f06.geojson",
+      "cache_filename": "sfc_wind_f06_grid.npz",
+      "feature_count": 0,
+      "nbm_idx_line": "155:160699567:d=2026100409:WIND:10 m above ground:12 hour fcst:"
+    },
+    {
+      "requested_forecast_hour": 9,
+      "valid_time": "2026-10-05T00:00:00Z",
+      "filename": "sfc_wind_f09.geojson",
+      "cache_filename": "sfc_wind_f09_grid.npz",
+      "feature_count": 0,
+      "nbm_idx_line": "209:192523271:d=2026100409:WIND:10 m above ground:15 hour fcst:"
+    },
+    {
+      "requested_forecast_hour": 12,
+      "valid_time": "2026-10-05T03:00:00Z",
+      "filename": "sfc_wind_f12.geojson",
+      "cache_filename": "sfc_wind_f12_grid.npz",
+      "feature_count": 0,
+      "nbm_idx_line": "155:156447874:d=2026100409:WIND:10 m above ground:18 hour fcst:"
+    }
+  ]
+}
