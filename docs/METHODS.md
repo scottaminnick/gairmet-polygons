@@ -566,12 +566,68 @@ forecaster or against legacy products.**
 | STG SFC WND threshold | 30 kt (the directive's number, but whether NBM 10 m sustained wind at 30 kt matches the product is untested) | 20–50 |
 | LLWS threshold | 40 kt (a guess above the ~30 kt floor of the field) | 30–60 |
 | Mask smoothing sigma | 1.5 cells | 0–3, step 0.5, 0 = off |
-| Neighborhood radius | 50 nm (borrowed from MTN OBSC) | — |
+| Neighborhood radius | 50 nm (borrowed from MTN OBSC); see 4A.9 | — |
 | Minimum area | 1,000 sq mi, both layers | — |
 
 LLWS is the least grounded: NBM's 610 m wind is a *proxy* for shear
 potential, not a shear diagnostic, and the product's meteorological
 criterion has not been mapped onto it.
+
+### 4A.9 What the neighborhood radius does, and two known behaviors
+
+**The radius is a morphological closing, so it bridges gaps up to about
+twice its value.** `close_mask` dilates the mask by `neighborhood_radius_nm`
+and then erodes it by the same amount. Two flagged areas closer together
+than roughly 2 x radius grow into each other during the dilation and stay
+joined after the erosion, and so does any concave notch narrower than that.
+At the 50 nm default that is up to about 100 nm between clusters. This is
+different from a buffer: an isolated cluster comes back to roughly its own
+size, but a *group* of small clusters is joined into one footprint that
+includes the empty ground between them. It is the only parameter that
+joins clusters, and for a sparse field like LLWS it is by far the largest
+influence on polygon area.
+
+Measured on the 2026-10-04 03Z cycle (LLWS, 40 kt, sigma 1.5, minimum area
+1,000 sq mi), from the cached grids:
+
+| Radius | F00 polygons / sq mi | F06 polygons / sq mi |
+| --- | --- | --- |
+| 15 nm | none | none |
+| 25 nm | 1 / 1,716 | 1 / 2,116 |
+| 35 nm | 1 / 2,329 | 1 / 3,340 |
+| 50 nm | 1 / 2,636 | 1 / 5,499 |
+
+At F06 the smoothed mask inside the AOR is **938 sq mi**; the 50 nm closing
+turns it into **5,481 sq mi** (final polygon 5,499), about 5.8 times, while
+the raw cells at or above 40 kt inside the AOR total 1,480 sq mi. The
+polygon is a hull joining three clusters in southern Arizona through a
+thin corridor, and much of its interior holds no flagged cell. At F00 the
+same step takes 535 sq mi to 2,605 (raw in-AOR: 822 sq mi). Filling
+enclosed gaps changed nothing in either case. The defaults are placeholders
+and were not changed by this measurement; choosing the radius is a
+forecaster decision.
+
+**Radius 0 (or 15 nm here) produces no polygon, and that is the minimum
+area at work.** The flagged cells are many small clusters, none of which
+reaches 1,000 sq mi on its own, so without the closing to join them every
+one is dropped. For this field the radius and the minimum area are in
+effect a single decision.
+
+**Known behavior: smoothing can trim a cluster's peak cell.** Smoothing the
+mask re-cuts the edge at 0.5, so a one- or two-cell protrusion is removed
+even when it holds the strongest wind. `peak_speed_kt` is read from the raw
+grid *inside the final polygon*, so it can be lower than the true maximum
+nearby. At F06 the in-AOR maximum is 60.5 kt at 32.47N 110.85W, on the
+polygon's southern edge, and the polygon's own peak is 57.5 kt at 50 nm
+(60.5 kt at 35 nm, where the outline happens to enclose it).
+
+**Known behavior: small isolated clusters are dropped.** Smoothing removes
+clusters of a few cells, and the minimum-area filter removes what is left
+below 1,000 sq mi. At F00 the in-AOR maximum, 47.5 kt at 45.60N 85.03W in
+northern Michigan, is a cluster of five cells and produces no polygon;
+the F00 polygon is the Arizona and New Mexico cluster. A strong but small
+LLWS signal is therefore not guaranteed to be drawn. The size to which
+that matters is the minimum area, which is also uncalibrated.
 
 ## 5. The pixel/lon-lat convention
 
