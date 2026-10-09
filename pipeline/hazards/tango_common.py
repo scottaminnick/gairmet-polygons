@@ -67,8 +67,10 @@ from pipeline.polygons import (
     filter_polygons_by_area,
     geodesic_area_sq_mi,
     grid_to_polygons,
+    load_grid_cache,
     polygons_to_feature_collection,
     rasterize_polygon_cells,
+    save_grid_cache,
     smooth_polygon_boundary,
 )
 from pipeline.regrid import regrid_to_regular_latlon
@@ -173,6 +175,35 @@ def prepare_tango_grid(
         method=layer.regrid_method,
     )
     return np.nan_to_num(regridded).astype(np.float32), grid_spec, matched[0]
+
+
+def cache_and_polygonize(
+    cache_path,
+    speed_kt: np.ndarray,
+    grid_spec,
+    layer: TangoLayer,
+    date: datetime,
+    fxx: int,
+    **parameters,
+) -> dict:
+    """
+    Write the Phase A cache, READ IT BACK, and polygonize what was read.
+
+    This is what the driver publishes. The web app recomputes from the cache,
+    and the cache holds knots x 2 rounded to a whole number, i.e. 0.5 kt
+    resolution. A snapshot polygonized from the in-memory float grid could
+    therefore differ from the app's default recompute: a cell within 0.25 kt
+    of the threshold flips, and a peak moves by up to 0.25 kt. Polygonizing
+    the reloaded grid -- through the same load_grid_cache(scale=...) call the
+    app makes -- makes the published snapshot equal the default recompute by
+    construction.
+
+    The price is the rounding itself: a cell is flagged from 0.25 kt BELOW the
+    threshold (39.8 kt is stored as 40.0, so it counts at a 40 kt threshold).
+    """
+    save_grid_cache(cache_path, {CACHE_GRID_KEY: speed_kt}, grid_spec, scale=CACHE_SCALE)
+    grids, loaded_spec = load_grid_cache(cache_path, scale=CACHE_SCALE)
+    return polygonize_tango_grid(grids[CACHE_GRID_KEY], loaded_spec, layer, date, fxx, **parameters)
 
 
 def polygonize_tango_grid(

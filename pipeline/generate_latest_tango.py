@@ -16,7 +16,9 @@ pipeline/generate_latest_mtn_obsc.py, with these differences:
   3. The per-hour cache holds ONE grid, the raw speed in knots, stored
      as knots x 2 in uint8 (save_grid_cache(scale=2)). Nothing is
      smoothed before it is cached, so every Phase B parameter can be
-     re-run from it.
+     re-run from it. The published snapshot is polygonized from the grid
+     READ BACK from that cache, not the in-memory one, so it equals the
+     web app's default recompute exactly.
 
   4. Same source cycle as IFR / MTN OBSC (resolve_nbm_cycle), F00..F12
      mapping to NBM f006..f018 through NBM_LEAD_TIME_OFFSET_HOURS.
@@ -38,13 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from pipeline.gairmet_cycle import FORECAST_HOURS, NBM_LEAD_TIME_OFFSET_HOURS, resolve_nbm_cycle
 from pipeline.hazards.llws import LLWS
 from pipeline.hazards.sfc_wind import SFC_WIND
-from pipeline.hazards.tango_common import (
-    CACHE_GRID_KEY,
-    CACHE_SCALE,
-    polygonize_tango_grid,
-    prepare_tango_grid,
-)
-from pipeline.polygons import save_grid_cache
+from pipeline.hazards.tango_common import cache_and_polygonize, prepare_tango_grid
 
 LAYERS = [SFC_WIND, LLWS]
 
@@ -93,10 +89,14 @@ def generate_layer(layer, nbm_cycle_date, gairmet_cycle_date) -> int:
             print(f"  idx line: {idx_line}")
             print(f"  fetch+regrid ({layer.regrid_method}): {t1 - t0:.1f}s", flush=True)
 
-            fc = polygonize_tango_grid(
-                speed_kt, grid_spec, layer, gairmet_cycle_date, requested_fxx, **params
+            # CACHE FIRST, THEN POLYGONIZE WHAT WAS READ BACK, so the published
+            # snapshot equals the web app's default recompute (which works from
+            # the 0.5 kt cache). See tango_common.cache_and_polygonize().
+            cache_filename = f"{layer.key}_f{requested_fxx:02d}_grid.npz"
+            fc = cache_and_polygonize(
+                OUTPUT_DIR / cache_filename, speed_kt, grid_spec, layer, gairmet_cycle_date, requested_fxx, **params
             )
-            print(f"  polygonize: {time.monotonic() - t1:.1f}s", flush=True)
+            print(f"  cache write+reload+polygonize: {time.monotonic() - t1:.1f}s", flush=True)
         except Exception:
             print(f"  FAILED for {layer.key} F{requested_fxx:02d}, skipping this snapshot. Traceback:")
             traceback.print_exc()
@@ -105,9 +105,6 @@ def generate_layer(layer, nbm_cycle_date, gairmet_cycle_date) -> int:
         filename = f"{layer.key}_f{requested_fxx:02d}.geojson"
         with open(OUTPUT_DIR / filename, "w") as f:
             json.dump(fc, f, indent=2)
-
-        cache_filename = f"{layer.key}_f{requested_fxx:02d}_grid.npz"
-        save_grid_cache(OUTPUT_DIR / cache_filename, {CACHE_GRID_KEY: speed_kt}, grid_spec, scale=CACHE_SCALE)
 
         valid_time = gairmet_cycle_date + timedelta(hours=requested_fxx)
         manifest["snapshots"].append(

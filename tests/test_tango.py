@@ -13,6 +13,7 @@ filters are pinned to exactly one line of a SAVED REAL idx (NBM core
 2026-10-04 06Z f006), and a control proves the trap is real in that file.
 """
 
+import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +29,7 @@ from pipeline.hazards.mtn_obsc import find_message_excluding
 from pipeline.hazards.sfc_wind import SFC_WIND
 from pipeline.hazards.tango_common import (
     CACHE_SCALE,
+    cache_and_polygonize,
     find_layer_message,
     polygonize_tango_grid,
 )
@@ -259,3 +261,80 @@ def test_the_artcc_gate_applies_after_smoothing():
     # covers the contour half-cell and the boundary smoothing buffer.
     assert max(lats) < 49.1
     assert min(lats) < 48.0  # and the southern half survived
+
+
+# ---------------------------------------------------------------------------
+# Published snapshot == default recompute (the cache is 0.5 kt resolution)
+# ---------------------------------------------------------------------------
+
+
+def _as_json(fc):
+    return json.dumps(fc, sort_keys=True)
+
+
+def test_the_stored_snapshot_equals_polygonizing_the_reloaded_cache(tmp_path):
+    from pipeline.hazards.llws import LLWS as layer
+
+    speed = block(INTERIOR_SPEC, INTERIOR_SHAPE, 41.0, 39.0, -103.0, -99.0, 41.3)
+    speed[100, 150] = 43.3  # a peak that is not on the 0.5 kt grid
+    path = tmp_path / "llws_f00_grid.npz"
+
+    stored = cache_and_polygonize(path, speed, INTERIOR_SPEC, layer, CYCLE, 0)
+
+    grids, spec = load_grid_cache(path, scale=CACHE_SCALE)  # what the web app does
+    recomputed = polygonize_tango_grid(grids["speed_kt"], spec, layer, CYCLE, 0)  # layer defaults
+    assert len(stored["features"]) == 1
+    assert _as_json(stored) == _as_json(recomputed)
+
+
+def test_a_cell_just_under_the_threshold_is_flagged_because_of_the_rounding(tmp_path):
+    from pipeline.hazards.llws import LLWS as layer  # threshold 40 kt
+
+    speed = block(INTERIOR_SPEC, INTERIOR_SHAPE, 41.0, 39.0, -103.0, -99.0, 39.8)
+
+    # Control: polygonizing the in-memory grid does NOT flag 39.8 kt at 40.
+    assert polygonize_tango_grid(speed, INTERIOR_SPEC, layer, CYCLE, 0)["features"] == []
+
+    # The cache stores round(39.8 * 2) / 2 = 40.0, so the snapshot DOES.
+    stored = cache_and_polygonize(tmp_path / "g.npz", speed, INTERIOR_SPEC, layer, CYCLE, 0)
+    assert len(stored["features"]) == 1
+    assert stored["features"][0]["properties"]["peak_speed_kt"] == 40.0
+
+
+def test_the_effective_threshold_is_a_quarter_knot_lower(tmp_path):
+    from pipeline.hazards.llws import LLWS as layer  # 40 kt
+
+    def flagged(value):
+        speed = block(INTERIOR_SPEC, INTERIOR_SHAPE, 41.0, 39.0, -103.0, -99.0, value)
+        fc = cache_and_polygonize(tmp_path / "g.npz", speed, INTERIOR_SPEC, layer, CYCLE, 0)
+        return len(fc["features"]) == 1
+
+    assert flagged(39.76)      # rounds to 40.0
+    assert not flagged(39.74)  # rounds to 39.5
+    assert flagged(40.0)
+
+
+def test_peak_speed_is_a_multiple_of_half_a_knot(tmp_path):
+    from pipeline.hazards.sfc_wind import SFC_WIND as layer
+
+    speed = block(INTERIOR_SPEC, INTERIOR_SHAPE, 41.0, 39.0, -103.0, -99.0, 33.1)
+    speed[100, 150] = 43.3
+    fc = cache_and_polygonize(tmp_path / "g.npz", speed, INTERIOR_SPEC, layer, CYCLE, 0)
+    peak = fc["features"][0]["properties"]["peak_speed_kt"]
+    assert peak == 43.5 and (peak * 2) % 1 == 0
+
+    # Control: the in-memory grid reports the unrounded value.
+    in_memory = polygonize_tango_grid(speed, INTERIOR_SPEC, layer, CYCLE, 0)
+    assert in_memory["features"][0]["properties"]["peak_speed_kt"] == 43.3
+
+
+def test_the_driver_publishes_through_the_cache():
+    """
+    The driver itself imports requests (via the NBM fetch), which CI's light
+    set does not have, so it is checked by reading the source: it must call
+    cache_and_polygonize and must not call polygonize_tango_grid directly on
+    the in-memory grid.
+    """
+    source = (Path(__file__).resolve().parent.parent / "pipeline" / "generate_latest_tango.py").read_text()
+    assert "cache_and_polygonize(" in source
+    assert "polygonize_tango_grid(" not in source

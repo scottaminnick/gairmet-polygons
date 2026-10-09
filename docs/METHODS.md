@@ -556,6 +556,22 @@ would turn a 130 kt cell into 4 kt). The scale is written into the file,
 so a mismatched load raises instead of silently returning knots × 2. With
 `scale=None` the function is bit-identical to what it was.
 
+**The 0.5 kt resolution moves the effective threshold down by 0.25 kt.**
+Speeds are rounded to the nearest half knot when the cache is written, and
+the threshold is then applied to the rounded value (`>=`, §4A.6). A cell is
+therefore flagged from `threshold - 0.25 kt` upward: at a 40 kt threshold a
+39.8 kt cell is stored as 40.0 and counts, while 39.74 kt is stored as 39.5
+and does not. Reported peaks are likewise multiples of 0.5 kt (a 43.3 kt cell
+is reported as 43.5). `tests/test_tango.py` pins both.
+
+**Snapshots are built from the reloaded cache.** The driver writes the cache
+first, reads it back through the same `load_grid_cache(scale=...)` call the
+web app uses, and polygonizes that grid (`cache_and_polygonize` in
+`tango_common.py`), so a published snapshot equals the web app's default
+recompute by construction. Before this, the snapshot came from the in-memory
+float grid and could differ from the recompute by one of the two rounding
+effects above.
+
 ### 4A.8 Uncalibrated placeholders
 
 **Everything below is a first guess. None of it has been checked with a
@@ -691,13 +707,10 @@ only the first request per process pays it. Warm calls took roughly
 nothing flagged returns in about 0.09 s. The cache is per process, so each
 worker pays the first-call cost once.
 
-**Stored snapshot versus default recompute.** The pipeline polygonizes the
-in-memory grid and then writes the knots x 2 cache, so a recompute works
-from values rounded to 0.5 kt. The two agree whenever no cell sits within
-0.25 kt of the threshold or defines a peak; where one does, they can differ
-by that amount (seen once: a peak of 45.9 kt stored, 46.0 kt recomputed).
-On the 2026-10-04 15Z cycle all ten stored snapshots equalled their default
-recompute exactly.
+**Stored snapshot versus default recompute.** They are equal. The pipeline
+polygonizes the grid it reads back from the knots x 2 cache, the same grid
+the recompute route loads, so geometry and properties match exactly at the
+layer defaults (§4A.7 has the rounding this implies).
 
 ## 5. The pixel/lon-lat convention
 
