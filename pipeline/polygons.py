@@ -870,7 +870,10 @@ def lonlat_ring_to_pixel_rowcol(ring_coords, grid_spec: GridSpec):
     here rather than being duplicated per hazard module.
     """
     rows, cols = [], []
-    for lon, lat in ring_coords:
+    for coord in ring_coords:
+        # Only (lon, lat): boundary files built from FAA ADDS carry a
+        # third ordinate (z, always 0.0), which must not break unpacking.
+        lon, lat = coord[0], coord[1]
         row, col = grid_spec.lonlat_to_pixel(lon, lat)
         rows.append(row)
         cols.append(col)
