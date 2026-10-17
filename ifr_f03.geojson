@@ -1,0 +1,141 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -124.935768,
+              38.801089
+            ],
+            [
+              -125.185768,
+              39.451089
+            ],
+            [
+              -124.385768,
+              40.551089
+            ],
+            [
+              -124.385768,
+              41.251089
+            ],
+            [
+              -124.135768,
+              41.501089
+            ],
+            [
+              -124.085768,
+              40.751089
+            ],
+            [
+              -124.885768,
+              39.451089
+            ],
+            [
+              -124.935768,
+              38.801089
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "hazard": "IFR",
+        "threshold_pct": 50.0,
+        "neighborhood_radius_nm": 50.0,
+        "min_area_sq_mi": 3000.0,
+        "valid_time": "2026-10-18T00:00:00Z",
+        "model_cycle": "2026-10-17T21:00:00Z",
+        "forecast_hour": 3,
+        "cause": "CIG"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -124.935768,
+              37.401089
+            ],
+            [
+              -125.085768,
+              38.051089
+            ],
+            [
+              -124.835768,
+              38.801089
+            ],
+            [
+              -124.685768,
+              37.951089
+            ],
+            [
+              -124.935768,
+              37.401089
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "hazard": "IFR",
+        "threshold_pct": 50.0,
+        "neighborhood_radius_nm": 50.0,
+        "min_area_sq_mi": 3000.0,
+        "valid_time": "2026-10-18T00:00:00Z",
+        "model_cycle": "2026-10-17T21:00:00Z",
+        "forecast_hour": 3,
+        "cause": "CIG"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -81.635768,
+              26.001089
+            ],
+            [
+              -82.085768,
+              26.851089
+            ],
+            [
+              -81.735768,
+              27.201089
+            ],
+            [
+              -80.735768,
+              27.201089
+            ],
+            [
+              -81.085768,
+              26.451089
+            ],
+            [
+              -81.635768,
+              26.001089
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "hazard": "IFR",
+        "threshold_pct": 50.0,
+        "neighborhood_radius_nm": 50.0,
+        "min_area_sq_mi": 3000.0,
+        "valid_time": "2026-10-18T00:00:00Z",
+        "model_cycle": "2026-10-17T21:00:00Z",
+        "forecast_hour": 3,
+        "cause": "CIG"
+      }
+    }
+  ]
+}
