@@ -275,7 +275,8 @@ edge pivoted.
   strips under 2 mi wide where two outlines disagree, below the 0.025°
   grid's ~1.7 mi cell.
 - **Fort Frances, ON** and International Falls face each other across the
-  Rainy River. The Fort Frances test point is 0.8 mi from the edge.
+  Rainy River; the town is 0.8 mi from the edge, under one grid cell. The
+  test pins (−93.4, 48.75) instead, 10.6 mi outside.
 - **Canadian land spill is not measured in this repo**: it needs the
   Natural Earth file, which is not committed.
 

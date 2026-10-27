@@ -50,8 +50,10 @@ INSIDE = {
 }
 OUTSIDE = {
     "Toronto, ON": (-79.4, 43.7),
-    # 0.8 mi from the edge: International Falls is across the Rainy River.
-    "Fort Frances, ON": (-93.4, 48.6),
+    # Just north of the town, 10.6 mi outside. The town itself (48.6N) faces
+    # International Falls across the Rainy River, 0.8 mi from the edge --
+    # under one grid cell, too close to pin.
+    "Fort Frances, ON": (-93.4, 48.75),
 }
 
 # U.S. towns the 1:110m Natural Earth outline is too coarse to keep
