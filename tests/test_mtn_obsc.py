@@ -429,7 +429,7 @@ def test_below_sea_level_land_is_not_excluded():
 
 def test_conus_boundary_mask_excludes_quebec_and_mexico_includes_conus():
     """
-    Direct check against the REAL data/boundaries/artcc.json file (not a
+    Direct check against the REAL CONUS_BOUNDARY_PATH file (not a
     synthetic boundary) -- confirms the specific real coordinates from
     the actual problem run: Quebec (St. Lawrence/Laurentians) and
     Mexico (Sierra Madre) are OUTSIDE the real ARTCC boundary, while
