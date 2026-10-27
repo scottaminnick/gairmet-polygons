@@ -11,8 +11,9 @@ data, not noise, so nothing in the threshold/merge/area-filter chain
 drops them. Before the clip existed, a marine layer sitting offshore
 produced a real polygon hundreds of miles out to sea. MTN OBSC already
 hit the identical problem with its generously-sized terrain grid and
-solved it with data/boundaries/artcc.json; IFR now uses that same file
-through the same shared helper (pipeline.boundaries.get_boundary_mask).
+solved it with an area-of-responsibility file (now
+pipeline.boundaries.CONUS_BOUNDARY_PATH); IFR uses that same file through
+the same shared helper (pipeline.boundaries.get_boundary_mask).
 
 Runs against a grid round-tripped through pipeline.polygons'
 save_grid_cache/load_grid_cache -- i.e. the same cached-grid path the

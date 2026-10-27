@@ -158,17 +158,140 @@ could report 0% of everything.
 
 ---
 
-## 3. Area of responsibility (both hazards)
+## 3. Area of responsibility (every hazard)
 
-`data/boundaries/artcc.json` — AWC's 20 domestic ARTCC FIRs per NWSI 10-811
-§3, "covering the conterminous U.S. and adjacent coastal waters."
+`data/boundaries/conus_aor.json` (`pipeline.boundaries.CONUS_BOUNDARY_PATH`)
+— the U.S. domestic FIR. NWSI 10-811 §3 defines AWC's area as "Twenty (20)
+domestic Air Route Traffic Control Center (ARTCC) Flight Information Regions
+(FIRs) covering the conterminous U.S. and adjacent coastal waters", and the
+forecaster confirmed that the forecast area is that domestic FIR.
 
 NBM's CONUS grid has real coverage well past that (the Pacific, Canada, the
 Atlantic), and the terrain grid's bounding box is deliberately generous.
 IFR conditions and real relief out there are real data this product simply
-isn't responsible for, so both hazards gate on this boundary. The mask is
+isn't responsible for, so every hazard gates on this boundary. The mask is
 memoized in `pipeline/boundaries.py`; the first request after a process
 restart pays a few seconds to rasterize it, every later one is free.
+
+### 3.1 Why not the 20-ARTCC union
+
+The gate used to be `data/boundaries/artcc.json`, the plain union of the 20
+ARTCC polygons. Three things were wrong with it:
+
+- **Holes.** The union had 9 interior rings, the biggest ~32,500 sq mi over
+  NE PA, NJ and S NY, where neighbouring ARTCC polygons fail to meet. The
+  loader rasterizes exterior rings only, so the hole came out "inside" — by
+  accident.
+- **Canadian spill.** ARTCC polygons include airspace Canada delegates to
+  the U.S. (Rainy River, the Canadian side of Lake Erie, New Brunswick next
+  to Maine): ~17,900 sq mi over Canada, mostly in ZOB, ZMP and ZBW. An ARTCC
+  controlling that airspace does not make it part of the U.S. FIR.
+- **U.S. Lake Superior missing.** ~8,700 sq mi of U.S. water was outside.
+
+`artcc.json` stays in the repo: the viewer's ARTCC reference layer draws
+it, and pointing `CONUS_BOUNDARY_PATH` back at it is the rollback.
+
+### 3.2 The rule
+
+`scripts/build_aor_boundary.py` builds the file:
+
+```
+AOR = ( ARTCC_L union  −  ( Canadian FIRs − U.S. territory ) )
+      ∪ ( U.S. territory north of 41°N  ∩  buffer(ARTCC_L union, 2°) )
+```
+
+Subtract Canadian FIR airspace everywhere except over U.S. territory, then
+add back U.S. territory the ARTCC polygons miss in the north. Subtracting
+the Canadian FIRs alone would not do: they are coarse enough to swallow
+Caribou, ME and Detroit.
+
+- **Mexico is not subtracted, and the add-back stops at 41°N.** The first
+  version added U.S. territory back everywhere. The 1:110m Natural Earth
+  U.S. outline overshoots the Rio Grande by a few miles, so that pulled
+  ~1,600 sq mi of Mexico into the AOR (Big Bend, the lower Rio Grande
+  valley, El Paso–Juárez). Subtracting the Mexican FIR instead does not
+  help either: it and the ARTCC edge disagree along the Rio Grande at this
+  resolution, and the net effect was spill, not improvement. So south of
+  41°N the AOR is exactly the FAA ARTCC_L union.
+- **The ocean edge is the FAA ARTCC_L edge**, unchanged in principle. It
+  does differ slightly from the old `artcc.json` edge, because the FAA file
+  is newer and is the authority: 472 sq mi less off southern California,
+  69 sq mi less at the Florida corner/Gulf, 16 sq mi more in the Atlantic.
+  These are accepted.
+- **Oceanic FIRs are deferred.** Oakland, New York and Miami oceanic, and
+  the Gulf of Mexico beyond the ARTCC edge, are outside this AOR. Covering
+  them is a separate decision.
+
+Inputs (not committed; both public domain): the FAA ADDS **Airspace
+Boundary** GeoJSON (U.S. government work), and the **Natural Earth**
+admin-0 countries shapefile at 1:110m (Natural Earth is public domain).
+Run as `python scripts/build_aor_boundary.py --faa Airspace_Boundary.geojson
+--ne ne_110m_admin_0_countries.shp --out data/boundaries/conus_aor.json`.
+
+### 3.3 Holes are filled on purpose
+
+`load_boundary_mask()` rasterizes exterior rings only. That is now a stated
+choice: an area of responsibility has no legitimate holes, and the ones a
+union produces are slivers (`conus_aor.json` has 22, the largest 1.5 sq mi).
+The cost is that a real hole would be filled silently, which is how the
+32,500 sq mi one went unnoticed. So `tests/test_aor_boundary.py` fails if
+the active file has any interior ring over `MAX_BOUNDARY_HOLE_SQ_MI`
+(100 sq mi), and checks that the guard does fire on the old union.
+
+### 3.4 What changed, measured
+
+On the production grid (0.025°), old mask vs new:
+
+| | sq mi | Where |
+|---|---|---|
+| Removed | 17,049 | Canadian side of Lakes Erie and Ontario 8,200; New Brunswick 3,780; Rainy River, ON 3,490; smaller pieces along the border; 544 on the ocean edge (above) |
+| Added | 9,805 | U.S. Lake Superior 8,700; Northwest Angle/Lake of the Woods 480; Niagara 289; northern Maine ~250; 16 Atlantic |
+
+Recomputing the cached grids on the data-* branches (IFR and MTN OBSC
+2026-10-27 15Z, TANGO 2026-10-04 15Z; F00–F12) with each boundary:
+
+| Layer | Polygons old → new | Area, sq mi, old → new | Change |
+|---|---|---|---|
+| IFR | 27 → 28 | 1,226,596 → 1,208,771 | −17,825 (−1.5%), F03–F12 |
+| MTN OBSC | 12 → 12 | 757,089 → 757,089 | none |
+| TANGO surface wind | 0 → 0 | — | none (no polygons that cycle) |
+| TANGO LLWS | 1 → 1 | 1,312 → 1,161 | −151, F12, New Brunswick |
+
+Every change is on the Canadian border. For IFR, per forecast hour:
+~3,900–4,100 sq mi less at Rainy River, ON; 130–210 sq mi more at the
+Northwest Angle and along 49°N; **over Lake Superior, 62–505 sq mi more**
+(F03 386, F06 505, F09 62, F12 65 sq mi of polygon now over U.S. lake water
+that was outside the old boundary), with 110–210 sq mi less along the north
+shore near Grand Marais as the shape shifts; and in the Strait of Juan de
+Fuca, up to 249 sq mi less where the FAA edge moved in the strait. The one
+extra polygon is a 16 sq mi IFR F03 fragment near Neah Bay, split off at
+that strait edge.
+
+Some changed pieces reach past cells whose mask changed: wedges along the
+Olympic coast, and (in the 2026-10-27 09Z cycle) an IFR edge from Lake
+Superior into central Minnesota. That is the closing and the polygon
+simplifier, not the boundary: when a polygon's vertices at the border move,
+the simplifier can drop a vertex further along and a long edge pivots.
+
+### 3.5 Known gaps
+
+- **Border towns the 1:110m outline misses.** International Falls, MN is
+  ~1 mi outside (its airport, KINL, is inside); Sault Ste. Marie, MI is
+  ~5.6 mi outside (it was outside the old union too). Both are pinned as
+  strict `xfail`s in `tests/test_aor_boundary.py`. A 1:10m rebuild is the
+  likely fix.
+- **Slivers along the border.** Against `us_states.json`, ~1,660 sq mi of
+  U.S. land falls outside the AOR, nearly all of it (1,500 sq mi) in
+  strips under 2 mi wide where two outlines disagree, below the 0.025°
+  grid's ~1.7 mi cell.
+- **Fort Frances, ON** and International Falls face each other across the
+  Rainy River; the town is 0.8 mi from the edge, under one grid cell. The
+  test pins (−93.4, 48.75) instead, 10.6 mi outside.
+- **Canadian land spill is ~1,500 sq mi** at 1:110m (the build's figure;
+  it needs the Natural Earth file, which is not committed). The old union
+  spilled ~17,900 sq mi.
+
+### 3.6 Applying the gate to IFR v2
 
 **Applied twice in v2.** The fine-grid application guarantees no hazard
 *cell* is outside the boundary, but a contour runs along coarse cell
@@ -224,7 +347,7 @@ A cell participates only if all of these hold:
    (−500 ft). Deliberately *not* sea level: that seems like the natural
    cutoff and silently dropped Death Valley (−255 ft floor, 10,065 ft of
    relief) and the Salton Sea shore.
-4. **ARTCC** — §3.
+4. **Area of responsibility** (the U.S. domestic FIR) — §3.
 
 ### 4.3 Baseline is a land-only mean
 
@@ -1302,5 +1425,8 @@ what should have said so first.
   middle latitude, so the closing radius is 10–15% off at the north and
   south edges of a CONUS domain. Cell *areas* are computed per row, where
   the same error would accumulate.
+- The area of responsibility is built from a 1:110m U.S. outline, which
+  leaves International Falls, MN and Sault Ste. Marie, MI just outside it,
+  and oceanic FIRs are not covered — see §3.5.
 - HZ, FU and BLSN are deliberately not automated for either hazard: no NBM
   field exists, and per AWC practice they are rare enough to add by hand.

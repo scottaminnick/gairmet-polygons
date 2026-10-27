@@ -10,13 +10,16 @@ WHY THIS EXISTS
   Caribou ME, Detroit, etc.). So the rule is:
 
       AOR = ( ARTCC_L union  -  ( Canadian FIRs  -  U.S. territory ) )
-            U ( U.S. territory  ∩  buffer(ARTCC_L union, 2 deg) )
+            U ( U.S. territory north of 41N  ∩  buffer(ARTCC_L union, 2 deg) )
 
-  i.e. subtract Canadian FIR airspace everywhere EXCEPT over U.S. territory, and make sure
-  U.S. territory (including the U.S. half of the Great Lakes) is never lost.
-  Mexico is intentionally NOT subtracted (the FAA ARTCC edge and the Mexican FIR polygon
-  disagree along the Rio Grande at the resolution of the available U.S. outline; net effect
-  was spill, not improvement).  The seaward (ocean) edge is the FAA ARTCC_L edge, unchanged.
+  i.e. subtract Canadian FIR airspace everywhere EXCEPT over U.S. territory, and add back
+  U.S. territory that the ARTCC polygons miss in the north (the U.S. half of Lake Superior).
+  The add-back is limited to 41N and north ON PURPOSE: the Natural Earth 110m U.S. outline
+  overshoots the Rio Grande and the Pacific edge by a few miles, and adding it back there
+  would pull in Mexican territory (v1 did, ~1,600 sq mi).  Mexico is not subtracted.
+  South of 41N the AOR is exactly the FAA ARTCC_L union.  The seaward edge is the FAA
+  ARTCC_L edge.  Note it differs slightly from the old data/boundaries/artcc.json edge
+  (e.g. ~530 sq mi off southern California), because the FAA file is the authority.
 
 INPUTS (not committed to the repo; both public domain)
   --faa   FAA ADDS "Airspace Boundary" GeoJSON (Airspace_Boundary.geojson)
@@ -31,11 +34,13 @@ import argparse, json, sys
 import shapefile
 from shapely.geometry import shape, box, mapping, Polygon
 from shapely.ops import unary_union
+from shapely import force_2d
 from pyproj import Geod
 
 CONUS = {"ZAB","ZAU","ZBW","ZDC","ZDV","ZFW","ZHU","ZID","ZJX","ZKC",
          "ZLA","ZLC","ZMA","ZME","ZMP","ZNY","ZOA","ZOB","ZSE","ZTL"}
 CONUS_BOX = box(-125.5, 24.0, -66.0, 50.0)
+NORTH_BOX = box(-125.5, 41.0, -66.0, 50.0)   # add-back region (see docstring)
 GEOD = Geod(ellps="WGS84")
 
 def sq_mi(g):
@@ -68,7 +73,8 @@ def main():
     us = us.intersection(CONUS_BOX)
 
     canadian_only = cz.difference(us)
-    aor = artcc.difference(canadian_only).union(us.intersection(artcc.buffer(2.0))).buffer(0)
+    aor = artcc.difference(canadian_only).union(us.intersection(NORTH_BOX).intersection(artcc.buffer(2.0))).buffer(0)
+    aor = force_2d(aor)   # FAA coordinates carry a Z=0 ordinate; drop it so downstream loaders see lon,lat only
 
     holes = [sq_mi(Polygon(r)) for p in (aor.geoms if aor.geom_type == "MultiPolygon" else [aor]) for r in p.interiors]
     print(f"ARTCC_L union: {sq_mi(artcc):,.0f} sq mi | AOR: {sq_mi(aor):,.0f} sq mi | "

@@ -129,6 +129,11 @@ KM_PER_DEG_LAT = 111.32
 KM_PER_NM = 1.852
 SQ_MI_PER_SQ_KM = 0.386102
 
+# Largest interior ring a boundary file may carry, given that
+# load_boundary_mask() fills holes. Union slivers are well under 2 sq mi;
+# 100 is far above them and far below any real gap worth keeping.
+MAX_BOUNDARY_HOLE_SQ_MI = 100.0
+
 
 def cell_dimensions_km(grid_spec: GridSpec, shape: tuple) -> tuple[float, float]:
     """
@@ -870,7 +875,10 @@ def lonlat_ring_to_pixel_rowcol(ring_coords, grid_spec: GridSpec):
     here rather than being duplicated per hazard module.
     """
     rows, cols = [], []
-    for lon, lat in ring_coords:
+    for coord in ring_coords:
+        # Only (lon, lat): boundary files built from FAA ADDS carry a
+        # third ordinate (z, always 0.0), which must not break unpacking.
+        lon, lat = coord[0], coord[1]
         row, col = grid_spec.lonlat_to_pixel(lon, lat)
         rows.append(row)
         cols.append(col)
@@ -887,6 +895,10 @@ def rasterize_polygon_cells(polygon, grid_spec: GridSpec, shape: tuple):
 
     Promoted here from pipeline/hazards/ifr.py -- see
     lonlat_ring_to_pixel_rowcol()'s docstring for why.
+
+    Draws EXTERIOR rings only: cells inside a hole count as inside the
+    polygon. For boundary masks that is a stated choice, see
+    load_boundary_mask().
     """
     from skimage.draw import polygon as sk_polygon
 
@@ -906,20 +918,31 @@ def rasterize_polygon_cells(polygon, grid_spec: GridSpec, shape: tuple):
 def load_boundary_mask(boundaries_path: str, grid_spec: GridSpec, shape: tuple) -> np.ndarray:
     """
     Loads a GeoJSON FeatureCollection of polygons (e.g.
-    data/boundaries/artcc.json), unions every feature into one combined
-    shape, and rasterizes it onto the given grid -- returns a boolean
-    array (True = inside the boundary) matching `shape`.
+    data/boundaries/conus_aor.json), unions every feature into one
+    combined shape, and rasterizes it onto the given grid -- returns a
+    boolean array (True = inside the boundary) matching `shape`.
 
     Generic and hazard-agnostic: any hazard module that needs to
     restrict itself to a real geographic area of responsibility (rather
     than an arbitrary bounding box, which can't cleanly exclude a
     neighboring country that happens to share similar latitudes) can use
-    this against whatever boundary file fits -- e.g.
-    pipeline.hazards.mtn_obsc uses data/boundaries/artcc.json (AWC's own
-    20-ARTCC CONUS area of responsibility per NWSI 10-811) to keep
-    Mountain Obscuration from painting real terrain in Mexico or Canada
-    just because it happens to be within the generously-sized terrain
-    grid's bounding box.
+    this against whatever boundary file fits -- e.g. every hazard gates
+    on pipeline.boundaries.CONUS_BOUNDARY_PATH (the U.S. domestic FIR) to
+    keep polygons out of Mexico, Canada and open ocean that the NBM and
+    terrain grids genuinely cover.
+
+    Interior rings (holes) are IGNORED: only each part's exterior ring is
+    rasterized, so a hole in the file comes out as "inside". This is a
+    deliberate choice, not an accident of rasterize_polygon_cells(). An
+    area of responsibility has no legitimate holes; the ones a polygon
+    union produces are slivers where neighbouring source polygons fail to
+    meet (conus_aor.json has 22, the largest 1.5 sq mi), and filling them
+    is what we want. The cost is that a REAL hole would be silently filled
+    -- the old artcc.json union had a 32,500 sq mi one over NE PA, NJ and
+    S NY that only came out right because of this. So the choice is
+    guarded rather than trusted: tests/test_aor_boundary.py fails if the
+    active boundary file has any interior ring over
+    MAX_BOUNDARY_HOLE_SQ_MI.
 
     Not cheap (unioning + rasterizing onto a full CONUS-sized grid takes
     several seconds) but also not NBM-dependent -- callers generating
@@ -928,6 +951,7 @@ def load_boundary_mask(boundaries_path: str, grid_spec: GridSpec, shape: tuple) 
     """
     import json
 
+    from shapely.geometry import MultiPolygon
     from shapely.geometry import shape as shapely_shape
     from shapely.ops import unary_union
 
@@ -935,6 +959,12 @@ def load_boundary_mask(boundaries_path: str, grid_spec: GridSpec, shape: tuple) 
         data = json.load(f)
     geoms = [shapely_shape(feature["geometry"]) for feature in data["features"]]
     combined = unary_union(geoms)
+
+    # Exteriors only -- see the docstring. Dropped here explicitly so the
+    # choice does not hang on rasterize_polygon_cells() happening to
+    # ignore holes.
+    parts = list(combined.geoms) if combined.geom_type == "MultiPolygon" else [combined]
+    combined = MultiPolygon([ShapelyPolygon(p.exterior) for p in parts])
 
     rr, cc = rasterize_polygon_cells(combined, grid_spec, shape)
     mask = np.zeros(shape, dtype=bool)
