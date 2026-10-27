@@ -248,20 +248,30 @@ On the production grid (0.025°), old mask vs new:
 | Added | 9,805 | U.S. Lake Superior 8,700; Northwest Angle/Lake of the Woods 480; Niagara 289; northern Maine ~250; 16 Atlantic |
 
 Recomputing the cached grids on the data-* branches (IFR and MTN OBSC
-2026-10-27 09Z, TANGO 2026-10-04 15Z; F00–F12) with each boundary:
+2026-10-27 15Z, TANGO 2026-10-04 15Z; F00–F12) with each boundary:
 
 | Layer | Polygons old → new | Area, sq mi, old → new | Change |
 |---|---|---|---|
-| IFR | 17 → 17 | 2,265,333 → 2,252,051 | −13,282 (−0.6%): F06, F09, F12 at Rainy River and Lake Superior |
-| MTN OBSC | 12 → 12 | 1,315,314 → 1,315,314 | none |
+| IFR | 27 → 28 | 1,226,596 → 1,208,771 | −17,825 (−1.5%), F03–F12 |
+| MTN OBSC | 12 → 12 | 757,089 → 757,089 | none |
 | TANGO surface wind | 0 → 0 | — | none (no polygons that cycle) |
 | TANGO LLWS | 1 → 1 | 1,312 → 1,161 | −151, F12, New Brunswick |
 
-Every change is on the Canadian border or Lake Superior. One reaches inland:
-an IFR F12 edge running from Lake Superior to central Minnesota. That is
-the polygon simplifier, not the boundary: the polygon's vertices at Lake
-Superior moved, so the simplifier dropped a vertex near Duluth and the
-edge pivoted.
+Every change is on the Canadian border. For IFR, per forecast hour:
+~3,900–4,100 sq mi less at Rainy River, ON; 130–210 sq mi more at the
+Northwest Angle and along 49°N; **over Lake Superior, 62–505 sq mi more**
+(F03 386, F06 505, F09 62, F12 65 sq mi of polygon now over U.S. lake water
+that was outside the old boundary), with 110–210 sq mi less along the north
+shore near Grand Marais as the shape shifts; and in the Strait of Juan de
+Fuca, up to 249 sq mi less where the FAA edge moved in the strait. The one
+extra polygon is a 16 sq mi IFR F03 fragment near Neah Bay, split off at
+that strait edge.
+
+Some changed pieces reach past cells whose mask changed: wedges along the
+Olympic coast, and (in the 2026-10-27 09Z cycle) an IFR edge from Lake
+Superior into central Minnesota. That is the closing and the polygon
+simplifier, not the boundary: when a polygon's vertices at the border move,
+the simplifier can drop a vertex further along and a long edge pivots.
 
 ### 3.5 Known gaps
 
@@ -277,8 +287,9 @@ edge pivoted.
 - **Fort Frances, ON** and International Falls face each other across the
   Rainy River; the town is 0.8 mi from the edge, under one grid cell. The
   test pins (−93.4, 48.75) instead, 10.6 mi outside.
-- **Canadian land spill is not measured in this repo**: it needs the
-  Natural Earth file, which is not committed.
+- **Canadian land spill is ~1,500 sq mi** at 1:110m (the build's figure;
+  it needs the Natural Earth file, which is not committed). The old union
+  spilled ~17,900 sq mi.
 
 ### 3.6 Applying the gate to IFR v2
 
