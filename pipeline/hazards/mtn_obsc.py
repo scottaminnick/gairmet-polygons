@@ -145,8 +145,8 @@ business painting:
      polygons from a real run, since pipeline.fetch_terrain's terrain
      grid is deliberately generously-sized and covers those areas).
      Restricts generation to AWC's own defined area of responsibility
-     (the 20-ARTCC boundary, data/boundaries/artcc.json) rather than an
-     arbitrary bounding box. Note the ARTCC boundary deliberately
+     (the U.S. domestic FIR, data/boundaries/conus_aor.json) rather than
+     an arbitrary bounding box. Note the boundary deliberately
      INCLUDES adjacent coastal waters per NWSI 10-811, so it cannot do
      #1's job on its own.
 

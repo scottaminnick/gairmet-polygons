@@ -76,7 +76,8 @@ split. The union of all three layers reconstructs exactly the same
 overall IFR area as the original single combined-max approach.
 
 AREA OF RESPONSIBILITY: all three layers are clipped to AWC's own
-20-ARTCC CONUS boundary (data/boundaries/artcc.json, via
+area of responsibility, the U.S. domestic FIR
+(pipeline.boundaries.CONUS_BOUNDARY_PATH, via
 pipeline.boundaries.get_boundary_mask) before contouring. NBM's CONUS
 grid has real coverage far beyond that -- out over the Pacific, up into
 Canada, out over the Atlantic -- and IFR conditions out there are real

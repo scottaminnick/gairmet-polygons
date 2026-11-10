@@ -64,7 +64,15 @@ LAND_BOUNDARY_PATH = "data/boundaries/us_states.json"
 # what this product is actually responsible for, and keeping it explicit
 # means the intent survives if the land file is ever swapped for one with
 # different coverage.
-CONUS_BOUNDARY_PATH = "data/boundaries/artcc.json"
+#
+# The file is the U.S. domestic FIR, built by scripts/build_aor_boundary.py
+# (rule and numbers in docs/METHODS.md section 3). It replaced the raw
+# 20-ARTCC union (data/boundaries/artcc.json), which spilled ~17,900 sq mi
+# over Canada through the FAA's delegated airspace (Rainy River, the
+# Canadian side of Lake Erie, New Brunswick) and missed the U.S. half of
+# Lake Superior. artcc.json stays in the repo: the viewer's ARTCC reference
+# layer serves it, and pointing this path back at it is the rollback.
+CONUS_BOUNDARY_PATH = "data/boundaries/conus_aor.json"
 
 _boundary_mask_cache: dict = {}
 
