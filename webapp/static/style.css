@@ -8,6 +8,10 @@
 
   --accent-ifr: #f5a623;
   --accent-mtn: #b985ff;
+  /* TANGO layers: azure and lime, clear of every hue above (amber, violet,
+     teal, slate, pink) and of each other, and bright on the dark basemap. */
+  --accent-sfc-wind: #4da3ff;
+  --accent-llws: #a3e635;
   --accent-artcc: #2dd4bf;
   --accent-states: #64749a;
   /* Legacy MTN OBSC comparison overlay -- deliberately unlike the
@@ -183,6 +187,36 @@ html, body {
 
 .layer-row-static {
   cursor: pointer;
+}
+
+/* An AIRMET category heading over its hazard rows (TANGO). A label, not a
+   control: it neither toggles nor expands anything. */
+.layer-group-title {
+  margin: 8px 0 2px 0;
+  padding-top: 6px;
+  border-top: 1px solid var(--panel-border);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--text-secondary);
+}
+
+/* Why a layer has nothing on the map ("no polygons this hour", "layer
+   unavailable"). Its own line under the row header, so it is readable with
+   the body collapsed and never squeezes the label; takes no space when
+   empty, which is whenever the layer is showing data. */
+.layer-state {
+  padding: 0 0 2px 22px;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.layer-state:empty {
+  display: none;
+}
+
+/* A legend row for a layer that is switched off. Without this the row's
+   own display rule would override the hidden attribute. */
+.legend-row[hidden] {
+  display: none;
 }
 
 /* The expander is a button so it is keyboard reachable and announces its
@@ -718,6 +752,16 @@ html, body {
   background: var(--accent-mtn);
   opacity: 0.75;
   border: 1px solid var(--accent-mtn);
+}
+.swatch-sfc_wind {
+  background: var(--accent-sfc-wind);
+  opacity: 0.75;
+  border: 1px solid var(--accent-sfc-wind);
+}
+.swatch-llws {
+  background: var(--accent-llws);
+  opacity: 0.75;
+  border: 1px solid var(--accent-llws);
 }
 .swatch-states {
   background: transparent;

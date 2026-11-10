@@ -453,12 +453,51 @@ def test_existing_routes_are_still_the_existing_handlers():
 def test_tango_routes_are_all_literal_and_registered_before_the_static_mount():
     paths = [getattr(r, "path", "") for r in app.routes]
     tango = [p for p in paths if "/sfc_wind" in p or "/llws" in p]
-    assert len(tango) == 6
+    # manifest, parameters, {fxx}, {fxx}/recompute -- per layer.
+    assert len(tango) == 8
     assert all("{key}" not in p for p in tango)
     mount = paths.index("")  # the StaticFiles mount at "/" has an empty path
     assert all(paths.index(p) < mount for p in tango)
-    for key in KEYS:  # /manifest strictly before /{fxx}
-        assert paths.index(f"/api/hazards/{key}/manifest") < paths.index(f"/api/hazards/{key}/{{fxx}}")
+    for key in KEYS:  # the literal routes strictly before /{fxx}, which would swallow them
+        for literal in ("manifest", "parameters"):
+            assert paths.index(f"/api/hazards/{key}/{literal}") < paths.index(f"/api/hazards/{key}/{{fxx}}")
+
+
+@pytest.mark.parametrize("layer", LAYERS, ids=KEYS)
+def test_parameters_report_exactly_what_recompute_accepts(nothing_loaded, layer):
+    """
+    The viewer sets its steppers from this, so it must be the recompute
+    route's own defaults and bounds -- and must answer before any data has
+    loaded, since it reads no artifacts.
+    """
+    from webapp.tango_routes import MIN_AREA_RANGE_SQ_MI, NEIGHBORHOOD_RADIUS_RANGE_NM, SMOOTH_SIGMA_RANGE
+
+    status, _h, body = get(f"/api/hazards/{layer.key}/parameters")
+    assert status == 200
+    assert body["defaults"] == {
+        "speed_threshold_kt": layer.default_threshold_kt,
+        "smooth_sigma_cells": layer.default_smooth_sigma_cells,
+        "neighborhood_radius_nm": layer.default_neighborhood_radius_nm,
+        "min_area_sq_mi": layer.default_min_area_sq_mi,
+    }
+    assert body["bounds"] == {
+        "speed_threshold_kt": list(layer.threshold_range_kt),
+        "smooth_sigma_cells": list(SMOOTH_SIGMA_RANGE),
+        "neighborhood_radius_nm": list(NEIGHBORHOOD_RADIUS_RANGE_NM),
+        "min_area_sq_mi": list(MIN_AREA_RANGE_SQ_MI),
+    }
+
+
+@pytest.mark.parametrize("layer", LAYERS, ids=KEYS)
+def test_the_reported_bounds_are_the_ones_recompute_enforces(served, layer):
+    """Each bound is accepted and one step past it is a 422."""
+    params = get(f"/api/hazards/{layer.key}/parameters")[2]
+    base = f"/api/hazards/{layer.key}/00/recompute"
+    for name, (lo, hi) in params["bounds"].items():
+        assert get(f"{base}?{name}={lo}")[0] == 200, f"{name}={lo} refused"
+        assert get(f"{base}?{name}={hi}")[0] == 200, f"{name}={hi} refused"
+        assert get(f"{base}?{name}={lo - 1}")[0] == 422, f"{name}={lo - 1} accepted"
+        assert get(f"{base}?{name}={hi + 1}")[0] == 422, f"{name}={hi + 1} accepted"
 
 
 def test_there_is_no_export_for_the_new_layers(served):

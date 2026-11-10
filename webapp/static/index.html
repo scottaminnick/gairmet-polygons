@@ -220,6 +220,166 @@
         </div>
       </div>
 
+      <!-- TANGO GROUP: strong surface wind and LLWS potential. Hazard rows
+           like IFR and MTN OBSC (same accordion, same adjustor), grouped
+           under their AIRMET category. Both off by default; neither is in
+           the EXPORT panel (no PGEN/XML format for TANGO yet). -->
+      <div class="layer-group-title mono" id="tango-group">TANGO</div>
+      <div class="layer-row" data-hazard="sfc_wind">
+        <div class="layer-head">
+          <input type="checkbox" id="toggle-sfc_wind" aria-label="Show STG SFC WND layer" />
+          <button type="button" class="layer-expand" id="expand-sfc_wind"
+                  aria-expanded="false" aria-controls="adjust-sfc_wind-body">
+            <span class="swatch swatch-sfc_wind"></span>
+            <span class="mono">STG SFC WND</span>
+            <span class="disclosure" aria-hidden="true">&#9656;</span>
+          </button>
+        </div>
+        <div class="layer-state mono" id="layer-sfc_wind-state"></div>
+        <!-- Same stepper / APPLY pattern as IFR. The min/max/value here are
+             placeholders: map.js replaces them from /api/hazards/sfc_wind/parameters
+             (the bounds /recompute enforces) and the manifest (the parameters
+             the scheduled run used), so nothing below is a default. The
+             controls stay disabled until that has loaded. -->
+        <div class="layer-body" id="adjust-sfc_wind-body" hidden>
+          <div class="body-title">ADJUST <span id="adjust-sfc_wind-status" class="mono"></span></div>
+          <div class="adjust-note mono">cycle <span id="adjust-sfc_wind-cycle">--------Z</span> &middot; nbm <span id="adjust-sfc_wind-nbm">--------Z</span></div>
+          <div class="adjust-row">
+            <div class="adjust-label-cell">
+              <span class="mono adjust-label">THRESH</span>
+              <span class="mono adjust-hint" id="adjust-sfc_wind-threshold-val"></span>
+            </div>
+            <div class="stepper">
+              <button type="button" class="step-btn" data-step="down" aria-label="Decrease speed threshold" disabled>&minus;</button>
+              <input type="number" id="adjust-sfc_wind-threshold" class="mono step-input" min="20" max="50" step="1" value="20" inputmode="decimal" aria-label="STG SFC WND speed threshold, knots" disabled />
+              <span class="mono step-unit">kt</span>
+              <button type="button" class="step-btn" data-step="up" aria-label="Increase speed threshold" disabled>+</button>
+            </div>
+          </div>
+          <div class="adjust-row">
+            <div class="adjust-label-cell">
+              <span class="mono adjust-label">SMOOTH</span>
+              <span class="mono adjust-hint" id="adjust-sfc_wind-sigma-val"></span>
+            </div>
+            <div class="stepper">
+              <button type="button" class="step-btn" data-step="down" aria-label="Decrease smoothing sigma" disabled>&minus;</button>
+              <input type="number" id="adjust-sfc_wind-sigma" class="mono step-input step-input-wide" min="0" max="3" step="0.5" value="0" inputmode="decimal" aria-label="STG SFC WND smoothing sigma, grid cells" disabled />
+              <span class="mono step-unit">&sigma;</span>
+              <button type="button" class="step-btn" data-step="up" aria-label="Increase smoothing sigma" disabled>+</button>
+            </div>
+          </div>
+          <div class="adjust-row">
+            <div class="adjust-label-cell">
+              <span class="mono adjust-label">RADIUS</span>
+              <span class="mono adjust-hint" id="adjust-sfc_wind-radius-val"></span>
+            </div>
+            <div class="stepper">
+              <button type="button" class="step-btn" data-step="down" aria-label="Decrease radius" disabled>&minus;</button>
+              <input type="number" id="adjust-sfc_wind-radius" class="mono step-input" min="0" max="150" step="5" value="0" inputmode="decimal" aria-label="STG SFC WND radius, nautical miles" disabled />
+              <span class="mono step-unit">nm</span>
+              <button type="button" class="step-btn" data-step="up" aria-label="Increase radius" disabled>+</button>
+            </div>
+          </div>
+          <div class="adjust-row">
+            <div class="adjust-label-cell">
+              <span class="mono adjust-label">MIN AREA</span>
+              <span class="mono adjust-hint" id="adjust-sfc_wind-minarea-val"></span>
+            </div>
+            <div class="stepper">
+              <button type="button" class="step-btn" data-step="down" aria-label="Decrease minimum area" disabled>&minus;</button>
+              <input type="number" id="adjust-sfc_wind-minarea" class="mono step-input step-input-wide" min="0" max="10000" step="100" value="0" inputmode="decimal" aria-label="STG SFC WND minimum area, square miles" disabled />
+              <span class="mono step-unit">mi&sup2;</span>
+              <button type="button" class="step-btn" data-step="up" aria-label="Increase minimum area" disabled>+</button>
+            </div>
+          </div>
+          <div class="adjust-apply-row">
+            <button id="adjust-sfc_wind-apply" class="fxx-btn adjust-apply-btn" disabled>APPLY</button>
+            <button id="adjust-sfc_wind-revert" class="fxx-btn adjust-revert-btn" disabled title="Put the fields back to the applied values">REVERT</button>
+          </div>
+          <button id="adjust-sfc_wind-apply-all" class="fxx-btn adjust-apply-all-btn" disabled
+                  title="Apply these values to every forecast hour, not just the one on screen">APPLY ALL HOURS</button>
+          <button id="adjust-sfc_wind-reset" class="fxx-btn adjust-reset-btn" disabled>RESET THIS HOUR</button>
+          <button id="adjust-sfc_wind-reset-all" class="fxx-btn adjust-reset-btn" disabled>RESET ALL HOURS</button>
+        </div>
+      </div>
+      <div class="layer-row" data-hazard="llws">
+        <div class="layer-head">
+          <input type="checkbox" id="toggle-llws" aria-label="Show LLWS layer" />
+          <button type="button" class="layer-expand" id="expand-llws"
+                  aria-expanded="false" aria-controls="adjust-llws-body">
+            <span class="swatch swatch-llws"></span>
+            <span class="mono">LLWS</span>
+            <span class="disclosure" aria-hidden="true">&#9656;</span>
+          </button>
+        </div>
+        <div class="layer-state mono" id="layer-llws-state"></div>
+        <!-- Same stepper / APPLY pattern as IFR. The min/max/value here are
+             placeholders: map.js replaces them from /api/hazards/llws/parameters
+             (the bounds /recompute enforces) and the manifest (the parameters
+             the scheduled run used), so nothing below is a default. The
+             controls stay disabled until that has loaded. -->
+        <div class="layer-body" id="adjust-llws-body" hidden>
+          <div class="body-title">ADJUST <span id="adjust-llws-status" class="mono"></span></div>
+          <div class="adjust-note mono">cycle <span id="adjust-llws-cycle">--------Z</span> &middot; nbm <span id="adjust-llws-nbm">--------Z</span></div>
+          <div class="adjust-row">
+            <div class="adjust-label-cell">
+              <span class="mono adjust-label">THRESH</span>
+              <span class="mono adjust-hint" id="adjust-llws-threshold-val"></span>
+            </div>
+            <div class="stepper">
+              <button type="button" class="step-btn" data-step="down" aria-label="Decrease speed threshold" disabled>&minus;</button>
+              <input type="number" id="adjust-llws-threshold" class="mono step-input" min="30" max="60" step="1" value="30" inputmode="decimal" aria-label="LLWS speed threshold, knots" disabled />
+              <span class="mono step-unit">kt</span>
+              <button type="button" class="step-btn" data-step="up" aria-label="Increase speed threshold" disabled>+</button>
+            </div>
+          </div>
+          <div class="adjust-row">
+            <div class="adjust-label-cell">
+              <span class="mono adjust-label">SMOOTH</span>
+              <span class="mono adjust-hint" id="adjust-llws-sigma-val"></span>
+            </div>
+            <div class="stepper">
+              <button type="button" class="step-btn" data-step="down" aria-label="Decrease smoothing sigma" disabled>&minus;</button>
+              <input type="number" id="adjust-llws-sigma" class="mono step-input step-input-wide" min="0" max="3" step="0.5" value="0" inputmode="decimal" aria-label="LLWS smoothing sigma, grid cells" disabled />
+              <span class="mono step-unit">&sigma;</span>
+              <button type="button" class="step-btn" data-step="up" aria-label="Increase smoothing sigma" disabled>+</button>
+            </div>
+          </div>
+          <div class="adjust-row">
+            <div class="adjust-label-cell">
+              <span class="mono adjust-label">RADIUS</span>
+              <span class="mono adjust-hint" id="adjust-llws-radius-val"></span>
+            </div>
+            <div class="stepper">
+              <button type="button" class="step-btn" data-step="down" aria-label="Decrease radius" disabled>&minus;</button>
+              <input type="number" id="adjust-llws-radius" class="mono step-input" min="0" max="150" step="5" value="0" inputmode="decimal" aria-label="LLWS radius, nautical miles" disabled />
+              <span class="mono step-unit">nm</span>
+              <button type="button" class="step-btn" data-step="up" aria-label="Increase radius" disabled>+</button>
+            </div>
+          </div>
+          <div class="adjust-row">
+            <div class="adjust-label-cell">
+              <span class="mono adjust-label">MIN AREA</span>
+              <span class="mono adjust-hint" id="adjust-llws-minarea-val"></span>
+            </div>
+            <div class="stepper">
+              <button type="button" class="step-btn" data-step="down" aria-label="Decrease minimum area" disabled>&minus;</button>
+              <input type="number" id="adjust-llws-minarea" class="mono step-input step-input-wide" min="0" max="10000" step="100" value="0" inputmode="decimal" aria-label="LLWS minimum area, square miles" disabled />
+              <span class="mono step-unit">mi&sup2;</span>
+              <button type="button" class="step-btn" data-step="up" aria-label="Increase minimum area" disabled>+</button>
+            </div>
+          </div>
+          <div class="adjust-apply-row">
+            <button id="adjust-llws-apply" class="fxx-btn adjust-apply-btn" disabled>APPLY</button>
+            <button id="adjust-llws-revert" class="fxx-btn adjust-revert-btn" disabled title="Put the fields back to the applied values">REVERT</button>
+          </div>
+          <button id="adjust-llws-apply-all" class="fxx-btn adjust-apply-all-btn" disabled
+                  title="Apply these values to every forecast hour, not just the one on screen">APPLY ALL HOURS</button>
+          <button id="adjust-llws-reset" class="fxx-btn adjust-reset-btn" disabled>RESET THIS HOUR</button>
+          <button id="adjust-llws-reset-all" class="fxx-btn adjust-reset-btn" disabled>RESET ALL HOURS</button>
+        </div>
+      </div>
+
       <!-- NON-HAZARD ROWS: no adjustors, so no disclosure and no
            expansion. Still plain labels, so a click anywhere on the row
            toggles visibility exactly as it always has. -->
@@ -299,6 +459,8 @@
   <div class="panel-title">LEGEND</div>
   <div class="legend-row"><span class="swatch swatch-ifr"></span><span class="mono">PROB(IFR) &ge; <span id="legend-threshold">70</span>%</span></div>
   <div class="legend-row"><span class="swatch swatch-mtn"></span><span class="mono">MTN OBSC &ge; <span id="legend-mtn-threshold">--</span>%</span></div>
+  <div class="legend-row" id="legend-sfc_wind" hidden><span class="swatch swatch-sfc_wind"></span><span class="mono">STG SFC WND &ge; <span id="legend-sfc_wind-threshold">--</span> kt</span></div>
+  <div class="legend-row" id="legend-llws" hidden><span class="swatch swatch-llws"></span><span class="mono">LLWS &ge; <span id="legend-llws-threshold">--</span> kt</span></div>
   <div class="panel-row"><span class="label">SMOOTHING</span><span class="mono value"><span id="legend-radius">--</span>nm radius</span></div>
   <div class="panel-row"><span class="label">MIN AREA</span><span class="mono value"><span id="legend-min-area">--</span> sq mi</span></div>
 </div>

@@ -1018,6 +1018,9 @@ LAYERS
   [x] IFR CIG/VIS        ▸     hazard row: expandable
         ADJUST                 ← steppers, APPLY / REVERT / APPLY ALL HOURS, resets
   [x] MTN OBSC           ▸
+  TANGO                        category heading (a label, not a control)
+  [ ] STG SFC WND        ▸     hazard rows, off by default, not in EXPORT
+  [ ] LLWS               ▸
   [x] STATE BOUNDARIES         non-hazard row: no adjustors, no disclosure
   [ ] ARTCC BOUNDARIES
   [ ] LEGACY MTN OBSC
@@ -1031,6 +1034,30 @@ EXPORT
 **Adding a hazard** is a row in `index.html` and an entry in
 `HAZARD_PANELS` (accordion) and `EXPORT_HAZARDS` (export panel) in
 `map.js`. Nothing else in the rail is per-hazard.
+
+**The TANGO rows** (strong surface wind, LLWS) use the same accordion,
+steppers, APPLY and resets, through the same `HAZARD_PANELS`, `ADJUSTORS`
+and `makeHourStore` machinery. Where they differ:
+
+- **Defaults and bounds come from the server.** The markup holds disabled
+  placeholders; `configureTango()` sets each stepper's min/max from
+  `/api/hazards/{key}/parameters` -- the exact bounds `/recompute`
+  validates, so a stepper cannot reach a 422 -- and its default from the
+  layer's manifest (the parameters the scheduled run used). A change to a
+  layer's defaults reaches the viewer with no edit to the front end.
+  Steps (1 kt, 0.5 σ, 5 nm, 100 sq mi) are chosen so every current
+  default sits on its lattice; a test checks it.
+- **An empty hour is normal** for these sparse fields: a valid empty
+  FeatureCollection, shown as "no polygons this hour" under the row
+  header, with its settings seeded from the manifest.
+- **Failures stay in the row.** 409 reads "data is being refreshed", 503
+  and 404 "layer unavailable"; every TANGO loader catches its own errors,
+  and reads or discards every response body (an unread body holds one of
+  the browser's six connections per host).
+- **The cycle is shown in the row**, because TANGO runs as its own
+  workflow and can lag the cycle in the header.
+- **No export.** Neither layer is in `EXPORT_HAZARDS`; the TANGO export
+  format is undecided.
 
 Four rules the structure depends on:
 

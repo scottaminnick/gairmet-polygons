@@ -5,11 +5,18 @@ HTTP routes for the TANGO-category layers (strong surface wind and LLWS
 potential). Registered from webapp/main.py by register_tango_routes(app),
 before the StaticFiles mount, so these take priority over static files.
 
-Per layer, three GET routes (key is "sfc_wind" or "llws"):
+Per layer, four GET routes (key is "sfc_wind" or "llws"):
 
     /api/hazards/{key}/manifest          the loaded manifest
+    /api/hazards/{key}/parameters        recompute defaults and bounds
     /api/hazards/{key}/{fxx}             the stored GeoJSON snapshot
     /api/hazards/{key}/{fxx}/recompute   Phase B re-run from the cached grid
+
+/parameters exists so the viewer's controls can never disagree with the
+validation below: it reports the very defaults and bounds the /recompute
+Query declarations are built from, so a stepper cannot reach a value the
+server answers with a 422, and a later change to a layer's defaults reaches
+the viewer without a JavaScript edit.
 
 THE PATHS ARE LITERAL, NOT /api/hazards/{key}/... WITH A PATH PARAMETER.
 The two layers are generated in a loop, but each route is registered with
@@ -62,6 +69,29 @@ NEIGHBORHOOD_RADIUS_RANGE_NM = (0.0, 150.0)
 MIN_AREA_RANGE_SQ_MI = (0.0, 10000.0)
 
 
+def parameters(layer) -> dict:
+    """
+    The recompute parameters for one layer, keyed by their query names:
+    each one's default and the [min, max] the route accepts. Built from the
+    same values the /recompute Query declarations use.
+    """
+    return {
+        "key": layer.key,
+        "defaults": {
+            "speed_threshold_kt": layer.default_threshold_kt,
+            "smooth_sigma_cells": layer.default_smooth_sigma_cells,
+            "neighborhood_radius_nm": layer.default_neighborhood_radius_nm,
+            "min_area_sq_mi": layer.default_min_area_sq_mi,
+        },
+        "bounds": {
+            "speed_threshold_kt": list(layer.threshold_range_kt),
+            "smooth_sigma_cells": list(SMOOTH_SIGMA_RANGE),
+            "neighborhood_radius_nm": list(NEIGHBORHOOD_RADIUS_RANGE_NM),
+            "min_area_sq_mi": list(MIN_AREA_RANGE_SQ_MI),
+        },
+    }
+
+
 def register_tango_routes(app) -> None:
     # Imported here, not at module level: webapp.main imports this module,
     # so a module-level import back would be circular. By the time main.py
@@ -78,6 +108,11 @@ def _register_layer(app, layer, require_manifest, find_snapshot) -> None:
     def get_manifest():
         require_manifest(key)
         return FileResponse(artifacts.manifest_path(key), media_type="application/json")
+
+    def get_parameters():
+        # Static: needs no artifacts, so it answers even before the data
+        # branch has loaded.
+        return parameters(layer)
 
     def lookup(fxx):
         manifest = require_manifest(key)
@@ -171,5 +206,6 @@ def _register_layer(app, layer, require_manifest, find_snapshot) -> None:
     # handlers of one layer, and the two layers, never collide in the
     # OpenAPI schema.
     app.add_api_route(f"/api/hazards/{key}/manifest", get_manifest, methods=["GET"], name=f"get_{key}_manifest")
+    app.add_api_route(f"/api/hazards/{key}/parameters", get_parameters, methods=["GET"], name=f"get_{key}_parameters")
     app.add_api_route(f"/api/hazards/{key}/{{fxx}}/recompute", recompute, methods=["GET"], name=f"recompute_{key}_snapshot")
     app.add_api_route(f"/api/hazards/{key}/{{fxx}}", get_snapshot, methods=["GET"], name=f"get_{key}_snapshot")
