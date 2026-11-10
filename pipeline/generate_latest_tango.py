@@ -75,6 +75,10 @@ def generate_layer(layer, nbm_cycle_date, gairmet_cycle_date) -> int:
         "phenomenon": layer.phenomenon,
         "model_cycle": gairmet_cycle_date.isoformat() + "Z",
         "nbm_source_cycle": nbm_cycle_date.isoformat() + "Z",
+        # Every threshold, sigma, radius and minimum area here is a
+        # placeholder (docs/METHODS.md 4A.8). Said in the published data,
+        # not only in the docs, now that this runs every six hours.
+        "uncalibrated": True,
         **params,
         "snapshots": [],
     }
@@ -132,8 +136,9 @@ def generate_layer(layer, nbm_cycle_date, gairmet_cycle_date) -> int:
 
 def main():
     try:
-        # Tango rides MTN OBSC's cycle; the hazard name is only a log label.
-        nbm_cycle_date = resolve_nbm_cycle(hazard="mtn_obsc")
+        # The workflow passes the cycle it resolved and approved
+        # (NBM_SOURCE_CYCLE); the hazard name is only a log label.
+        nbm_cycle_date = resolve_nbm_cycle(hazard="tango")
     except Exception:
         print("FAILED to find any available cycle. Full traceback:\n")
         traceback.print_exc()

@@ -79,17 +79,36 @@ def _request(path):
     }
     captured = {}
 
-    async def receive():
-        return {"type": "http.request", "body": b"", "more_body": False}
+    async def run():
+        # Behave like a real server (uvicorn): the request body once, then
+        # nothing until the response is finished, then a disconnect.
+        # Answering http.request on every call is what no server does, and
+        # starlette 1.10's FileResponse -- which listens for the disconnect
+        # while it streams -- rejects it ("Unexpected message received:
+        # http.request"); the served app was fine under uvicorn throughout.
+        request_sent = False
+        response_done = asyncio.Event()
 
-    async def send(message):
-        if message["type"] == "http.response.start":
-            captured["status"] = message["status"]
-            captured["headers"] = {
-                k.decode().lower(): v.decode() for k, v in message["headers"]
-            }
+        async def receive():
+            nonlocal request_sent
+            if not request_sent:
+                request_sent = True
+                return {"type": "http.request", "body": b"", "more_body": False}
+            await response_done.wait()
+            return {"type": "http.disconnect"}
 
-    asyncio.run(app(scope, receive, send))
+        async def send(message):
+            if message["type"] == "http.response.start":
+                captured["status"] = message["status"]
+                captured["headers"] = {
+                    k.decode().lower(): v.decode() for k, v in message["headers"]
+                }
+            elif message["type"] == "http.response.body" and not message.get("more_body", False):
+                response_done.set()
+
+        await app(scope, receive, send)
+
+    asyncio.run(run())
     return captured.get("status"), captured.get("headers", {})
 
 

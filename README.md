@@ -214,6 +214,14 @@ Currently working:
       handling for it.
 - [ ] Terrain/DEM sourcing for Mountain Obscuration
 - [ ] Mountain Obscuration hazard definition (`pipeline/hazards/mtn_obsc.py`)
+- [ ] **Dependencies are unpinned.** `requirements.txt` and
+      `requirements-pipeline.txt` name packages without versions, so CI,
+      the scheduled pipeline and Railway each install whatever is newest
+      that day. starlette 1.10.0 showed the cost: CI went red on code
+      nobody had changed (it was the test helper, not the app, but nothing
+      told the two apart). Candidates: a lock file (`pip-compile` /
+      `uv lock`) installed everywhere, plus an occasional deliberate
+      upgrade PR so versions move on a day someone is watching.
 
 ## Running the web app locally
 
@@ -257,7 +265,8 @@ Actions tab (`generate_ifr.yml`), without editing any code:
 | File | Layer | Role |
 |---|---|---|
 | `us_states.json` | STATE BOUNDARIES | Reference, and the land/water gate for MTN OBSC |
-| `artcc.json` | ARTCC BOUNDARIES | Reference, and the area-of-responsibility gate for both hazards |
+| `artcc.json` | ARTCC BOUNDARIES | Reference **only** since the AOR change; it was the area-of-responsibility gate before |
+| `conus_aor.json` | — (not drawn) | The area-of-responsibility gate for every hazard: the U.S. domestic FIR. See [METHODS §3](docs/METHODS.md) |
 | `legacy_mtnobsc.json` | LEGACY MTN OBSC | Reference **only** — never a gate. See [`LEGACY_MTNOBSC.md`](data/boundaries/LEGACY_MTNOBSC.md) |
 
 `data/boundaries/artcc.json` — 20 domestic CONUS ARTCC polygons, each with
@@ -265,6 +274,12 @@ a `name` property (e.g. `ZTL` for Atlanta Center). Sourced from the
 project owner's own `model-viewer` repo rather than FAA's ArcGIS Hub
 (which requires their web UI or an authenticated API export, neither
 reachable from a sandboxed dev environment during initial development).
+
+`data/boundaries/conus_aor.json` — the U.S. domestic FIR, built by
+`scripts/build_aor_boundary.py` from the FAA ADDS Airspace Boundary file
+and Natural Earth admin-0 countries (both public domain, neither
+committed). The rule, the Mexico decision and the known gaps are in
+[METHODS §3](docs/METHODS.md).
 
 The legacy MTN OBSC layer is off by default and exists so a forecaster can
 compare derived areas against the pre-automation ones during calibration.

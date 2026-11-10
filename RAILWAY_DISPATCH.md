@@ -2,7 +2,8 @@
 
 `railway.dispatch.json` configures a **second** Railway service in the
 same project as the web app. It runs `scripts/dispatch_workflows.py` on a
-schedule, which POSTs a `workflow_dispatch` to both hazard workflows.
+schedule, which POSTs a `workflow_dispatch` to every hazard workflow listed
+in `pipeline.publish_schedule.HAZARD_WORKFLOWS` (IFR, MTN OBSC, TANGO).
 
 It exists because GitHub delays `schedule:` runs — ~95 minutes on
 2026-09-07, up to 4.5 hours by 2026-09-10, and growing. `workflow_dispatch`

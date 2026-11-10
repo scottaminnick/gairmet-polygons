@@ -80,7 +80,9 @@ def test_the_workflow_filenames_come_from_the_schedule_module():
     does not exist -- a 404 per cycle, and no packages, until somebody
     reads the Railway logs.
     """
-    assert set(HAZARD_WORKFLOWS.values()) == {"generate_ifr.yml", "generate_mtn_obsc.yml"}
+    assert set(HAZARD_WORKFLOWS.values()) == {
+        "generate_ifr.yml", "generate_mtn_obsc.yml", "generate_tango.yml",
+    }
     for workflow_file in HAZARD_WORKFLOWS.values():
         assert (REPO_ROOT / ".github" / "workflows" / workflow_file).exists(), (
             f"{workflow_file} is dispatched but does not exist"
@@ -306,7 +308,9 @@ def test_the_stagger_knob_still_works_if_that_ever_changes(monkeypatch):
     monkeypatch.setattr(dispatch.time, "sleep", slept.append)
     monkeypatch.setattr(dispatch, "dispatch_one", lambda *a, **k: True)
     dispatch.main(["--stagger-seconds", "30"])
-    assert slept == [30.0], "one sleep BETWEEN the two dispatches, not before the first"
+    assert slept == [30.0] * (len(HAZARD_WORKFLOWS) - 1), (
+        "one sleep BETWEEN consecutive dispatches, never before the first"
+    )
 
 
 if __name__ == "__main__":

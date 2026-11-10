@@ -43,6 +43,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from pipeline.publish_schedule import (  # noqa: E402
+    HAZARDS,
     classify_trigger,
     package_for,
     scheduled_start,
@@ -97,7 +98,7 @@ def _write_step_outputs(result: dict) -> None:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--hazard", required=True, choices=["ifr", "mtn_obsc"])
+    parser.add_argument("--hazard", required=True, choices=list(HAZARDS))
     parser.add_argument("--out", required=True, help="where to write the result JSON")
     parser.add_argument(
         "--event-name",
