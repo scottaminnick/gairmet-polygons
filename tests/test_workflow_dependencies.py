@@ -550,6 +550,11 @@ NOT_COLLECTED_BY_PYTEST = {
         "requirements-pipeline.txt but not the light set CI installs. pytest does not "
         "collect it (no test_ prefix), so it never runs in CI."
     ),
+    "tests/asgi_client.py": (
+        "a shared helper, not a test module. It IS run in CI, as an import of "
+        "test_cache_headers.py and test_tango_routes.py, and is checked through them: "
+        "sibling imports from tests/ are followed as first-party."
+    ),
 }
 
 

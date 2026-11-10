@@ -60,6 +60,7 @@ from pipeline.hazards.mtn_obsc import MOUNTAINOUS_RELIEF_THRESHOLD_FT
 from pydantic import BaseModel
 
 from webapp import artifacts
+from webapp.tango_routes import register_tango_routes
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 BOUNDARIES_DIR = BASE_DIR / "data" / "boundaries"
@@ -761,6 +762,10 @@ def client_config():
     """
     return {"carto_key": os.environ.get("CARTO_API_KEY", "").strip()}
 
+
+# The TANGO layers' routes (webapp/tango_routes.py). Registered here, after
+# the helpers they borrow are defined and BEFORE the catch-all static mount.
+register_tango_routes(app)
 
 # Mounted LAST and at the root path, so the explicit routes above always
 # take priority over serving static files for the same path.

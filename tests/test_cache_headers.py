@@ -28,7 +28,6 @@ needs httpx -- not in requirements.txt, which is what CI installs (see
 tests/test_artifacts.py for the same constraint).
 """
 
-import asyncio
 import sys
 from pathlib import Path
 
@@ -36,6 +35,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from asgi_client import asgi_get  # noqa: E402
 from webapp.main import NO_STORE, REVALIDATE, app  # noqa: E402
 
 # One per route family the viewer actually fetches. Query strings are
@@ -52,6 +52,12 @@ DATA_PATHS = [
     "/api/boundaries/states",
     "/api/boundaries/artcc",
     "/api/boundaries/legacy_mtnobsc",
+    "/api/hazards/sfc_wind/manifest",
+    "/api/hazards/llws/manifest",
+    "/api/hazards/sfc_wind/00",
+    "/api/hazards/llws/00",
+    "/api/hazards/sfc_wind/00/recompute?speed_threshold_kt=30&smooth_sigma_cells=1.5&neighborhood_radius_nm=50&min_area_sq_mi=1000",
+    "/api/hazards/llws/00/recompute?speed_threshold_kt=40&smooth_sigma_cells=1.5&neighborhood_radius_nm=25&min_area_sq_mi=1000",
     "/api/hazards/demo",
     "/api/health",
     "/api/data/status",
@@ -63,47 +69,8 @@ APP_PATHS = ["/", "/index.html", "/map.js", "/style.css"]
 
 def _request(path):
     """Send one GET through the app and return (status, headers)."""
-    raw_path, _, query = path.partition("?")
-    scope = {
-        "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
-        "method": "GET", "scheme": "http", "path": raw_path, "raw_path": raw_path.encode(),
-        "query_string": query.encode(), "root_path": "",
-        "headers": [(b"host", b"testserver")],
-        "client": ("127.0.0.1", 12345), "server": ("testserver", 80),
-    }
-    captured = {}
-
-    async def run():
-        # Behave like a real server (uvicorn): the request body once, then
-        # nothing until the response is finished, then a disconnect.
-        # Answering http.request on every call is what no server does, and
-        # starlette 1.10's FileResponse -- which listens for the disconnect
-        # while it streams -- rejects it ("Unexpected message received:
-        # http.request"); the served app was fine under uvicorn throughout.
-        request_sent = False
-        response_done = asyncio.Event()
-
-        async def receive():
-            nonlocal request_sent
-            if not request_sent:
-                request_sent = True
-                return {"type": "http.request", "body": b"", "more_body": False}
-            await response_done.wait()
-            return {"type": "http.disconnect"}
-
-        async def send(message):
-            if message["type"] == "http.response.start":
-                captured["status"] = message["status"]
-                captured["headers"] = {
-                    k.decode().lower(): v.decode() for k, v in message["headers"]
-                }
-            elif message["type"] == "http.response.body" and not message.get("more_body", False):
-                response_done.set()
-
-        await app(scope, receive, send)
-
-    asyncio.run(run())
-    return captured.get("status"), captured.get("headers", {})
+    status, headers, _body = asgi_get(app, path)
+    return status, headers
 
 
 @pytest.mark.parametrize("path", DATA_PATHS)

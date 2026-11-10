@@ -113,6 +113,22 @@ HAZARDS = {
             branch=os.environ.get("ARTIFACT_BRANCH_MTN_OBSC", "data-mtnobsc"),
             manifest_name="mtn_obsc_manifest.json",
         ),
+        # The two TANGO layers publish to ONE branch (data-tango) with one
+        # manifest each. Sharing a branch is intended: each hazard fetches
+        # its own manifest URL and its own files, and is swapped in under
+        # its own CACHE_DIR/<key>, so neither can see or clobber the other.
+        Hazard(
+            key="sfc_wind",
+            label="Strong Surface Wind",
+            branch=os.environ.get("ARTIFACT_BRANCH_SFC_WIND", "data-tango"),
+            manifest_name="sfc_wind_manifest.json",
+        ),
+        Hazard(
+            key="llws",
+            label="LLWS Potential",
+            branch=os.environ.get("ARTIFACT_BRANCH_LLWS", "data-tango"),
+            manifest_name="llws_manifest.json",
+        ),
     )
 }
 
