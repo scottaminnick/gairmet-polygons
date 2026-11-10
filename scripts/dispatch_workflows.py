@@ -2,7 +2,8 @@
 """
 scripts/dispatch_workflows.py
 --------------------------------
-POST a `workflow_dispatch` for both hazard workflows. Run by a Railway
+POST a `workflow_dispatch` for every hazard workflow (IFR, MTN OBSC, TANGO --
+publish_schedule.HAZARD_WORKFLOWS). Run by a Railway
 cron service; this is the NORMAL trigger for the pipeline now.
 
 WHY THIS EXISTS
@@ -131,7 +132,9 @@ HTTP_TIMEOUT_SECONDS = 30
 # than this script recording what it started.
 DISPATCH_SUCCESS_STATUS = 204
 
-# The two hazards are NOT staggered. Checked rather than assumed: they
+# The hazards are NOT staggered. Checked rather than assumed (for IFR and
+# MTN OBSC; TANGO joined on the same terms, with its own data-tango branch
+# and concurrency group): they
 # force-push separate orphan branches (data-ifr, data-mtnobsc) with
 # disjoint file globs, their `concurrency:` groups are separate, each job
 # runs on its own GitHub-hosted runner with its own IP so there is no

@@ -74,6 +74,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from pipeline.publish_schedule import (  # noqa: E402
     BACKSTOP_OFFSET_MINUTES,
+    HAZARDS,
     TRIGGERS,
     target_nbm_cycle,
 )
@@ -190,7 +191,7 @@ def main(argv=None):
     )
     parser.add_argument(
         "--hazard",
-        choices=["ifr", "mtn_obsc"],
+        choices=list(HAZARDS),
         help="which hazard's schedule this run belongs to; without it a skip cannot be "
              "classified and is reported as unknown rather than guessed at",
     )

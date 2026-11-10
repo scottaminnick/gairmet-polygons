@@ -682,7 +682,10 @@ so a mismatched load raises instead of silently returning knots × 2. With
 ### 4A.8 Uncalibrated placeholders
 
 **Everything below is a first guess. None of it has been checked with a
-forecaster or against legacy products.**
+forecaster or against legacy products.** TANGO now publishes on the same
+six-hourly schedule as IFR and MTN OBSC, so these placeholders reach the
+data branch every cycle; both TANGO manifests carry `"uncalibrated": true`
+to say so in the data itself.
 
 | Parameter | Default | Live range |
 | --- | --- | --- |
