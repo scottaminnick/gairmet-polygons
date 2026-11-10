@@ -707,14 +707,37 @@ to say so in the data itself.
 | --- | --- | --- |
 | STG SFC WND threshold | 30 kt (the directive's number, but whether NBM 10 m sustained wind at 30 kt matches the product is untested) | 20–50 |
 | LLWS threshold | 40 kt (a guess above the ~30 kt floor of the field) | 30–60 |
-| Mask smoothing sigma | 1.5 cells | 0–3, step 0.5, 0 = off |
+| Mask smoothing sigma, STG SFC WND | 1.5 cells | 0–3, step 0.5, 0 = off |
+| Mask smoothing sigma, LLWS | 1.0 cells (see below) | 0–3, step 0.5, 0 = off |
 | Neighborhood radius, STG SFC WND | 50 nm (borrowed from MTN OBSC) | — |
 | Neighborhood radius, LLWS | 25 nm, chosen by eye from two frames in one regime (SW AZ/NM, 2026-10-04); see 4A.9 | — |
-| Minimum area | 1,000 sq mi, both layers | — |
+| Minimum area, STG SFC WND | 1,000 sq mi | — |
+| Minimum area, LLWS | 300 sq mi (see below) | — |
 
 LLWS is the least grounded: NBM's 610 m wind is a *proxy* for shear
 potential, not a shear diagnostic, and the product's meteorological
 criterion has not been mapped onto it.
+
+**LLWS sigma 1.0 and minimum area 300.** LLWS events are small and sparse,
+and the shared 1.5 / 1,000 defaults were set with surface wind in mind. The
+measured effect, on one real cycle (package 2026-11-10 15Z, NBM 09Z, the
+first scheduled TANGO run), recomputed from its published caches:
+
+| | Old (σ 1.5, 1,000) | New (σ 1.0, 300) |
+| --- | --- | --- |
+| F00 | 8 polygons, 25,386 sq mi | 8, 35,551 |
+| F03 | 2, 12,395 | 3, 18,662 |
+| F06 | 2, 10,313 | 3, 11,701 |
+| F09 | 5, 21,750 | 5, 25,096 |
+| F12 | 5, 34,551 | 10, 42,336 |
+| **All hours** | **22, 104,395** | **29, 133,346** |
+
+The two changes do different things. Sigma alone (1.0, 1,000) keeps the
+count at 22 and adds ~25% area, because less smoothing erodes thin LLWS
+features less. The minimum area alone (1.5, 300) adds 6 polygons and ~3%
+area: 7 of the 29 new-default polygons are under the old 1,000 sq mi floor,
+the smallest 350 sq mi. One cycle in one regime -- a check, not a
+calibration.
 
 ### 4A.9 What the neighborhood radius does, and two known behaviors
 

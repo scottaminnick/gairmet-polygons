@@ -18,8 +18,13 @@ and a 30), and why Phase B smooths the mask rather than the values (see
 tango_common's docstring).
 
 ALL DEFAULTS ARE UNCALIBRATED PLACEHOLDERS. 40 kt is a first guess above
-the 30 kt floor; the range, sigma and the 1,000 sq mi minimum area have
-not been checked with a forecaster.
+the 30 kt floor; the range, sigma and minimum area have not been checked
+with a forecaster.
+
+Sigma 1.0 and a 300 sq mi minimum area (surface wind keeps the shared 1.5
+and 1,000): LLWS events are small and sparse, and the shared defaults were
+chosen for surface wind. Measured effect on a real cycle in
+docs/METHODS.md 4A.8.
 
 The 25 nm radius (surface wind keeps 50) was chosen by eye from two
 frames in one regime -- SW Arizona / New Mexico, 2026-10-04 -- as a
@@ -38,5 +43,7 @@ LLWS = TangoLayer(
     regrid_method="nearest",
     default_threshold_kt=40.0,
     threshold_range_kt=(30.0, 60.0),
+    default_smooth_sigma_cells=1.0,
     default_neighborhood_radius_nm=25.0,
+    default_min_area_sq_mi=300.0,
 )
