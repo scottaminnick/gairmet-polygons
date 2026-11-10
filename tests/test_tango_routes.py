@@ -17,7 +17,6 @@ The synthetic hours are chosen so every error path has a real hour behind it:
     (anything else, e.g. F99                     -> 404)
 """
 
-import asyncio
 import json
 import sys
 from pathlib import Path
@@ -32,6 +31,7 @@ from pipeline.hazards.sfc_wind import SFC_WIND  # noqa: E402
 from pipeline.hazards.tango_common import polygonize_tango_grid  # noqa: E402
 from pipeline.polygons import GridSpec, geodesic_area_sq_mi, load_grid_cache, save_grid_cache  # noqa: E402
 from webapp import artifacts  # noqa: E402
+from asgi_client import asgi_get  # noqa: E402
 from webapp.main import app  # noqa: E402
 
 CYCLE = "2026-10-04T09:00:00Z"
@@ -150,32 +150,12 @@ def nothing_loaded(tmp_path, monkeypatch):
 
 def get(path):
     """One GET through the ASGI app -> (status, headers, parsed JSON or None)."""
-    raw_path, _, query = path.partition("?")
-    scope = {
-        "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
-        "method": "GET", "scheme": "http", "path": raw_path, "raw_path": raw_path.encode(),
-        "query_string": query.encode(), "root_path": "",
-        "headers": [(b"host", b"testserver")],
-        "client": ("127.0.0.1", 12345), "server": ("testserver", 80),
-    }
-    captured = {"body": b""}
-
-    async def receive():
-        return {"type": "http.request", "body": b"", "more_body": False}
-
-    async def send(message):
-        if message["type"] == "http.response.start":
-            captured["status"] = message["status"]
-            captured["headers"] = {k.decode().lower(): v.decode() for k, v in message["headers"]}
-        elif message["type"] == "http.response.body":
-            captured["body"] += message.get("body", b"")
-
-    asyncio.run(app(scope, receive, send))
+    status, headers, raw = asgi_get(app, path)
     try:
-        body = json.loads(captured["body"])
+        body = json.loads(raw)
     except ValueError:
         body = None
-    return captured["status"], captured["headers"], body
+    return status, headers, body
 
 
 def areas(fc):

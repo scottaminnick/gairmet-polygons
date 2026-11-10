@@ -19,6 +19,7 @@ import types
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -110,6 +111,11 @@ def generate_latest_tango(monkeypatch, tmp_path):
     requirements.txt) through gairmet_cycle, for fetch_idx -- used only to
     poll NOAA, which nothing here does. A stand-in module takes its place
     for the duration of the test.
+
+    Only the NBM fetch (prepare_tango_grid) is replaced, per test, by
+    _fake_fetch below. Everything after it -- the cache write, the reload,
+    the polygonize, the snapshot and manifest files -- is the driver's own
+    code, run for real into a temporary OUTPUT_DIR.
     """
     swapped = ("pipeline.fetch_nbm", "pipeline.gairmet_cycle", "pipeline.generate_latest_tango")
     saved = {name: sys.modules.get(name) for name in swapped}
@@ -121,9 +127,6 @@ def generate_latest_tango(monkeypatch, tmp_path):
     try:
         module = importlib.import_module("pipeline.generate_latest_tango")
         monkeypatch.setattr(module, "OUTPUT_DIR", tmp_path)
-        monkeypatch.setattr(module, "polygonize_tango_grid",
-                            lambda *a, **k: {"type": "FeatureCollection", "features": []})
-        monkeypatch.setattr(module, "save_grid_cache", lambda *a, **k: None)
         yield module
     finally:
         # Put back exactly what was there, so no other test sees the stub
@@ -135,6 +138,29 @@ def generate_latest_tango(monkeypatch, tmp_path):
                 sys.modules[name] = original
 
 
+def _fake_fetch(fetched):
+    """
+    Stands in for prepare_tango_grid, the NBM download + regrid. Returns a
+    real speed grid at the production 0.025 deg spacing: 10 x 10 deg over the
+    central Plains, well inside the AOR, calm except a 2.5 x 2.5 deg block
+    (~22,000 sq mi) of 60 kt -- above both layers' default thresholds and
+    minimum areas, so every hour yields exactly one polygon. The domain is
+    deliberately much larger than the block: on a 2 deg domain the smoothing
+    and closing run into the grid edge and a solid block comes back as two
+    edge strips, which is a property of the tiny domain, not of the driver.
+    """
+    from pipeline.polygons import GridSpec
+
+    def fetch(date, fxx, layer):
+        fetched.append((date, fxx))
+        speed_kt = np.zeros((400, 400), dtype=np.float32)
+        speed_kt[150:250, 150:250] = 60.0
+        grid_spec = GridSpec(west=-104.0, north=45.0, dx=0.025, dy=-0.025)
+        return speed_kt, grid_spec, f"idx line for f{fxx:03d}"
+
+    return fetch
+
+
 @pytest.mark.parametrize("nbm_cycle, package", CYCLES)
 def test_f00_to_f12_come_from_nbm_f006_to_f018_of_one_cycle(
     generate_latest_tango, monkeypatch, nbm_cycle, package
@@ -142,13 +168,11 @@ def test_f00_to_f12_come_from_nbm_f006_to_f018_of_one_cycle(
     from pipeline.hazards.llws import LLWS
 
     fetched = []
+    monkeypatch.setattr(generate_latest_tango, "prepare_tango_grid", _fake_fetch(fetched))
 
-    def fake_prepare(date, fxx, layer):
-        fetched.append((date, fxx))
-        return None, None, f"idx line for f{fxx:03d}"
-
-    monkeypatch.setattr(generate_latest_tango, "prepare_tango_grid", fake_prepare)
-
+    # 5, not just "a manifest exists": generate_layer() catches any per-hour
+    # exception and skips that hour, so a broken cache/polygonize step would
+    # otherwise show up only as fewer snapshots.
     assert generate_latest_tango.generate_layer(LLWS, nbm_cycle, package) == 5
 
     assert [fxx for _date, fxx in fetched] == [6, 9, 12, 15, 18]
@@ -163,16 +187,25 @@ def test_f00_to_f12_come_from_nbm_f006_to_f018_of_one_cycle(
         (package + timedelta(hours=h)).isoformat() + "Z" for h in (0, 3, 6, 9, 12)
     ]
 
+    # The real cache-and-polygonize path ran for every hour: each wrote its
+    # cache, and each published snapshot holds the 60 kt block's polygon.
+    out = generate_latest_tango.OUTPUT_DIR
+    for snapshot in manifest["snapshots"]:
+        assert (out / snapshot["cache_filename"]).exists(), snapshot["cache_filename"]
+        assert snapshot["feature_count"] == 1, snapshot
+        published = json.loads((out / snapshot["filename"]).read_text())
+        assert len(published["features"]) == 1
+
 
 def test_both_manifests_say_they_are_uncalibrated(generate_latest_tango, monkeypatch):
     from pipeline.hazards.llws import LLWS
     from pipeline.hazards.sfc_wind import SFC_WIND
 
-    monkeypatch.setattr(generate_latest_tango, "prepare_tango_grid", lambda date, fxx, layer: (None, None, "idx"))
+    monkeypatch.setattr(generate_latest_tango, "prepare_tango_grid", _fake_fetch([]))
 
     nbm_cycle, package = CYCLES[1]
     for layer in (SFC_WIND, LLWS):
-        generate_latest_tango.generate_layer(layer, nbm_cycle, package)
+        assert generate_latest_tango.generate_layer(layer, nbm_cycle, package) == 5, layer.key
         manifest = json.loads((generate_latest_tango.OUTPUT_DIR / f"{layer.key}_manifest.json").read_text())
         assert manifest["uncalibrated"] is True, f"{layer.key} manifest"
 
