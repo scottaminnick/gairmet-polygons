@@ -214,6 +214,14 @@ Currently working:
       handling for it.
 - [ ] Terrain/DEM sourcing for Mountain Obscuration
 - [ ] Mountain Obscuration hazard definition (`pipeline/hazards/mtn_obsc.py`)
+- [ ] **Dependencies are unpinned.** `requirements.txt` and
+      `requirements-pipeline.txt` name packages without versions, so CI,
+      the scheduled pipeline and Railway each install whatever is newest
+      that day. starlette 1.10.0 showed the cost: CI went red on code
+      nobody had changed (it was the test helper, not the app, but nothing
+      told the two apart). Candidates: a lock file (`pip-compile` /
+      `uv lock`) installed everywhere, plus an occasional deliberate
+      upgrade PR so versions move on a day someone is watching.
 
 ## Running the web app locally
 
