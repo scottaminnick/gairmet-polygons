@@ -56,13 +56,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.gairmet_cycle import FORECAST_HOURS, NBM_LEAD_TIME_OFFSET_HOURS, resolve_nbm_cycle
 from pipeline.hazards.mtn_obsc import (
-    CEILING_PROB_THRESHOLDS_FT,
     DEFAULT_CLEARANCE_MARGIN_FT,
     DEFAULT_MIN_AREA_SQ_MI,
-    polygonize_mtn_obsc_grid,
+    cache_and_polygonize_mtn_obsc,
     prepare_mtn_obsc_grid,
 )
-from pipeline.polygons import save_grid_cache
 
 THRESHOLD_PCT = float(os.environ.get("MTN_OBSC_THRESHOLD_PCT", "50.0"))
 CLEARANCE_MARGIN_FT = float(os.environ.get("MTN_OBSC_CLEARANCE_MARGIN_FT", str(DEFAULT_CLEARANCE_MARGIN_FT)))
@@ -77,35 +75,32 @@ TERRAIN_GRID_PATH = os.environ.get("MTN_OBSC_TERRAIN_GRID_PATH", "data/terrain/t
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
 
 
-def generate_one_snapshot(nbm_cycle_date, gairmet_cycle_date, requested_fxx: int):
+def generate_one_snapshot(nbm_cycle_date, gairmet_cycle_date, requested_fxx: int, cache_path):
     """
     Generates one forecast-hour snapshot. Same requested_fxx /
     actual_nbm_fxx relationship as IFR's version -- see
     pipeline/gairmet_cycle.py's docstring.
 
+    Writes the probability-grid cache to cache_path and polygonizes FROM
+    THAT CACHE (see mtn_obsc.cache_and_polygonize_mtn_obsc), so the
+    published snapshot equals the web app's default recompute.
+
     Returns (feature_collection, prepared) -- prepared is
-    prepare_mtn_obsc_grid()'s full return dict, kept around so main()
-    can cache the probability grids (not the terrain grids -- see this
-    module's docstring) and report terrain_radius_nm in the manifest.
+    prepare_mtn_obsc_grid()'s full return dict, kept around so main() can
+    report terrain_radius_nm in the manifest.
     """
     actual_nbm_fxx = requested_fxx + NBM_LEAD_TIME_OFFSET_HOURS
     prepared = prepare_mtn_obsc_grid(nbm_cycle_date, actual_nbm_fxx, terrain_grid_path=TERRAIN_GRID_PATH)
 
-    fc = polygonize_mtn_obsc_grid(
-        prepared["ceiling_prob"],
-        prepared["precip"],
-        prepared["vis3"],
-        prepared["vis1"],
-        prepared["baseline_elevation_ft"],
-        prepared["ridge_elevation_ft"],
-        prepared["grid_spec"],
+    fc = cache_and_polygonize_mtn_obsc(
+        cache_path,
+        prepared,
         gairmet_cycle_date,
         requested_fxx,
         threshold_pct=THRESHOLD_PCT,
         clearance_margin_ft=CLEARANCE_MARGIN_FT,
         neighborhood_radius_nm=NEIGHBORHOOD_RADIUS_NM,
         min_area_sq_mi=MIN_AREA_SQ_MI,
-        terrain_radius_nm=prepared["terrain_radius_nm"],
     )
     return fc, prepared
 
@@ -145,8 +140,15 @@ def main():
     for requested_fxx in FORECAST_HOURS:
         actual_nbm_fxx = requested_fxx + NBM_LEAD_TIME_OFFSET_HOURS
         print(f"\n--- F{requested_fxx:02d} (NBM {nbm_cycle_date:%H}Z F{actual_nbm_fxx:03d}) ---")
+        # Only the eight probability-range (0-100) grids are cached -- see the
+        # module docstring for why baseline/ridge elevation are deliberately
+        # excluded. Written BEFORE polygonizing: the published snapshot is
+        # cut from what was read back (see generate_one_snapshot).
+        cache_filename = f"mtn_obsc_f{requested_fxx:02d}_grid.npz"
         try:
-            fc, prepared = generate_one_snapshot(nbm_cycle_date, gairmet_cycle_date, requested_fxx)
+            fc, prepared = generate_one_snapshot(
+                nbm_cycle_date, gairmet_cycle_date, requested_fxx, OUTPUT_DIR / cache_filename
+            )
         except Exception:
             print(f"  FAILED for F{requested_fxx:02d}, skipping this snapshot. Traceback:")
             traceback.print_exc()
@@ -156,13 +158,6 @@ def main():
         with open(OUTPUT_DIR / filename, "w") as f:
             json.dump(fc, f, indent=2)
 
-        # Only the eight probability-range (0-100) grids -- see module
-        # docstring for why baseline/ridge elevation are deliberately
-        # excluded here.
-        cache_grids = {f"ceiling_prob_{t}": prepared["ceiling_prob"][t] for t in CEILING_PROB_THRESHOLDS_FT}
-        cache_grids.update({"precip": prepared["precip"], "vis3": prepared["vis3"], "vis1": prepared["vis1"]})
-        cache_filename = f"mtn_obsc_f{requested_fxx:02d}_grid.npz"
-        save_grid_cache(OUTPUT_DIR / cache_filename, cache_grids, prepared["grid_spec"])
 
         valid_time = gairmet_cycle_date + timedelta(hours=requested_fxx)
         manifest["snapshots"].append(
