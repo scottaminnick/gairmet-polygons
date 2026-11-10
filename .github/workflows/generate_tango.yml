@@ -46,13 +46,13 @@ on:
         description: "LLWS POTENTIAL: speed threshold (kt), >= -- blank for the pipeline default (40; UNCALIBRATED; sensible range 30-60)"
         required: false
       llws_smooth_sigma_cells:
-        description: "LLWS POTENTIAL: Gaussian sigma (cells) applied to the yes/no mask -- blank for default (1.5); 0 = off"
+        description: "LLWS POTENTIAL: Gaussian sigma (cells) applied to the yes/no mask -- blank for default (1.0); 0 = off"
         required: false
       llws_neighborhood_radius_nm:
-        description: "LLWS POTENTIAL: raster closing radius (nm) -- blank for default (50)"
+        description: "LLWS POTENTIAL: raster closing radius (nm) -- blank for default (25)"
         required: false
       llws_min_area_sq_mi:
-        description: "LLWS POTENTIAL: minimum polygon area (sq mi) -- blank for default (1000; UNCALIBRATED)"
+        description: "LLWS POTENTIAL: minimum polygon area (sq mi) -- blank for default (300; UNCALIBRATED)"
         required: false
 
 # One run at a time, queued rather than cancelled: of two overlapping runs

@@ -427,12 +427,18 @@ def test_a_larger_minimum_area_drops_small_areas(tmp_path, monkeypatch):
 
 
 def test_llws_defaults_come_from_its_own_config(served):
-    # llws: 40 kt and 25 nm; sfc_wind: 30 kt and 50 nm. The same cached
-    # field therefore gives different defaults.
+    # llws: 40 kt, sigma 1.0, 25 nm, 300 sq mi; sfc_wind: 30 kt, sigma 1.5,
+    # 50 nm, 1,000 sq mi. The same cached field therefore gives different
+    # defaults. Pinned as a set so that changing any one is deliberate
+    # (docs/METHODS.md 4A.8 records why each is what it is).
+    def defaults(props):
+        return (props["speed_threshold_kt"], props["smooth_sigma_cells"],
+                props["neighborhood_radius_nm"], props["min_area_sq_mi"])
+
     llws = get("/api/hazards/llws/00/recompute")[2]["features"][0]["properties"]
     wind = get("/api/hazards/sfc_wind/00/recompute")[2]["features"][0]["properties"]
-    assert (llws["speed_threshold_kt"], llws["neighborhood_radius_nm"]) == (40.0, 25.0)
-    assert (wind["speed_threshold_kt"], wind["neighborhood_radius_nm"]) == (30.0, 50.0)
+    assert defaults(llws) == (40.0, 1.0, 25.0, 300.0)
+    assert defaults(wind) == (30.0, 1.5, 50.0, 1000.0)
 
 
 # --- the existing hazards are not affected ------------------------------------
