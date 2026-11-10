@@ -87,6 +87,33 @@ terrainLayer.on('tileerror', () => {
   console.warn('USGS shaded relief tiles failed to load (network block or service outage).');
 });
 
+// A colour defined once, in style.css, for both the swatch and the polygons.
+function cssColor(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+// TANGO layers (strong surface wind, LLWS potential). Built from one
+// factory because the two differ only in colour and label; the popup shows
+// the polygon's peak speed, which is the number a forecaster checks first.
+function tangoGeoJsonLayer(colorVar, label) {
+  const color = cssColor(colorVar);
+  return L.geoJSON(null, {
+    style: { color, weight: 1.5, fillColor: color, fillOpacity: 0.28 },
+    onEachFeature: (feature, layer) => {
+      const p = feature.properties || {};
+      const peakRow = p.peak_speed_kt != null ? `<div>peak: ${p.peak_speed_kt} kt</div>` : '';
+      const areaRow = p.area_sq_mi != null ? `<div>area: ${Math.round(p.area_sq_mi).toLocaleString()} mi&sup2;</div>` : '';
+      layer.bindPopup(
+        `<div><strong>${p.phenomenon || label}</strong></div>` +
+        peakRow +
+        `<div>threshold: &ge;${p.speed_threshold_kt ?? '?'} kt</div>` +
+        areaRow +
+        `<div>valid: ${formatValidTime(p.valid_time)}</div>`
+      );
+    },
+  });
+}
+
 const layers = {
   ifr: L.geoJSON(null, {
     style: {
@@ -136,6 +163,10 @@ const layers = {
       );
     },
   }),
+
+  // Off by default: built here, added to the map only by their toggles.
+  sfc_wind: tangoGeoJsonLayer('--accent-sfc-wind', 'STG SFC WND'),
+  llws: tangoGeoJsonLayer('--accent-llws', 'LLWS'),
 
   states: L.geoJSON(null, {
     style: {
@@ -236,6 +267,16 @@ document.getElementById('toggle-terrain').addEventListener('change', (e) => {
 document.getElementById('toggle-mtn').addEventListener('change', (e) => {
   if (e.target.checked) map.addLayer(layers.mtn);
   else map.removeLayer(layers.mtn);
+});
+
+// TANGO toggles: off by default (no `checked` in the markup). The legend
+// row follows the layer, so the legend only describes what is drawn.
+['sfc_wind', 'llws'].forEach((key) => {
+  document.getElementById(`toggle-${key}`).addEventListener('change', (e) => {
+    if (e.target.checked) map.addLayer(layers[key]);
+    else map.removeLayer(layers[key]);
+    document.getElementById(`legend-${key}`).hidden = !e.target.checked;
+  });
 });
 
 // --- Formats an ISO timestamp as a DDHHMMZ group, matching the date/time
@@ -396,6 +437,8 @@ let forecastHours = [];
 const HAZARD_PANELS = [
   { hazard: 'ifr', expander: 'expand-ifr', body: 'adjust-ifr-body' },
   { hazard: 'mtn', expander: 'expand-mtn', body: 'adjust-mtn-body' },
+  { hazard: 'sfc_wind', expander: 'expand-sfc_wind', body: 'adjust-sfc_wind-body' },
+  { hazard: 'llws', expander: 'expand-llws', body: 'adjust-llws-body' },
 ];
 
 function setHazardExpanded(panel, expanded) {
@@ -777,6 +820,189 @@ async function recomputeCurrentMtnSnapshot(settings = null) {
   }
 }
 
+// --- TANGO LAYERS (strong surface wind, LLWS potential) ---
+//     Each layer is wired through the same machinery as IFR and MTN OBSC:
+//     a makeHourStore field list, an ADJUSTORS entry, and a HAZARD_PANELS
+//     row. What differs, and why:
+//
+//     * Defaults and bounds come from the server, not the markup. The
+//       inputs start disabled at placeholder values; configureTango() reads
+//       /api/hazards/{key}/parameters (the bounds /recompute enforces, so a
+//       stepper can never reach a 422) and the layer's manifest (the
+//       parameters the scheduled run used, which is what an hour seeds from
+//       and RESET returns to). A later change to the pipeline's defaults
+//       therefore reaches the viewer with no edit here.
+//     * An empty hour is normal for these sparse fields. It is a valid
+//       empty FeatureCollection, says "no polygons this hour", and seeds
+//       its settings from the manifest because there is no polygon to read
+//       them from.
+//     * Each layer has its own manifest and cycle. It is shown in the panel,
+//       because TANGO runs as its own workflow and can lag the others.
+//     * Every loader here catches its own failures, like loadMtnObscSnapshot:
+//       a missing or refreshing TANGO layer can never break IFR or MTN OBSC.
+const TANGO_FIELDS = [
+  { key: 'threshold', id: 'threshold', prop: 'speed_threshold_kt' },
+  { key: 'sigma', id: 'sigma', prop: 'smooth_sigma_cells' },
+  { key: 'radius', id: 'radius', prop: 'neighborhood_radius_nm' },
+  { key: 'minArea', id: 'minarea', prop: 'min_area_sq_mi' },
+];
+
+function makeTangoLayer(key, label) {
+  const fields = TANGO_FIELDS.map((f) => ({
+    key: f.key, prop: f.prop, input: `adjust-${key}-${f.id}`, hint: `adjust-${key}-${f.id}-val`,
+  }));
+  return { key, label, store: makeHourStore(fields), ready: false, manifest: null, seq: 0 };
+}
+
+const TANGO = [makeTangoLayer('sfc_wind', 'STG SFC WND'), makeTangoLayer('llws', 'LLWS')];
+
+// What to say when a TANGO request fails. 409 means the cached grid
+// predates the running code and the next scheduled run will replace it;
+// 503/404 mean there is nothing to show. Anything else (including a
+// network failure) reads as unavailable too.
+function tangoFailureText(status) {
+  return status === 409 ? 'data is being refreshed' : 'layer unavailable';
+}
+
+// The parsed body of a successful response, or null after discarding the
+// body of a failed one. A response whose body is never read keeps its
+// request -- and its connection -- open in the browser, and the browser
+// allows only six per host: a few leaked on a failing TANGO layer would
+// stall every API request on the page, IFR and MTN OBSC included. So every
+// TANGO response is read or discarded, never dropped.
+async function readJsonOrDiscard(resp) {
+  if (resp.ok) return resp.json();
+  await resp.text().catch(() => {});
+  return null;
+}
+
+function setTangoState(t, text) {
+  document.getElementById(`layer-${t.key}-state`).textContent = text;
+}
+
+function setTangoControlsEnabled(t, enabled) {
+  document.getElementById(`adjust-${t.key}-body`).querySelectorAll('button, input')
+    .forEach((control) => { control.disabled = !enabled; });
+}
+
+// Puts a recompute or snapshot result on the map, or the reason there is
+// nothing there.
+function drawTango(t, geojson) {
+  layers[t.key].clearLayers();
+  layers[t.key].addData(geojson);
+  const count = geojson.features?.length || 0;
+  setTangoState(t, count ? '' : 'no polygons this hour');
+}
+
+function clearTango(t, text) {
+  layers[t.key].clearLayers();
+  setTangoState(t, text);
+}
+
+// Reads the layer's bounds and manifest and sets the controls from them.
+// Retried on every hour switch until it succeeds, so a layer that was not
+// loaded yet at page load (cold start) comes up on the next click.
+async function configureTango(t) {
+  if (t.ready) return true;
+  try {
+    const [paramsResp, manifestResp] = await Promise.all([
+      fetch(`/api/hazards/${t.key}/parameters`),
+      fetch(`/api/hazards/${t.key}/manifest`),
+    ]);
+    const [params, manifest] = await Promise.all([paramsResp, manifestResp].map(readJsonOrDiscard));
+    if (!params) throw Object.assign(new Error('parameters'), { status: paramsResp.status });
+    if (!manifest) throw Object.assign(new Error('manifest'), { status: manifestResp.status });
+
+    t.store.fields.forEach((f) => {
+      const el = document.getElementById(f.input);
+      const [lo, hi] = params.bounds[f.prop];
+      el.min = lo;
+      el.max = hi;
+      // The scheduled run's value, falling back to the layer default for a
+      // manifest written before the parameter existed.
+      const value = manifest[f.prop] ?? params.defaults[f.prop];
+      el.defaultValue = value;
+      el.value = value;
+    });
+
+    document.getElementById(`adjust-${t.key}-cycle`).textContent = formatValidTime(manifest.model_cycle);
+    document.getElementById(`adjust-${t.key}-nbm`).textContent = manifest.nbm_source_cycle
+      ? formatValidTime(manifest.nbm_source_cycle) : '--------Z';
+
+    t.manifest = manifest;
+    t.ready = true;
+    setTangoControlsEnabled(t, true);
+    return true;
+  } catch (err) {
+    console.warn(`${t.label} layer unavailable:`, err);
+    clearTango(t, tangoFailureText(err.status));
+    return false;
+  }
+}
+
+// The hour's scheduled snapshot. Seeds the hour's settings the first time
+// (from its first polygon, or the manifest for an empty hour).
+async function loadTangoSnapshot(t, fxx) {
+  const fxxStr = hourKey(fxx);
+  try {
+    const resp = await fetch(`/api/hazards/${t.key}/${fxxStr}`);
+    const geojson = await readJsonOrDiscard(resp);
+    if (!geojson) { clearTango(t, tangoFailureText(resp.status)); syncAllAdjustors(); return; }
+    drawTango(t, geojson);
+    const seeded = t.store.fromProps(geojson.features?.[0]?.properties || {});
+    t.store.set(fxx, seeded);
+    t.store.apply(seeded);
+    document.getElementById(`legend-${t.key}-threshold`).textContent = seeded.threshold;
+  } catch (err) {
+    console.warn(`${t.label} F${fxxStr} unavailable:`, err);
+    clearTango(t, 'layer unavailable');
+  }
+  syncAllAdjustors();
+}
+
+async function recomputeTango(t, settings = null) {
+  if (currentFxx == null || !t.ready) return;
+  const { threshold, sigma, radius, minArea } = settings || t.store.get(currentFxx) || t.store.read();
+  const statusEl = document.getElementById(`adjust-${t.key}-status`);
+  const fxxStr = hourKey(currentFxx);
+  const seq = ++t.seq;
+
+  statusEl.textContent = 'computing...';
+  try {
+    const url = `/api/hazards/${t.key}/${fxxStr}/recompute?speed_threshold_kt=${threshold}` +
+      `&smooth_sigma_cells=${sigma}&neighborhood_radius_nm=${radius}&min_area_sq_mi=${minArea}`;
+    const resp = await fetch(url);
+    const geojson = await readJsonOrDiscard(resp); // read even if superseded, to free the connection
+    if (seq !== t.seq) return; // superseded while in flight
+    if (!geojson) {
+      clearTango(t, tangoFailureText(resp.status));
+      statusEl.textContent = '';
+      return;
+    }
+    drawTango(t, geojson);
+    document.getElementById(`legend-${t.key}-threshold`).textContent = threshold;
+    statusEl.textContent = '';
+  } catch (err) {
+    if (seq !== t.seq) return;
+    console.error(`${t.label} recompute failed:`, err);
+    statusEl.textContent = 'error (see console)';
+  }
+}
+
+// Mirrors showMtnForHour: an hour with saved settings is recomputed to
+// them, an unvisited one loads its scheduled snapshot. Never throws.
+async function showTangoForHour(t, fxx) {
+  if (!(await configureTango(t))) return;
+  const saved = t.store.get(fxx);
+  if (saved) {
+    t.store.apply(saved);
+    syncAllAdjustors();
+    await recomputeTango(t, saved);
+    return;
+  }
+  await loadTangoSnapshot(t, fxx);
+}
+
 // --- ADJUSTOR WIRING ---
 //     One entry per hazard binds its store to its buttons and recompute.
 //     Everything below is driven off this list, so a new hazard's
@@ -788,7 +1014,21 @@ const ADJUSTORS = [
   { hazard: 'mtn', store: mtnHours, body: 'adjust-mtn-body',
     apply: 'adjust-mtn-apply', applyAll: 'adjust-mtn-apply-all', revert: 'adjust-mtn-revert',
     status: 'adjust-mtn-status', recompute: recomputeCurrentMtnSnapshot },
+  // TANGO: usable once its own manifest and bounds have loaded, regardless
+  // of IFR's cache (available() overrides the shared liveAdjustAvailable).
+  ...TANGO.map((t) => ({
+    hazard: t.key, store: t.store, body: `adjust-${t.key}-body`,
+    apply: `adjust-${t.key}-apply`, applyAll: `adjust-${t.key}-apply-all`, revert: `adjust-${t.key}-revert`,
+    status: `adjust-${t.key}-status`, recompute: (settings) => recomputeTango(t, settings),
+    available: () => t.ready,
+  })),
 ];
+
+// Whether an adjustor can act at all. IFR and MTN OBSC share the IFR
+// cache's availability; an entry with its own data source says so itself.
+function adjustAvailable(adj) {
+  return adj.available ? adj.available() : liveAdjustAvailable;
+}
 
 // Re-derive the dirty marks, hints and button states from the inputs vs
 // the store. Cheap, so it runs after every input event and every store
@@ -807,7 +1047,7 @@ function syncAdjustor(adj) {
     hint.textContent = dirty ? `was ${applied[f.key]}` : '';
   });
 
-  const canAct = liveAdjustAvailable && currentFxx != null;
+  const canAct = adjustAvailable(adj) && currentFxx != null;
   document.getElementById(adj.apply).disabled = !(canAct && anyDirty);
   document.getElementById(adj.revert).disabled = !(canAct && anyDirty);
   // APPLY ALL HOURS is useful even when this hour is clean -- it is how a
@@ -822,7 +1062,7 @@ function syncAllAdjustors() {
 
 // APPLY: commit pending to this hour and recompute once.
 async function applyAdjustor(adj) {
-  if (currentFxx == null || !liveAdjustAvailable) return;
+  if (currentFxx == null || !adjustAvailable(adj)) return;
   adj.store.fields.forEach((f) => {
     const el = document.getElementById(f.input);
     normalizeStepInput(el, adj.store.get(currentFxx)?.[f.key]);
@@ -835,7 +1075,7 @@ async function applyAdjustor(adj) {
 // APPLY ALL HOURS: commit pending to every hour of the cycle, recompute
 // the one on screen. The others pick their settings up when shown.
 async function applyAdjustorAllHours(adj) {
-  if (currentFxx == null || !liveAdjustAvailable) return;
+  if (currentFxx == null || !adjustAvailable(adj)) return;
   adj.store.fields.forEach((f) => {
     const el = document.getElementById(f.input);
     normalizeStepInput(el, adj.store.get(currentFxx)?.[f.key]);
@@ -991,6 +1231,20 @@ document.getElementById('adjust-mtn-reset-all').addEventListener('click', async 
   if (currentFxx == null) return;
   mtnHours.clearAll();
   await loadMtnObscSnapshot(currentFxx);
+});
+
+// TANGO resets: the same semantics as the two above, per layer.
+TANGO.forEach((t) => {
+  document.getElementById(`adjust-${t.key}-reset`).addEventListener('click', async () => {
+    if (currentFxx == null || !t.ready) return;
+    t.store.clear(currentFxx);
+    await loadTangoSnapshot(t, currentFxx);
+  });
+  document.getElementById(`adjust-${t.key}-reset-all`).addEventListener('click', async () => {
+    if (currentFxx == null || !t.ready) return;
+    t.store.clearAll();
+    await loadTangoSnapshot(t, currentFxx);
+  });
 });
 
 // --- MTN OBSC generate: downloads GeoJSON + XML for whatever MTN OBSC
@@ -1229,6 +1483,7 @@ async function showForecastHour(requestedFxx, { refit = true } = {}) {
   await Promise.all([
     showIfrForHour(requestedFxx, { refit }),
     showMtnForHour(requestedFxx),
+    ...TANGO.map((t) => showTangoForHour(t, requestedFxx)),
   ]);
 }
 
@@ -1372,6 +1627,9 @@ async function loadData() {
     await Promise.all([
       loadIfrSnapshot(manifest.snapshots[0].requested_forecast_hour),
       loadMtnObscSnapshot(manifest.snapshots[0].requested_forecast_hour),
+      // Loaded although the layers start hidden, so turning one on shows
+      // data at once. Never throws (see showTangoForHour).
+      ...TANGO.map((t) => showTangoForHour(t, manifest.snapshots[0].requested_forecast_hour)),
     ]);
     liveAdjustAvailable = true;
     syncAllAdjustors();
@@ -1386,6 +1644,8 @@ async function loadData() {
     // the export panel -- the visibility checkboxes stay live, since
     // showing and hiding layers still works fine without a cached grid.
     disableLiveAdjust('no cached grid for this cycle -- adjustment and export need one');
+    // No forecast-hour row means no hour to show a TANGO snapshot for.
+    TANGO.forEach((t) => clearTango(t, 'layer unavailable'));
     try {
       const ifrResp = await fetch('/api/hazards/ifr');
       const ifrGeoJSON = await ifrResp.json();

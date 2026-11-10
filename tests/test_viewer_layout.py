@@ -33,7 +33,8 @@ HTML_IDS = set(re.findall(r'\bid="([^"]+)"', HTML))
 
 # The hazards that own adjustors. Everything else in LAYERS is a plain
 # visibility toggle.
-HAZARD_ROWS = ["ifr", "mtn"]
+HAZARD_ROWS = ["ifr", "mtn", "sfc_wind", "llws"]
+TANGO_KEYS = ["sfc_wind", "llws"]
 
 
 def test_every_element_map_js_reaches_for_exists_in_the_markup():
@@ -225,7 +226,7 @@ STEPPER_INPUTS = [
     "adjust-threshold", "adjust-radius", "adjust-minarea",
     "adjust-mtn-threshold", "adjust-mtn-relief", "adjust-mtn-clearance",
     "adjust-mtn-radius", "adjust-mtn-minarea",
-]
+] + [f"adjust-{key}-{field}" for key in ("sfc_wind", "llws") for field in ("threshold", "sigma", "radius", "minarea")]
 
 
 def test_every_parameter_is_a_bounded_number_input_not_a_slider():
@@ -536,6 +537,119 @@ def _module_constant(repo_root, name):
                     return float(node.value.value)
     raise AssertionError(f"could not resolve the constant {name}")
 
+# --- TANGO layers (strong surface wind, LLWS) -------------------------------
+#     Hazard rows like IFR and MTN OBSC -- HAZARD_ROWS and STEPPER_INPUTS
+#     above hold them to every structural check those rows pass. What is
+#     particular to them is checked here.
+
+def test_tango_layers_are_grouped_and_off_by_default():
+    group = HTML.index('id="tango-group"')
+    for key in TANGO_KEYS:
+        assert HTML.index(f'data-hazard="{key}"') > group, f"{key} is not under the TANGO heading"
+        toggle = re.search(rf'<input type="checkbox" id="toggle-{key}"[^>]*>', HTML).group(0)
+        assert "checked" not in toggle, f"{key} is on by default"
+    # The existing hazards keep their defaults and their place above the group.
+    for key in ("ifr", "mtn"):
+        assert "checked" in re.search(rf'<input type="checkbox" id="toggle-{key}"[^>]*>', HTML).group(0)
+        assert HTML.index(f'data-hazard="{key}"') < group
+
+
+def test_tango_has_no_export():
+    export = _slice_between(JS, "const EXPORT_HAZARDS = [", "];")
+    for key in TANGO_KEYS:
+        assert key not in export, f"{key} is in EXPORT_HAZARDS"
+        assert f"export-hazard-{key}" not in HTML_IDS, f"{key} has an export checkbox"
+
+
+def test_the_viewer_never_reads_the_uncalibrated_flag():
+    assert "uncalibrated" not in JS.lower()
+    assert "uncalibrated" not in HTML.lower() and "experimental" not in _slice_between(HTML, 'id="tango-group"', "<!-- NON-HAZARD").lower()
+
+
+def test_tango_bounds_and_defaults_come_from_the_server_not_the_markup():
+    """
+    The markup's min/max/value are placeholders: configureTango() sets every
+    input's bounds from /parameters (what /recompute enforces) and its
+    default and value from the manifest, falling back to the layer default.
+    """
+    configure = _slice_between(JS, "async function configureTango(t) {", "\n}")
+    for needle in ("/parameters", "/manifest", "params.bounds[f.prop]", "el.min = lo", "el.max = hi",
+                   "manifest[f.prop] ?? params.defaults[f.prop]", "el.defaultValue = value"):
+        assert needle in configure, f"configureTango does not do: {needle}"
+    for element_id in STEPPER_INPUTS:
+        if any(element_id.startswith(f"adjust-{key}-") for key in TANGO_KEYS):
+            tag = re.search(rf'<input type="number" id="{element_id}"[^>]*>', HTML).group(0)
+            assert "disabled" in tag, f"{element_id} is usable before its bounds have loaded"
+
+
+def test_each_tango_default_sits_on_its_stepper_lattice():
+    """
+    normalizeStepInput snaps to min + k*step. A default off the lattice would
+    be silently changed by the first APPLY (300 sq mi on a 250 step becomes
+    250), so every current layer default must be reachable.
+    """
+    from pipeline.hazards.llws import LLWS
+    from pipeline.hazards.sfc_wind import SFC_WIND
+
+    for layer in (SFC_WIND, LLWS):
+        defaults = {"threshold": layer.default_threshold_kt, "sigma": layer.default_smooth_sigma_cells,
+                    "radius": layer.default_neighborhood_radius_nm, "minarea": layer.default_min_area_sq_mi}
+        for field, default in defaults.items():
+            tag = re.search(rf'<input type="number" id="adjust-{layer.key}-{field}"[^>]*>', HTML).group(0)
+            attrs = dict(re.findall(r'(\w+)="([^"]+)"', tag))
+            steps = (default - float(attrs["min"])) / float(attrs["step"])
+            assert abs(steps - round(steps)) < 1e-9, (
+                f"{layer.key} {field} default {default} is not on min={attrs['min']} step={attrs['step']}"
+            )
+
+
+def test_tango_colours_are_their_own():
+    accents = dict(re.findall(r"--accent-([\w-]+):\s*(#[0-9a-fA-F]{6})", CSS))
+    for name in ("sfc-wind", "llws"):
+        assert name in accents, f"no --accent-{name}"
+    colours = [c.lower() for c in accents.values()]
+    assert len(colours) == len(set(colours)), f"two layers share a colour: {accents}"
+
+
+def test_every_runtime_built_tango_id_exists():
+    """map.js builds these ids from the layer key, so the literal-id check above cannot see them."""
+    suffixes = ["body", "status", "cycle", "nbm", "apply", "apply-all", "revert", "reset", "reset-all"]
+    suffixes += [f"{f}{s}" for f in ("threshold", "sigma", "radius", "minarea") for s in ("", "-val")]
+    for key in TANGO_KEYS:
+        wanted = [f"adjust-{key}-{s}" for s in suffixes]
+        wanted += [f"toggle-{key}", f"expand-{key}", f"layer-{key}-state", f"legend-{key}", f"legend-{key}-threshold"]
+        missing = [i for i in wanted if i not in HTML_IDS]
+        assert not missing, f"{key}: map.js builds ids the markup lacks: {missing}"
+
+
+def test_every_tango_response_body_is_read_or_discarded():
+    """
+    An unread response body keeps its request and connection open, and the
+    browser allows six per host: a failing TANGO layer that dropped bodies
+    would, after a few hour switches, stall every API request on the page.
+    Measured: with the manifest failing, the unread /parameters request was
+    still pending 12 s later.
+    """
+    tango = _slice_between(JS, "// --- TANGO LAYERS", "// --- ADJUSTOR WIRING ---")
+    # parameters, manifest, snapshot, recompute -- a fifth means a new fetch
+    # that has to be routed through readJsonOrDiscard too.
+    assert tango.count("fetch(") == 4, "a new TANGO fetch -- route it through readJsonOrDiscard"
+    assert "resp.json()" not in tango.replace("if (resp.ok) return resp.json();", ""), (
+        "a TANGO response is parsed outside readJsonOrDiscard"
+    )
+    assert tango.count("readJsonOrDiscard") >= 4
+
+
+def test_a_tango_failure_cannot_reach_the_other_layers():
+    """Every TANGO loader catches its own failures, as loadMtnObscSnapshot does."""
+    for fn in ("configureTango", "loadTangoSnapshot", "recomputeTango"):
+        body = _slice_between(JS, f"async function {fn}(", "\n}")
+        assert "try {" in body and "catch (err)" in body, f"{fn} can throw into the hour switch"
+    for status, text in (("409", "data is being refreshed"),):
+        assert f"status === {status} ? '{text}'" in JS
+    assert "'layer unavailable'" in JS and "'no polygons this hour'" in JS
+
+
 def _slice_between(text, start_marker, end_marker):
     start = text.index(start_marker)
     end = text.index(end_marker, start)
@@ -543,8 +657,12 @@ def _slice_between(text, start_marker, end_marker):
 
 
 def _hazard_row(hazard):
-    return _slice_between(HTML, f'<div class="layer-row" data-hazard="{hazard}">', "<!-- NON-HAZARD"
-                          if hazard == "mtn" else f'<div class="layer-row" data-hazard="mtn">')
+    """A hazard row, up to whatever follows it: the next row, a group, or the static rows."""
+    start = HTML.index(f'<div class="layer-row" data-hazard="{hazard}">')
+    after = start + 1
+    ends = [HTML.find(marker, after) for marker in
+            ('<div class="layer-row" data-hazard=', "<!-- TANGO GROUP", "<!-- NON-HAZARD")]
+    return HTML[start:min(e for e in ends if e != -1)]
 
 
 def _hazard_body(hazard):

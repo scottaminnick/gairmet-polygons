@@ -54,6 +54,8 @@ DATA_PATHS = [
     "/api/boundaries/legacy_mtnobsc",
     "/api/hazards/sfc_wind/manifest",
     "/api/hazards/llws/manifest",
+    "/api/hazards/sfc_wind/parameters",
+    "/api/hazards/llws/parameters",
     "/api/hazards/sfc_wind/00",
     "/api/hazards/llws/00",
     "/api/hazards/sfc_wind/00/recompute?speed_threshold_kt=30&smooth_sigma_cells=1.5&neighborhood_radius_nm=50&min_area_sq_mi=1000",
