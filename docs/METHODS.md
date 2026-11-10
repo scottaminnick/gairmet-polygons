@@ -170,8 +170,21 @@ NBM's CONUS grid has real coverage well past that (the Pacific, Canada, the
 Atlantic), and the terrain grid's bounding box is deliberately generous.
 IFR conditions and real relief out there are real data this product simply
 isn't responsible for, so every hazard gates on this boundary. The mask is
-memoized in `pipeline/boundaries.py`; the first request after a process
-restart pays a few seconds to rasterize it, every later one is free.
+memoized in `pipeline/boundaries.py`, one lock per mask so concurrent first
+callers compute it once.
+
+**Rasterizing a mask is slow, so the web app warms them at start-up.** One
+CONUS-sized mask takes ~38 s, nearly all of it in `skimage.draw.polygon`
+(which tests every cell in the polygon's bounding box against every edge),
+and it holds the GIL throughout: the first APPLY after a deploy used to
+stall every request on the server, health check included, for that long.
+`webapp/main.py` now computes the masks each published grid needs in a
+child process as soon as that hazard's artifacts are on disk (three masks,
+~87 s, in the background), and a recompute that arrives meanwhile waits for
+that result rather than starting its own. Measured on real artifacts:
+health-check latency under 0.02 s throughout, and the first recompute per
+hazard 0.35–1.4 s. `BOUNDARY_MASK_WARM=0` turns it off. The scheduled
+pipeline still pays the full cost per mask per run.
 
 ### 3.1 Why not the 20-ARTCC union
 
