@@ -114,7 +114,11 @@ PROBE_FORECAST_HOUR = NBM_LEAD_TIME_OFFSET_HOURS
 # need the mapping now and none of them should hardcode it: the drift
 # test, the Railway dispatcher (which POSTs to
 # /actions/workflows/{file}/dispatches), and the docs.
-HAZARD_WORKFLOWS = {"ifr": "generate_ifr.yml", "mtn_obsc": "generate_mtn_obsc.yml"}
+HAZARD_WORKFLOWS = {
+    "ifr": "generate_ifr.yml",
+    "mtn_obsc": "generate_mtn_obsc.yml",
+    "tango": "generate_tango.yml",
+}
 
 # Minutes after the synoptic hour at which the RAILWAY cron POSTs the
 # workflow_dispatch. This is the number the forecaster types into the
@@ -152,7 +156,9 @@ BACKSTOP_OFFSET_MINUTES = 217
 # the job's timeout-minutes, so a wedged poll cannot sit on GitHub's
 # six-hour default. IFR runs 15-20 minutes; MTN OBSC has historically run
 # to 30 (see the timeout note in .github/workflows/generate_mtn_obsc.yml).
-WORK_ALLOWANCE_MINUTES = {"ifr": 30, "mtn_obsc": 45}
+# TANGO's one timed run (2026-10-04) took ~5 minutes end to end; 30 is the
+# same room IFR gets, ample for two layers x five hours of regridding.
+WORK_ALLOWANCE_MINUTES = {"ifr": 30, "mtn_obsc": 45, "tango": 30}
 
 # THE TWO HAZARDS ARE NO LONGER STAGGERED, and that is a finding rather
 # than a simplification. The 15-minute gap was there to keep their pushes
@@ -174,7 +180,8 @@ WORK_ALLOWANCE_MINUTES = {"ifr": 30, "mtn_obsc": 45}
 # most cycles anyway. It was protecting nothing.
 #
 # So both hazards are dispatched together and both backstops fire on the
-# same minute. scripts/dispatch_workflows.py keeps a --stagger-seconds
+# same minute. TANGO joined later on the same terms: its own data-tango
+# branch, its own concurrency group, and no file in common with the others. scripts/dispatch_workflows.py keeps a --stagger-seconds
 # knob at 0 in case that ever stops being true.
 HAZARDS = tuple(sorted(HAZARD_WORKFLOWS))
 
