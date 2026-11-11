@@ -43,6 +43,7 @@ an explanation from artifacts.not_loaded_detail() rather than a bare
 
 import json
 import os
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -69,19 +70,118 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 _refresher = artifacts.ArtifactRefresher()
 
+# --- BOUNDARY-MASK WARM-UP ---
+#     A recompute needs the area-of-responsibility mask (and, for MTN OBSC,
+#     the land mask) rasterized onto its hazard's grid. The first one costs
+#     ~38 s and holds the GIL throughout, so the first APPLY after a deploy
+#     used to stall EVERY request on the server, health check included.
+#     These masks are computed at startup instead, in a child process (no
+#     shared GIL), for the grids the published caches actually use -- read
+#     from the files, not hard-coded, so they follow the pipeline.
+#     pipeline.boundaries holds each mask's lock while it is computed, so a
+#     request that arrives meanwhile waits for this result instead of
+#     starting its own. BOUNDARY_MASK_WARM=0 turns it off.
+BOUNDARY_MASK_WARM = os.environ.get("BOUNDARY_MASK_WARM", "1").strip().lower() not in ("0", "false", "no", "off")
+MASK_WARM_POLL_SECONDS = 10
+MASK_WARM_DEADLINE_SECONDS = 30 * 60
+
+_mask_warm_stop = threading.Event()
+
+
+def _mask_paths_by_hazard() -> dict:
+    """Which boundary masks each hazard's recompute rasterizes onto its grid."""
+    from pipeline.boundaries import CONUS_BOUNDARY_PATH, LAND_BOUNDARY_PATH
+
+    return {
+        "ifr": (CONUS_BOUNDARY_PATH,),
+        "mtn_obsc": (LAND_BOUNDARY_PATH, CONUS_BOUNDARY_PATH),
+        "sfc_wind": (CONUS_BOUNDARY_PATH,),
+        "llws": (CONUS_BOUNDARY_PATH,),
+    }
+
+
+def boundary_mask_requests(key: str):
+    """
+    (grid_spec, shape, boundaries_path) for one hazard's published grid, or
+    None while its artifacts are not on disk yet. Reads the first cached
+    grid's spec and shape -- every snapshot of a cycle shares one grid.
+    """
+    import numpy as np
+
+    from pipeline.polygons import GridSpec
+
+    manifest = artifacts.load_manifest(key)
+    snapshots = (manifest or {}).get("snapshots") or []
+    if not snapshots or not snapshots[0].get("cache_filename"):
+        return None
+    path = artifacts.artifact_path(key, snapshots[0]["cache_filename"])
+    if path is None:
+        return None
+    with np.load(path) as data:
+        spec = GridSpec(west=float(data["west"]), north=float(data["north"]),
+                        dx=float(data["dx"]), dy=float(data["dy"]))
+        grid_name = next(n for n in data.files if n not in ("west", "north", "dx", "dy", "scale"))
+        shape = tuple(data[grid_name].shape)
+    return [(spec, shape, boundaries_path) for boundaries_path in _mask_paths_by_hazard()[key]]
+
+
+def _warm_boundary_masks_when_ready() -> None:
+    """
+    Background thread: as each hazard's artifacts appear, warm its masks
+    in ONE child process (one at a time, so the server keeps its other
+    CPU). Gives up after MASK_WARM_DEADLINE_SECONDS for a hazard that
+    never publishes; a recompute for it then pays the cost as before.
+    """
+    import multiprocessing
+    import time
+    from concurrent.futures import ProcessPoolExecutor
+
+    from pipeline.boundaries import warm_boundary_masks
+
+    pending = set(_mask_paths_by_hazard())
+    deadline = time.monotonic() + MASK_WARM_DEADLINE_SECONDS
+    pool = None
+    try:
+        while pending and time.monotonic() < deadline:
+            for key in sorted(pending):
+                try:
+                    requests = boundary_mask_requests(key)
+                    if requests is None:
+                        continue
+                    if pool is None:
+                        # spawn, not fork: forking a threaded server process
+                        # can copy a held lock into the child.
+                        pool = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"))
+                    started = time.monotonic()
+                    computed = warm_boundary_masks(requests, pool)
+                    print(f"[masks] {key}: {computed} boundary mask(s) warmed in {time.monotonic() - started:.0f}s")
+                    pending.discard(key)
+                except Exception as err:  # never take the server down over a warm-up
+                    print(f"[masks] {key}: warm-up failed ({err!r}); its first recompute will compute it")
+                    pending.discard(key)
+            if pending and _mask_warm_stop.wait(MASK_WARM_POLL_SECONDS):
+                return
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Starts the artifact poller and returns IMMEDIATELY. The first fetch
-    is ~20 MB and happens on that background thread, deliberately not
-    awaited here: FastAPI won't report the app as ready until this
-    function yields, and Railway's health check hits it right after, so
-    anything slow in here would show up as a failed deploy rather than
-    as a few seconds of "data loading".
+    Starts the artifact poller and the boundary-mask warm-up, and returns
+    IMMEDIATELY. The first fetch is ~20 MB and happens on that background
+    thread, deliberately not awaited here: FastAPI won't report the app as
+    ready until this function yields, and Railway's health check hits it
+    right after, so anything slow in here would show up as a failed deploy
+    rather than as a few seconds of "data loading". The warm-up waits for
+    that data and does its work in a child process, for the same reason.
     """
     _refresher.start()
+    if BOUNDARY_MASK_WARM:
+        threading.Thread(target=_warm_boundary_masks_when_ready, name="boundary-mask-warmup", daemon=True).start()
     yield
+    _mask_warm_stop.set()
     _refresher.stop()
 
 
@@ -257,12 +357,14 @@ def recompute_ifr_snapshot(
 
     ONE exception to "no heavy work here," shared with
     recompute_mtn_obsc_snapshot(): IFR polygonization clips its
-    output to the ARTCC boundary, and rasterizing that boundary onto
-    the grid takes a few seconds the FIRST time a given grid shape is
-    seen after a process restart. It's memoized from then on (see
-    pipeline.boundaries.get_boundary_mask), so only that first request
-    pays it -- deliberately preferred over baking the mask into the
-    cached grids, which would have changed the on-disk cache format.
+    output to the area-of-responsibility boundary, and rasterizing that
+    boundary onto a grid takes ~38 s the first time a grid shape is seen
+    after a process restart. The start-up warm-up (see
+    _warm_boundary_masks_when_ready) computes it in a child process before
+    any recompute needs it; it's memoized from then on (see
+    pipeline.boundaries.get_boundary_mask) -- deliberately preferred over
+    baking the mask into the cached grids, which would have changed the
+    on-disk cache format.
 
     Query params: threshold_pct, neighborhood_radius_nm, min_area_sq_mi
     (all optional, matching the same forecaster-adjustable parameters
