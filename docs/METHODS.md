@@ -1088,8 +1088,12 @@ and `makeHourStore` machinery. Where they differ:
   header, with its settings seeded from the manifest.
 - **Failures stay in the row.** 409 reads "data is being refreshed", 503
   and 404 "layer unavailable"; every TANGO loader catches its own errors,
-  and reads or discards every response body (an unread body holds one of
-  the browser's six connections per host).
+  and parses every response through `readJsonOrDiscard`, which returns
+  JSON for a success and null for a failure. That is for a uniform
+  failure path only. An earlier version of this note said an unread body
+  holds one of the browser's six connections per host; measured in
+  Chromium, it does not (48 unread responses, up to ~1 MB each, and the
+  next request still took 4–6 ms).
 - **The cycle is shown in the row**, because TANGO runs as its own
   workflow and can lag the cycle in the header.
 - **No export.** Neither layer is in `EXPORT_HAZARDS`; the TANGO export
