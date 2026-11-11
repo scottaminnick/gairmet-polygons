@@ -865,11 +865,13 @@ function tangoFailureText(status) {
 }
 
 // The parsed body of a successful response, or null after discarding the
-// body of a failed one. A response whose body is never read keeps its
-// request -- and its connection -- open in the browser, and the browser
-// allows only six per host: a few leaked on a failing TANGO layer would
-// stall every API request on the page, IFR and MTN OBSC included. So every
-// TANGO response is read or discarded, never dropped.
+// body of a failed one. What it buys is one uniform failure path: every
+// TANGO caller gets JSON or null, and never parses an error body as data.
+// It is NOT needed to free connections: measured in Chromium (2026-11-10),
+// 48 responses left unread on one page -- 404s, small JSON, and ~1 MB
+// GeoJSON -- and the next request still answered in 4-6 ms. An unread
+// body does not hold one of the browser's six per-host connections; it
+// only looks "pending" to tools that wait for the body to be consumed.
 async function readJsonOrDiscard(resp) {
   if (resp.ok) return resp.json();
   await resp.text().catch(() => {});
@@ -972,7 +974,7 @@ async function recomputeTango(t, settings = null) {
     const url = `/api/hazards/${t.key}/${fxxStr}/recompute?speed_threshold_kt=${threshold}` +
       `&smooth_sigma_cells=${sigma}&neighborhood_radius_nm=${radius}&min_area_sq_mi=${minArea}`;
     const resp = await fetch(url);
-    const geojson = await readJsonOrDiscard(resp); // read even if superseded, to free the connection
+    const geojson = await readJsonOrDiscard(resp); // read even if superseded; the result is dropped below
     if (seq !== t.seq) return; // superseded while in flight
     if (!geojson) {
       clearTango(t, tangoFailureText(resp.status));
