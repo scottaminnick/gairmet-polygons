@@ -1542,20 +1542,40 @@ header, which is where somebody debugging it at 3am will actually look.
 The token is a fine-grained PAT scoped to this repository with a single
 permission, `Actions: Read and write`; nothing here needs contents write.
 
-### What the backstop is for
+### What the backstops are for
 
 Moving the trigger off GitHub means a new single point of failure: if
 Railway is down, the token expires, or the dispatch is simply never sent,
-nothing happens at all. So each workflow keeps **one** `schedule:` entry,
-at +3:37, and that is its entire purpose.
+nothing happens at all. There are two backstops, in order:
 
-It is cheap precisely because of check-before-work. On a normal day the
-Railway dispatch published the package around +1:40, so the backstop
-resolves its cycle, reads the branch, sees `[already-published]` and exits
-in seconds having installed nothing. On a bad day it publishes the package
-late, which beats not publishing it.
+| | When | Trigger | Covers |
+|---|---|---|---|
+| 1 | +2:30 | `railway-backstop`: a second Railway cron service, its own token (`railway.backstop.json`) | a primary dispatch that did not happen: a missed or crashed cron run, an expired primary token |
+| 2 | +3:37 | `schedule-backstop`: one GitHub `schedule:` entry per workflow | Railway itself being down — the one trigger independent of Railway |
 
-Three details matter:
+**Why Railway first and GitHub last.** GitHub's `schedule:` was meant to be
+the backstop alone, but measured over 2026-10-28 to 11-11 it fired 2–356
+minutes late (median 83) and skipped about 22 of 57 slots; 16 of the runs
+that fired landed after the *next* synoptic hour, so `target_nbm_cycle()`
+pointed them at the next cycle and they backed up the wrong package. A
+Railway cron fires on time. +2:30 is after the primary's poll has closed
+(+1:20 + 60 = +2:20) and before the viewer's staleness cutoff (+3:05,
+§8.8), so on a bad day the package can still land before the viewer calls
+it late (IFR's 15–20 minute run does; MTN OBSC's can run past +3:05).
+
+**Both are cheap** because of check-before-work. On a normal day the
+primary published the package around +1:40, so a backstop resolves its
+cycle, reads the branch, sees `[already-published]` and exits in seconds
+having installed nothing.
+
+**Neither can race the run it backs up.** Each hazard's workflow has one
+`concurrency:` group (`generate-ifr-polygons`, `generate-mtn-obsc-polygons`,
+`generate-tango-polygons`), the same for every trigger, with
+`cancel-in-progress: false`. A backstop that fires while an earlier run is
+still publishing queues behind it, then finds the package published.
+`tests/test_railway_backstop.py` pins all of this.
+
+Three details matter for the GitHub entry:
 
 - **One entry, not a ladder.** Adding scheduled runs to work around
   scheduled-run delay is what got us here.
