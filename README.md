@@ -74,7 +74,7 @@ Currently working:
       re-fetching from NBM.
 - [x] **Scheduled generation** (`.github/workflows/generate_ifr.yml`) —
       runs every 6 hours, triggered by a Railway cron service that POSTs
-      a `workflow_dispatch` at +0:45 after each synoptic hour
+      a `workflow_dispatch` at +1:20 after each synoptic hour, timed to NBM's arrival
       (`scripts/dispatch_workflows.py`, [setup](RAILWAY_DISPATCH.md)).
       GitHub delays `schedule:` runs by 2–4.5 hours and the delay is
       growing, so the trigger lives off-platform and one `schedule:`

@@ -310,17 +310,18 @@ function formatValidTime(iso) {
 //     newest one that should have PUBLISHED by now, following the
 //     NORMAL publish path end to end (pipeline/publish_schedule.py):
 //
-//       +0:45  a Railway cron POSTs workflow_dispatch to both hazards
-//       +1:45  the job's 60-minute poll for its NBM cycle closes
-//       +2:30  45 more minutes to install, generate and push
+//       +1:20  a Railway cron POSTs workflow_dispatch to every hazard
+//              (timed to NBM's arrival -- see publish_schedule.py)
+//       +2:20  the job's 60-minute poll for its NBM cycle closes
+//       +3:05  45 more minutes to install, generate and push
 //
-//     so PUBLISH_WINDOW_CLOSE_MINUTES is 45 + 60 + 45.
+//     so PUBLISH_WINDOW_CLOSE_MINUTES is 80 + 60 + 45.
 //
 //     DELIBERATELY NOT THE +3:37 BACKSTOP. Each workflow keeps one
 //     `schedule:` entry as a safety net for a failed dispatch, and it
-//     could still publish this cycle at ~+4:22. Waiting for that before
+//     could still publish this cycle at ~+5:22. Waiting for that before
 //     saying anything would mean hiding a real failure for two hours to
-//     avoid one honest warning. Past +2:30 the package IS late; the
+//     avoid one honest warning. Past +3:05 the package IS late; the
 //     backstop is a recovery, not extra runway.
 //
 //     Two ways to end up stale, and the indicator does not care which:
@@ -336,7 +337,7 @@ function formatValidTime(iso) {
 // pipeline/gairmet_cycle.py; tests/test_publish_schedule.py fails if they
 // drift.
 const CYCLE_HOURS = [3, 9, 15, 21];
-const PUBLISH_WINDOW_CLOSE_MINUTES = 150;
+const PUBLISH_WINDOW_CLOSE_MINUTES = 185;
 const NBM_LEAD_OFFSET_HOURS = 6;
 const STALENESS_RECHECK_MS = 5 * 60 * 1000;
 
