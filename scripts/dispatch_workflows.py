@@ -68,8 +68,26 @@ schedule instead of keeping it up.
      it, and tests/test_publish_schedule.py fails if
      railway.dispatch.json drifts from it.
 
-  5. Deploy, then check the first run's logs for two DISPATCH lines with
-     `status=204`.
+  5. Deploy, then check the first run's logs for one DISPATCH line per
+     hazard with `status=204`.
+
+----------------------------------------------------------------------
+THE SECOND SERVICE: THE +2:30 RAILWAY BACKSTOP
+----------------------------------------------------------------------
+Same script, a second Railway cron service, because a cron service has
+exactly one schedule and +1:20 and +2:30 cannot share one expression.
+It sends trigger=railway-backstop, so its runs label themselves in the
+NBM-ARRIVAL line and their start delay is measured against +2:30. On a
+normal day every hazard finds its package already published and exits
+in seconds. Setup is the same five steps, with:
+
+  2. Railway Config File:   railway.backstop.json
+  3. GITHUB_TOKEN = a SECOND fine-grained PAT (same scope and permission
+     as the first, but its own), so one expired token cannot stop both
+     dispatchers.
+  4. Cron Schedule:         %(backstop_cron)s
+
+The start command (`--trigger railway-backstop`) is in the config file.
 
 Railway's cron granularity is one minute and it does not guarantee the
 container starts on the exact second. That is fine: the job it starts
@@ -90,8 +108,9 @@ EXIT CODE
     0  every dispatch returned 204
     1  any dispatch did not -- so Railway marks the job failed and the
        forecaster sees it, rather than the pipeline silently going quiet.
-       The +3:37 GitHub backstop is what actually saves the cycle; this
-       exit code is what tells somebody to fix the dispatcher.
+       The +2:30 Railway backstop (and, behind it, the +3:37 GitHub one)
+       is what actually saves the cycle; this exit code is what tells
+       somebody to fix the dispatcher.
 """
 from __future__ import annotations
 
@@ -111,6 +130,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from pipeline.publish_schedule import (  # noqa: E402
     HAZARD_WORKFLOWS,
+    RAILWAY_TRIGGER_OFFSETS,
     dispatch_cron_entry,
 )
 
@@ -120,7 +140,8 @@ DEFAULT_REF = "main"
 # The value the workflows see as the `trigger` input, and the value
 # pipeline.publish_schedule.classify_trigger() recognises. A run that
 # arrives with anything else is classified "manual", so this string is
-# what makes a Railway-dispatched run identifiable in the logs.
+# what makes a Railway-dispatched run identifiable in the logs. The
+# backstop service overrides it with --trigger railway-backstop.
 TRIGGER_NAME = "railway-cron"
 
 API_ROOT = "https://api.github.com"
@@ -206,7 +227,7 @@ def _log(hazard: str, workflow_file: str, status, detail: str = "") -> None:
 
 
 def dispatch_one(hazard: str, workflow_file: str, token: str, repository: str,
-                 ref: str, opener=urllib.request.urlopen) -> bool:
+                 ref: str, opener=urllib.request.urlopen, trigger: str = TRIGGER_NAME) -> bool:
     """
     POST one dispatch. True on 204, False on anything else -- including a
     network failure, which is indistinguishable from a rejection as far
@@ -217,7 +238,7 @@ def dispatch_one(hazard: str, workflow_file: str, token: str, repository: str,
     the caller collects both outcomes before deciding the exit code.
     """
     url = dispatch_url(repository, workflow_file)
-    request = _request(url, dispatch_payload(ref), token)
+    request = _request(url, dispatch_payload(ref, trigger), token)
     try:
         with opener(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
             status = response.status
@@ -239,6 +260,7 @@ def dispatch_one(hazard: str, workflow_file: str, token: str, repository: str,
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__ % {
         "cron": dispatch_cron_entry(),
+        "backstop_cron": dispatch_cron_entry("railway-backstop"),
         "default_repo": DEFAULT_REPOSITORY,
         "default_ref": DEFAULT_REF,
     }, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -246,6 +268,13 @@ def main(argv=None):
         "--print-schedule",
         action="store_true",
         help="print the cron line to set on the Railway service and exit",
+    )
+    parser.add_argument(
+        "--trigger",
+        choices=sorted(RAILWAY_TRIGGER_OFFSETS),
+        default=TRIGGER_NAME,
+        help="the `trigger` input to send: railway-cron for the +1:20 primary "
+             "service (default), railway-backstop for the +2:30 backstop service",
     )
     parser.add_argument(
         "--stagger-seconds",
@@ -267,13 +296,13 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     if args.print_schedule:
-        print(dispatch_cron_entry())
+        print(dispatch_cron_entry(args.trigger))
         return 0
 
     if args.dry_run:
         for hazard, workflow_file in sorted(HAZARD_WORKFLOWS.items()):
             print(f"POST {dispatch_url(args.repository, workflow_file)}")
-            print(f"     {json.dumps(dispatch_payload(args.ref))}")
+            print(f"     {json.dumps(dispatch_payload(args.ref, args.trigger))}")
         return 0
 
     token = os.environ.get("GITHUB_TOKEN", "").strip()
@@ -291,7 +320,7 @@ def main(argv=None):
         if index and args.stagger_seconds > 0:
             time.sleep(args.stagger_seconds)
         results[hazard] = dispatch_one(
-            hazard, workflow_file, token, args.repository, args.ref
+            hazard, workflow_file, token, args.repository, args.ref, trigger=args.trigger
         )
 
     failed = sorted(h for h, ok in results.items() if not ok)

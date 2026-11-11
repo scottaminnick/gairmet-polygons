@@ -16,8 +16,11 @@ on:
   # delay does not make the package late, it makes it useless: the 03Z
   # package exists to seed the 0245Z issuance.
   #
-  # THE ONE `schedule:` ENTRY BELOW IS A BACKSTOP, and covers exactly one
-  # failure -- the Railway dispatch did not happen. By +3:37 NBM has long
+  # THE ONE `schedule:` ENTRY BELOW IS THE LAST-RESORT BACKSTOP. A second
+  # Railway service dispatches again at +2:30 (trigger railway-backstop)
+  # and covers a missed primary dispatch on time; this +3:37 entry is
+  # the one trigger that does not depend on Railway at all, for a Railway
+  # outage. By +3:37 NBM has long
   # since posted, so it either finds the package already published and
   # exits in seconds (the check-before-work steps below) or publishes it
   # late, which beats not publishing it.
@@ -41,7 +44,7 @@ on:
   workflow_dispatch:
     inputs:
       trigger:
-        description: "Who started this run. The Railway cron service sends 'railway-cron'; leave as 'manual' when pressing the button yourself -- it only affects how the run labels itself in the NBM-ARRIVAL log line"
+        description: "Who started this run. The Railway cron services send 'railway-cron' (+1:20) or 'railway-backstop' (+2:30); leave as 'manual' when pressing the button yourself -- it only affects how the run labels itself in the NBM-ARRIVAL log line"
         required: false
         default: "manual"
       threshold_pct:
@@ -79,6 +82,11 @@ on:
 # two hazards publish to separate branches now and cannot collide with
 # each other at all, so a shared group would only make Mountain
 # Obscuration's long runs (tens of minutes) needlessly block IFR's.
+#
+# The group is per HAZARD, not per trigger, so the +1:20 Railway dispatch,
+# the +2:30 Railway backstop, the +3:37 schedule and a manual run all
+# queue behind each other: a backstop can never race the run it backs up
+# to the publish (tests/test_railway_backstop.py pins this).
 #
 # cancel-in-progress is set explicitly to false: a new trigger QUEUES and
 # waits its turn rather than silently cancelling a run already in

@@ -2,7 +2,7 @@
 pipeline/publish_schedule.py
 -------------------------------
 WHEN each hazard is asked to build a package, how long it waits for its
-NBM cycle, and how a run says which of the three triggers started it.
+NBM cycle, and how a run says which of the four triggers started it.
 
 Deliberately STDLIB-ONLY, and now for three callers rather than one:
 
@@ -38,26 +38,44 @@ At 4.5 hours late, a package meant to give the forecaster ~4 hours before
 the 0245Z issuance arrives after the issuance it exists to seed. No cron
 expression fixes that, because the expression is not what is late.
 
-WHAT `schedule:` IS STILL FOR
------------------------------
-One backstop per hazard at BACKSTOP_OFFSET_MINUTES, and nothing else. It
-covers exactly one failure: the Railway dispatch did not happen (service
-down, token expired, Railway itself late). By then NBM has long since
-posted, so the backstop either finds the package already published and
-exits in seconds, or publishes it late -- which beats not publishing it.
+THE BACKSTOPS: A SECOND RAILWAY DISPATCH, THEN `schedule:`
+---------------------------------------------------------
+Two, in order, each covering the failure of everything before it:
 
-It is deliberately ONE run, on an uncontended minute. Adding scheduled
-runs to work around scheduled-run delay is what got us here.
+  1. A SECOND Railway cron service at +2:30 (RAILWAY_BACKSTOP_OFFSET_MINUTES)
+     POSTs the same dispatch with trigger=railway-backstop. It covers a
+     primary dispatch that did not happen or did not finish (a missed or
+     crashed cron run, an expired token -- it has its own). Timed after
+     the primary poll closes (~+2:20) and before the viewer's staleness
+     cutoff (+3:05), so on a bad day the package can still land before the
+     viewer calls it late. Measured over 2026-10-28..11-11, GitHub's
+     `schedule:` fired 2-356 minutes late (median 83) and skipped about
+     two slots in five, so it could not do this job on time.
 
-THE THREE TRIGGERS
-------------------
+  2. GitHub `schedule:` at +3:37 (BACKSTOP_OFFSET_MINUTES), kept as the
+     last resort: the one trigger that does not depend on Railway at all,
+     for a Railway outage. Late and sometimes skipped, as above -- which
+     is why it is the third net and not the second.
+
+Both are cheap on a normal day: each workflow checks whether the package
+is already published BEFORE installing anything, and exits in seconds.
+And the workflows' `concurrency:` groups are per hazard, not per trigger,
+so a backstop that fires while an earlier run of the same hazard is still
+working queues behind it instead of racing it to the publish.
+
+Adding scheduled runs to work around scheduled-run delay is what got us
+here, so `schedule:` stays at ONE entry, on an uncontended minute.
+
+THE FOUR TRIGGERS
+-----------------
 Every run records which one started it (see classify_trigger and
 log_nbm_arrival), because "was the package late" and "was the DISPATCH
 late" are different questions and the log has to answer them separately:
 
     railway-cron       the normal path: Railway POSTed workflow_dispatch
-    schedule-backstop  the +3:37 safety net fired, so the normal path
-                       did not
+    railway-backstop   the +2:30 second Railway dispatch. On a normal day
+                       it finds the package published and exits.
+    schedule-backstop  the +3:37 GitHub safety net, the last resort
     manual             somebody pressed the button
 
 A week of `grep NBM-ARRIVAL` should show start_delay_min near zero for
@@ -150,7 +168,14 @@ POLL_INTERVAL_MINUTES = 5
 # The backstop gets the same 60 minutes from its own later start.
 POLL_WINDOW_MINUTES = 60
 
-# The GitHub `schedule:` backstop, at +3:37. Nominally +3:30 -- late
+# The SECOND Railway cron, at +2:30: the first backstop (see the module
+# docstring). After the primary's poll closes (DISPATCH_OFFSET_MINUTES +
+# POLL_WINDOW_MINUTES = +2:20) and before the viewer's staleness cutoff
+# (PUBLISH_WINDOW_CLOSE_MINUTES = +3:05). A separate Railway service, with
+# its own token, because a Railway cron service has exactly one schedule.
+RAILWAY_BACKSTOP_OFFSET_MINUTES = 150
+
+# The GitHub `schedule:` backstop, at +3:37 -- the last resort. Nominally +3:30 -- late
 # enough that NBM has certainly posted and the normal path has certainly
 # either worked or failed -- moved to :37 because :00/:15/:30/:45 are the
 # platform's most oversubscribed scheduled-run slots and this is the one
@@ -192,9 +217,17 @@ WORK_ALLOWANCE_MINUTES = {"ifr": 30, "mtn_obsc": 45, "tango": 30}
 # knob at 0 in case that ever stops being true.
 HAZARDS = tuple(sorted(HAZARD_WORKFLOWS))
 
-# The three ways a run can start. Order is most-expected first, which is
+# The four ways a run can start. Order is most-expected first, which is
 # also how they should be read in a log.
-TRIGGERS = ("railway-cron", "schedule-backstop", "manual")
+TRIGGERS = ("railway-cron", "railway-backstop", "schedule-backstop", "manual")
+
+# The `trigger` inputs a Railway dispatcher sends, and the minute after the
+# synoptic hour each one is meant to fire. scripts/dispatch_workflows.py
+# --trigger takes exactly these.
+RAILWAY_TRIGGER_OFFSETS = {
+    "railway-cron": DISPATCH_OFFSET_MINUTES,
+    "railway-backstop": RAILWAY_BACKSTOP_OFFSET_MINUTES,
+}
 
 # When a package should have PUBLISHED, for the viewer's staleness check:
 # dispatch, plus the whole poll window, plus the work. Deliberately built
@@ -231,8 +264,9 @@ def classify_trigger(event_name: str, trigger_input: str | None = None) -> str:
     """
     if event_name == "schedule":
         return "schedule-backstop"
-    if (trigger_input or "").strip().lower() == "railway-cron":
-        return "railway-cron"
+    value = (trigger_input or "").strip().lower()
+    if value in RAILWAY_TRIGGER_OFFSETS:
+        return value
     return "manual"
 
 
@@ -245,8 +279,8 @@ def nominal_start_offset_minutes(trigger: str) -> int | None:
     This is what makes start_delay_min meaningful, and start_delay_min is
     how we will know whether moving off `schedule:` actually worked.
     """
-    if trigger == "railway-cron":
-        return DISPATCH_OFFSET_MINUTES
+    if trigger in RAILWAY_TRIGGER_OFFSETS:
+        return RAILWAY_TRIGGER_OFFSETS[trigger]
     if trigger == "schedule-backstop":
         return BACKSTOP_OFFSET_MINUTES
     return None
@@ -331,13 +365,17 @@ def _cron_line(offset_minutes: int) -> str:
     return f"{offset_minutes % 60} {','.join(str(h) for h in hours)} * * *"
 
 
-def dispatch_cron_entry() -> str:
+def dispatch_cron_entry(trigger: str = "railway-cron") -> str:
     """
-    The cron line the forecaster sets on the Railway service. Generated
-    here so the value in railway.dispatch.json, the one in this module,
-    and the one in the docs cannot disagree.
+    The cron line the forecaster sets on a Railway service: the primary
+    dispatch by default, or the +2:30 backstop for "railway-backstop".
+    Generated here so the values in railway.dispatch.json and
+    railway.backstop.json, the ones in this module, and the ones in the
+    docs cannot disagree.
     """
-    return _cron_line(DISPATCH_OFFSET_MINUTES)
+    if trigger not in RAILWAY_TRIGGER_OFFSETS:
+        raise ValueError(f"not a Railway trigger: {trigger!r}; expected one of {sorted(RAILWAY_TRIGGER_OFFSETS)}")
+    return _cron_line(RAILWAY_TRIGGER_OFFSETS[trigger])
 
 
 def cron_entries(hazard: str) -> list[str]:
@@ -372,9 +410,11 @@ def log_nbm_arrival(
     `attempt=N/4`, which described a retry ladder that no longer exists
     and answered none of the questions that matter now. What matters now:
 
-        trigger           railway-cron / schedule-backstop / manual.
-                          If schedule-backstop lines start appearing
-                          regularly, the Railway service is broken.
+        trigger           railway-cron / railway-backstop /
+                          schedule-backstop / manual. A backstop line
+                          that PUBLISHED (rather than skipping as
+                          already-published, which logs no line) means
+                          everything before it failed for that cycle.
         start_delay_min   job start minus the trigger's nominal time.
                           THE number that says whether moving off
                           `schedule:` worked. It was ~95 minutes on
@@ -430,12 +470,19 @@ def warn_nbm_not_posted(target: datetime, hazard: str, trigger: str) -> None:
     will try again -- and the message says so, because an alarm that
     overstates itself gets ignored.
     """
-    backstop = f"+{BACKSTOP_OFFSET_MINUTES // 60}:{BACKSTOP_OFFSET_MINUTES % 60:02d}"
-    following = (
-        f"The {backstop} scheduled backstop will try again for this cycle."
-        if trigger != "schedule-backstop"
-        else "This WAS the backstop, so nothing else is scheduled for this cycle."
-    )
+    def at(minutes: int) -> str:
+        return f"+{minutes // 60}:{minutes % 60:02d}"
+
+    if trigger == "railway-cron":
+        following = (f"The {at(RAILWAY_BACKSTOP_OFFSET_MINUTES)} Railway backstop and the "
+                     f"{at(BACKSTOP_OFFSET_MINUTES)} scheduled backstop will try again for this cycle.")
+    elif trigger == "railway-backstop":
+        following = f"The {at(BACKSTOP_OFFSET_MINUTES)} scheduled backstop will try again for this cycle."
+    elif trigger == "schedule-backstop":
+        following = "This WAS the last backstop, so nothing else is scheduled for this cycle."
+    else:
+        following = (f"The {at(RAILWAY_BACKSTOP_OFFSET_MINUTES)} Railway backstop and the "
+                     f"{at(BACKSTOP_OFFSET_MINUTES)} scheduled backstop will still try for this cycle.")
     print(
         f"WARNING [nbm-not-yet]: NBM {target:%Y-%m-%d %H}Z did not post within the "
         f"{POLL_WINDOW_MINUTES}-minute poll window (hazard={hazard}, trigger={trigger}). "

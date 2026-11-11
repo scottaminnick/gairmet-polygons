@@ -1,0 +1,11 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS"
+  },
+  "deploy": {
+    "startCommand": "python3 scripts/dispatch_workflows.py --trigger railway-backstop",
+    "cronSchedule": "30 5,11,17,23 * * *",
+    "restartPolicyType": "NEVER"
+  }
+}

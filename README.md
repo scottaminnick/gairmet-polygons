@@ -77,8 +77,9 @@ Currently working:
       a `workflow_dispatch` at +1:20 after each synoptic hour, timed to NBM's arrival
       (`scripts/dispatch_workflows.py`, [setup](RAILWAY_DISPATCH.md)).
       GitHub delays `schedule:` runs by 2–4.5 hours and the delay is
-      growing, so the trigger lives off-platform and one `schedule:`
-      backstop per hazard remains for the case where the dispatch fails
+      growing, so the trigger lives off-platform. If the dispatch fails,
+      a second Railway service dispatches again at +2:30, and one
+      `schedule:` entry per hazard at +3:37 is the last resort
       ([METHODS §8.9](docs/METHODS.md)). Each run checks whether the
       package it would build is newer than what is already published
       *before* installing anything, waiting for anything, or fetching any
