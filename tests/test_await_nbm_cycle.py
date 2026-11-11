@@ -48,7 +48,7 @@ resolver = _load("resolve_target_cycle")
 
 CYCLE_03Z = datetime(2026, 9, 4, 3, 0)
 CYCLE_21Z = datetime(2026, 9, 3, 21, 0)
-DISPATCHED = CYCLE_03Z + timedelta(minutes=DISPATCH_OFFSET_MINUTES)   # +0:45
+DISPATCHED = CYCLE_03Z + timedelta(minutes=DISPATCH_OFFSET_MINUTES)   # +1:20
 BACKSTOP = CYCLE_03Z + timedelta(minutes=BACKSTOP_OFFSET_MINUTES)     # +3:37
 
 
@@ -246,7 +246,7 @@ def test_a_cycle_that_lands_mid_poll_is_picked_up_within_one_interval(capsys):
     fields = _arrival(capsys)
     assert fields["poll_wait_min"] == "30"
     assert fields["arrival_measured"] == "yes", "the poll watched this one appear"
-    assert fields["arrival_min"] == "75", "NBM's own latency, from its synoptic hour"
+    assert fields["arrival_min"] == "110", "NBM's own latency, from its synoptic hour (+1:20 + 30)"
 
 
 def test_the_poll_gives_up_after_the_window_and_builds_nothing(capsys):

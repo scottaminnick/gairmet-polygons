@@ -17,7 +17,7 @@ measurements and the reasoning.
 | New Service → GitHub Repo | this repository |
 | Settings → Config-as-code → Railway Config File | `railway.dispatch.json` |
 | Variables → New Variable | `GITHUB_TOKEN` = a fine-grained PAT, scoped to this repo, permission **Actions: Read and write** |
-| Settings → Cron Schedule | `45 3,9,15,21 * * *` |
+| Settings → Cron Schedule | `20 4,10,16,22 * * *` (+1:20, timed to NBM's arrival) |
 
 Then deploy and check the first run's logs for two `DISPATCH … status=204`
 lines.

@@ -20,6 +20,8 @@ primitive; this module adds only the memoization and the two paths.
 
 from __future__ import annotations
 
+import threading
+
 import numpy as np
 
 from pipeline.polygons import GridSpec, load_boundary_mask
@@ -76,6 +78,23 @@ CONUS_BOUNDARY_PATH = "data/boundaries/conus_aor.json"
 
 _boundary_mask_cache: dict = {}
 
+# One lock per cache key, so concurrent first callers of the SAME mask wait
+# for one computation instead of each repeating it, while different masks
+# can still be computed side by side. Without it, two overlapping first
+# requests each rasterized the full mask (measured: two concurrent 44 s
+# requests). _locks_guard only protects the dict of locks.
+_boundary_mask_locks: dict = {}
+_locks_guard = threading.Lock()
+
+
+def _cache_key(grid_spec: GridSpec, shape: tuple, boundaries_path: str) -> tuple:
+    return (grid_spec.west, grid_spec.north, grid_spec.dx, grid_spec.dy, tuple(shape), boundaries_path)
+
+
+def _lock_for(cache_key: tuple) -> threading.Lock:
+    with _locks_guard:
+        return _boundary_mask_locks.setdefault(cache_key, threading.Lock())
+
 
 def get_boundary_mask(grid_spec: GridSpec, shape: tuple, boundaries_path: str) -> np.ndarray:
     """
@@ -83,15 +102,51 @@ def get_boundary_mask(grid_spec: GridSpec, shape: tuple, boundaries_path: str) -
     Both boundary files here (LAND_BOUNDARY_PATH and
     CONUS_BOUNDARY_PATH) are static -- they don't depend on NBM data, the
     forecast cycle, or the forecast hour -- but unioning + rasterizing
-    either one takes several real seconds (see load_boundary_mask's
-    docstring), so computing them fresh for each of a run's 5 snapshots
-    would add ~5x that cost for zero benefit. Cached here by (grid_spec
-    fields, shape, path) rather than via functools.lru_cache directly on
-    GridSpec, since GridSpec is a plain (non-frozen) dataclass and so
-    isn't hashable by default. Keying on path means the two different
-    boundary files each get their own cache entry rather than colliding.
+    either one is slow: ~38 s for a CONUS-sized grid, nearly all of it in
+    skimage.draw.polygon, which tests every cell in the polygon's bounding
+    box against every edge and holds the GIL throughout (so a first call in
+    the web app stalls every other request too; see warm_boundary_masks).
+    Computing them fresh for each of a run's 5 snapshots would add ~5x that
+    cost for zero benefit. Cached here by (grid_spec fields, shape, path)
+    rather than via functools.lru_cache directly on GridSpec, since GridSpec
+    is a plain (non-frozen) dataclass and so isn't hashable by default.
+    Keying on path means the two different boundary files each get their
+    own cache entry rather than colliding.
+
+    Thread-safe: concurrent first callers for one key compute it once.
     """
-    cache_key = (grid_spec.west, grid_spec.north, grid_spec.dx, grid_spec.dy, shape, boundaries_path)
-    if cache_key not in _boundary_mask_cache:
-        _boundary_mask_cache[cache_key] = load_boundary_mask(boundaries_path, grid_spec, shape)
-    return _boundary_mask_cache[cache_key]
+    cache_key = _cache_key(grid_spec, shape, boundaries_path)
+    mask = _boundary_mask_cache.get(cache_key)
+    if mask is not None:
+        return mask
+    with _lock_for(cache_key):
+        if cache_key not in _boundary_mask_cache:
+            _boundary_mask_cache[cache_key] = load_boundary_mask(boundaries_path, grid_spec, shape)
+        return _boundary_mask_cache[cache_key]
+
+
+def warm_boundary_masks(requests, executor) -> int:
+    """
+    Compute the masks for (grid_spec, shape, boundaries_path) requests that
+    are not cached yet, on `executor`, and store them. Returns how many
+    were computed.
+
+    Meant for a PROCESS pool: the rasterization holds the GIL for its whole
+    ~38 s, so warming in a thread would freeze a web server exactly as the
+    cold first request does. In a child process it costs the server
+    nothing but CPU. Each key's lock is held while its mask is computed, so
+    a request that needs it meanwhile waits for this result -- blocked on
+    a lock, which releases the GIL -- rather than starting its own.
+    """
+    computed = 0
+    for grid_spec, shape, boundaries_path in requests:
+        cache_key = _cache_key(grid_spec, shape, boundaries_path)
+        if cache_key in _boundary_mask_cache:
+            continue
+        with _lock_for(cache_key):
+            if cache_key in _boundary_mask_cache:
+                continue
+            future = executor.submit(load_boundary_mask, boundaries_path, grid_spec, tuple(shape))
+            _boundary_mask_cache[cache_key] = future.result()
+            computed += 1
+    return computed

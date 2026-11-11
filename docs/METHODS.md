@@ -216,8 +216,21 @@ NBM's CONUS grid has real coverage well past that (the Pacific, Canada, the
 Atlantic), and the terrain grid's bounding box is deliberately generous.
 IFR conditions and real relief out there are real data this product simply
 isn't responsible for, so every hazard gates on this boundary. The mask is
-memoized in `pipeline/boundaries.py`; the first request after a process
-restart pays a few seconds to rasterize it, every later one is free.
+memoized in `pipeline/boundaries.py`, one lock per mask so concurrent first
+callers compute it once.
+
+**Rasterizing a mask is slow, so the web app warms them at start-up.** One
+CONUS-sized mask takes ~38 s, nearly all of it in `skimage.draw.polygon`
+(which tests every cell in the polygon's bounding box against every edge),
+and it holds the GIL throughout: the first APPLY after a deploy used to
+stall every request on the server, health check included, for that long.
+`webapp/main.py` now computes the masks each published grid needs in a
+child process as soon as that hazard's artifacts are on disk (three masks,
+~87 s, in the background), and a recompute that arrives meanwhile waits for
+that result rather than starting its own. Measured on real artifacts:
+health-check latency under 0.02 s throughout, and the first recompute per
+hazard 0.35–1.4 s. `BOUNDARY_MASK_WARM=0` turns it off. The scheduled
+pipeline still pays the full cost per mask per run.
 
 ### 3.1 Why not the 20-ARTCC union
 
@@ -1122,8 +1135,12 @@ and `makeHourStore` machinery. Where they differ:
   header, with its settings seeded from the manifest.
 - **Failures stay in the row.** 409 reads "data is being refreshed", 503
   and 404 "layer unavailable"; every TANGO loader catches its own errors,
-  and reads or discards every response body (an unread body holds one of
-  the browser's six connections per host).
+  and parses every response through `readJsonOrDiscard`, which returns
+  JSON for a success and null for a failure. That is for a uniform
+  failure path only. An earlier version of this note said an unread body
+  holds one of the browser's six connections per host; measured in
+  Chromium, it does not (48 unread responses, up to ~1 MB each, and the
+  next request still took 4–6 ms).
 - **The cycle is shown in the row**, because TANGO runs as its own
   workflow and can lag the cycle in the header.
 - **No export.** Neither layer is in `EXPORT_HAZARDS`; the TANGO export
@@ -1432,9 +1449,9 @@ questions that actually matter, separately:
 
 ```
 NBM-ARRIVAL hazard=ifr trigger=railway-cron target=...03:00:00Z \
-            package=...09:00:00Z posted=yes job_start=...03:46:00Z \
-            start_delay_min=1 detected=...04:18:00Z poll_wait_min=32 \
-            arrival_min=78 arrival_measured=yes
+            package=...09:00:00Z posted=yes job_start=...04:21:00Z \
+            start_delay_min=1 detected=...04:53:00Z poll_wait_min=32 \
+            arrival_min=113 arrival_measured=yes
 ```
 
 - `trigger` — `railway-cron`, `schedule-backstop` or `manual`. If
@@ -1465,16 +1482,27 @@ have *published*, following the normal path end to end —
 
 | | |
 |---|---|
-| +0:45 | Railway POSTs `workflow_dispatch` to both hazards |
-| +1:45 | the 60-minute poll for the NBM cycle closes |
-| +2:30 | 45 more minutes to install, generate and push |
+| +1:20 | Railway POSTs `workflow_dispatch` to every hazard |
+| +2:20 | the 60-minute poll for the NBM cycle closes |
+| +3:05 | 45 more minutes to install, generate and push |
 
-so `PUBLISH_WINDOW_CLOSE_MINUTES` is 45 + 60 + 45 = 150.
+so `PUBLISH_WINDOW_CLOSE_MINUTES` is 80 + 60 + 45 = 185.
+
+**Why +1:20.** It is timed to NBM's arrival, not ahead of it: the
+forecaster reports NBM 21Z landing 2215–2230Z (+1:15 to +1:30), so the
+job usually finds its cycle on the first probe and holds a runner for no
+time. Over 2026-10-28 to 2026-11-11 (118 `NBM-ARRIVAL` lines across IFR,
+MTN OBSC and TANGO), Railway runs started at +1:20 to +1:25; the cycle was
+already posted at the first probe on all but two, and those two (IFR and
+MTN OBSC, 2026-10-28 09Z) watched it land at +1:52, 30 minutes into a
+60-minute window. No run logged `[nbm-not-yet]`. The cost of starting at
+arrival is that `arrival_min` is almost always an upper bound
+(`arrival_measured=no`).
 
 **Deliberately not the +3:37 backstop.** That backstop could still publish
-the cycle at ~+4:22, and waiting for it before saying anything would mean
-hiding a real failure for nearly two hours to avoid one honest warning.
-Past +2:30 the package genuinely *is* late; the backstop is a recovery,
+the cycle at ~+5:22, and waiting for it before saying anything would mean
+hiding a real failure for over two hours to avoid one honest warning.
+Past +3:05 the package genuinely *is* late; the backstop is a recovery,
 not extra runway.
 
 `expected_gairmet_cycle()` is the Python mirror of the browser's
@@ -1551,7 +1579,7 @@ nothing happens at all. So each workflow keeps **one** `schedule:` entry,
 at +3:37, and that is its entire purpose.
 
 It is cheap precisely because of check-before-work. On a normal day the
-Railway dispatch published the package around +1:30, so the backstop
+Railway dispatch published the package around +1:40, so the backstop
 resolves its cycle, reads the branch, sees `[already-published]` and exits
 in seconds having installed nothing. On a bad day it publishes the package
 late, which beats not publishing it.

@@ -64,13 +64,19 @@ A week of `grep NBM-ARRIVAL` should show start_delay_min near zero for
 railway-cron. If it does not, the move did not work and this whole design
 needs revisiting.
 
-WHY 45 MINUTES BEFORE, AND A 60-MINUTE WINDOW
----------------------------------------------
-The forecaster reports NBM 21Z typically lands 2215-2230Z, i.e. +1:15 to
-+1:30 after the synoptic hour. Dispatching at +0:45 puts the job in place
-~45 minutes early, and a 60-minute poll window carries it to +1:45 --
-past the late end of the observed range with margin, without holding a
-runner indefinitely.
+WHY +1:20, AND A 60-MINUTE WINDOW
+---------------------------------
+The dispatch is timed to NBM's arrival, deliberately: the forecaster
+reports NBM 21Z typically lands 2215-2230Z (+1:15 to +1:30), so a job
+started at +1:20 usually finds its cycle on the first probe and holds a
+runner for no time at all. The 60-minute poll window then carries a late
+cycle to ~+2:20. Measured over 2026-10-28 to 2026-11-11 (118 runs), the
+cycle was already there at the first probe on every Railway run but two,
+and the latest arrival actually watched was +1:52.
+
+The cost of starting at arrival rather than before it: arrival_min on
+the NBM-ARRIVAL line is usually only an upper bound (arrival_measured=no),
+because the poll rarely gets to watch the cycle appear.
 
 A cycle later than that is not waited out. The run reports [nbm-not-yet]
 and exits; the +3:37 backstop is what picks it up, and by then the answer
@@ -121,15 +127,16 @@ HAZARD_WORKFLOWS = {
 }
 
 # Minutes after the synoptic hour at which the RAILWAY cron POSTs the
-# workflow_dispatch. This is the number the forecaster types into the
-# Railway UI; scripts/dispatch_workflows.py prints the cron line for it
-# and tests/test_publish_schedule.py checks railway.dispatch.json against
-# it.
+# workflow_dispatch: +1:20, timed to NBM's arrival (see the module
+# docstring). This is the number the forecaster types into the Railway UI;
+# scripts/dispatch_workflows.py prints the cron line for it and
+# tests/test_publish_schedule.py checks railway.dispatch.json against it.
 #
-# Not shifted off the quarter hour the way the GitHub backstop is: the
-# oversubscription problem is GitHub's scheduled-event queue, and Railway
-# runs our own container on our own plan.
-DISPATCH_OFFSET_MINUTES = 45
+# It also anchors start_delay_min on the NBM-ARRIVAL line and the viewer's
+# staleness window (PUBLISH_WINDOW_CLOSE_MINUTES), so it has to be the
+# minute Railway really fires: while this said 45 and Railway fired at
+# +1:20, every on-time run logged start_delay_min of ~35-40.
+DISPATCH_OFFSET_MINUTES = 80
 
 # How long the job waits between .idx probes. Five minutes is well below
 # the spread on NBM's arrival and cheap enough to be irrelevant: one HTTP
@@ -193,8 +200,9 @@ TRIGGERS = ("railway-cron", "schedule-backstop", "manual")
 # dispatch, plus the whole poll window, plus the work. Deliberately built
 # from the NORMAL path and not from the backstop -- past this point the
 # package genuinely IS late, and the +3:37 backstop is a recovery, not a
-# second helping of runway. A viewer that stayed quiet until +4:22 would
-# be hiding a real failure for two hours to avoid one honest warning.
+# second helping of runway. A viewer that stayed quiet until +5:22 would
+# be hiding a real failure for over two hours to avoid one honest warning.
+# (+1:20 + 60 + 45 = 185 minutes, i.e. +3:05.)
 PUBLISH_WINDOW_CLOSE_MINUTES = (
     DISPATCH_OFFSET_MINUTES + POLL_WINDOW_MINUTES + max(WORK_ALLOWANCE_MINUTES.values())
 )

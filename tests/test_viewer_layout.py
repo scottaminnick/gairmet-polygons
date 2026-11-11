@@ -624,11 +624,15 @@ def test_every_runtime_built_tango_id_exists():
 
 def test_every_tango_response_body_is_read_or_discarded():
     """
-    An unread response body keeps its request and connection open, and the
-    browser allows six per host: a failing TANGO layer that dropped bodies
-    would, after a few hour switches, stall every API request on the page.
-    Measured: with the manifest failing, the unread /parameters request was
-    still pending 12 s later.
+    Every TANGO response goes through readJsonOrDiscard, so each caller
+    gets parsed JSON or null and none parses an error body as data.
+
+    This is about a uniform failure path, not connections. An earlier
+    docstring here said an unread body holds one of the browser's six
+    per-host connections, citing a request "still pending 12 s later";
+    that was Playwright waiting for the body to be read, not the network.
+    Measured in Chromium: 48 unread responses on one page, and the next
+    request still took 4-6 ms.
     """
     tango = _slice_between(JS, "// --- TANGO LAYERS", "// --- ADJUSTOR WIRING ---")
     # parameters, manifest, snapshot, recompute -- a fifth means a new fetch
