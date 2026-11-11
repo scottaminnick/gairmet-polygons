@@ -227,9 +227,11 @@ from pipeline.polygons import (
     fill_enclosed_gaps,
     filter_polygons_by_area,
     grid_to_polygons,
+    load_grid_cache,
     merge_nearby_polygons,
     polygons_to_feature_collection,
     rasterize_polygon_cells,
+    save_grid_cache,
     smooth_polygon_boundary,
 )
 from pipeline.regrid import regrid_to_regular_latlon
@@ -704,6 +706,45 @@ def _determine_weather_type(
         labels.append("FG")
 
     return "/".join(labels) if labels else "CLDS"
+
+
+def cache_grids_for(prepared: dict) -> dict:
+    """
+    The probability grids the scheduled run caches, keyed as the web app's
+    recompute reads them. Terrain is deliberately not among them: it is
+    static and lives in data/terrain/terrain_grid.npz (module docstring).
+    """
+    grids = {f"ceiling_prob_{t}": prepared["ceiling_prob"][t] for t in CEILING_PROB_THRESHOLDS_FT}
+    grids.update({"precip": prepared["precip"], "vis3": prepared["vis3"], "vis1": prepared["vis1"]})
+    return grids
+
+
+def cache_and_polygonize_mtn_obsc(cache_path, prepared: dict, date: datetime, fxx: int, **parameters) -> dict:
+    """
+    Write the cache, READ IT BACK, and polygonize what was read -- what the
+    scheduled run publishes. Same reason as ifr.cache_and_polygonize_ifr:
+    the web app recomputes from the cache, which rounds probabilities to
+    whole percent, so polygonizing the full-precision grids published
+    shapes the app could not reproduce (measured 2026-11-10 15Z: same
+    counts, areas up to ~0.5% apart). The terrain grids are not cached and
+    are passed through unchanged, as the recompute reads them from the
+    same terrain file.
+    """
+    save_grid_cache(cache_path, cache_grids_for(prepared), prepared["grid_spec"])
+    grids, loaded_spec = load_grid_cache(cache_path)
+    return polygonize_mtn_obsc_grid(
+        {t: grids[f"ceiling_prob_{t}"] for t in CEILING_PROB_THRESHOLDS_FT},
+        grids["precip"],
+        grids["vis3"],
+        grids["vis1"],
+        prepared["baseline_elevation_ft"],
+        prepared["ridge_elevation_ft"],
+        loaded_spec,
+        date,
+        fxx,
+        terrain_radius_nm=prepared["terrain_radius_nm"],
+        **parameters,
+    )
 
 
 def polygonize_mtn_obsc_grid(

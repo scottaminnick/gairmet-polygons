@@ -153,7 +153,9 @@ from pipeline.polygons import (
     lonlat_ring_to_pixel_rowcol,
     merge_nearby_polygons,
     polygons_to_feature_collection,
+    load_grid_cache,
     rasterize_polygon_cells,
+    save_grid_cache,
     simplify_shared_arcs,
     smooth_polygon_boundary,
 )
@@ -1469,6 +1471,44 @@ def polygonize_ifr_grid_active(
         threshold_pct=threshold_pct,
         neighborhood_radius_nm=neighborhood_radius_nm,
         min_area_sq_mi=min_area_sq_mi,
+    )
+
+
+# The four grids the scheduled run caches and the web app's recompute reads.
+IFR_CACHE_KEYS = ("ceiling", "visibility_3sm", "visibility_1sm", "precipitation")
+
+
+def cache_and_polygonize_ifr(
+    cache_path,
+    ceil_grid: np.ndarray,
+    vis3_grid: np.ndarray,
+    vis1_grid: np.ndarray,
+    precip_grid: np.ndarray,
+    grid_spec,
+    date: datetime,
+    fxx: int,
+    **parameters,
+) -> dict:
+    """
+    Write the cache, READ IT BACK, and polygonize what was read. This is
+    what the scheduled run publishes.
+
+    The cache stores probabilities rounded to whole percent, and the web
+    app recomputes from it. Polygonizing the full-precision grids instead
+    -- which is what this replaced -- published polygons the app could not
+    reproduce: a cell between 49.5% and 50% flips at a 50% threshold, so
+    revisiting an hour in the viewer (which recomputes) redrew a different
+    map at the same settings. Measured on 2026-11-10 15Z: published F00
+    had 3 polygons, the default recompute 10, and every hour's large
+    polygons differed by 1-2% in area. Publishing from the read-back copy
+    makes the two equal by construction, as tango_common.cache_and_polygonize
+    does for TANGO.
+    """
+    grids_in = dict(zip(IFR_CACHE_KEYS, (ceil_grid, vis3_grid, vis1_grid, precip_grid)))
+    save_grid_cache(cache_path, grids_in, grid_spec)
+    grids, loaded_spec = load_grid_cache(cache_path)
+    return polygonize_ifr_grid_active(
+        *(grids[key] for key in IFR_CACHE_KEYS), loaded_spec, date, fxx, **parameters
     )
 
 

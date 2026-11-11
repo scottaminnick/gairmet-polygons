@@ -57,8 +57,7 @@ from pipeline.gairmet_cycle import (
     PROBE_FORECAST_HOUR,
     resolve_nbm_cycle,
 )
-from pipeline.hazards.ifr import polygonize_ifr_grid_active, prepare_ifr_grid
-from pipeline.polygons import save_grid_cache
+from pipeline.hazards.ifr import cache_and_polygonize_ifr, prepare_ifr_grid
 
 # resolve_nbm_cycle(), find_latest_gairmet_cycle(), GAIRMET_CYCLE_HOURS, FORECAST_HOURS,
 # NBM_LEAD_TIME_OFFSET_HOURS, MAX_CYCLES_TO_TRY, and PROBE_FORECAST_HOUR
@@ -78,21 +77,17 @@ OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
 # (imported above, behind resolve_nbm_cycle()).
 
 
-def generate_one_snapshot(nbm_cycle_date: datetime, gairmet_cycle_date: datetime, requested_fxx: int):
+def generate_one_snapshot(nbm_cycle_date: datetime, gairmet_cycle_date: datetime, requested_fxx: int, cache_path):
     """
-    Generates one forecast-hour snapshot. requested_fxx is hours INTO
-    the G-AIRMET cycle being produced (0/3/6/9/12, matching filenames
+    Generates one forecast-hour snapshot. requested_fxx is the G-AIRMET
+    valid-time offset (what's used for labeling, filenames, the manifest,
     and the UI) -- the actual NBM forecast hour fetched is
     requested_fxx + NBM_LEAD_TIME_OFFSET_HOURS, from nbm_cycle_date
     (the previous G-AIRMET-aligned NBM cycle, which already exists).
 
-    Returns (feature_collection, ceil_grid, vis3_grid, vis1_grid,
-    precip_grid, grid_spec) -- all four grids are returned SEPARATELY
-    (not combined) so main() can cache them for the web app's live
-    parameter-adjustment endpoint, which needs them individually to
-    attribute each polygon's cause and weather_type at recompute time
-    too, not just once at generation time (see
-    pipeline.polygons.save_grid_cache).
+    Writes the grid cache to cache_path and returns the feature collection
+    polygonized FROM THAT CACHE (see ifr.cache_and_polygonize_ifr), so the
+    published snapshot equals the web app's default recompute.
     """
     actual_nbm_fxx = requested_fxx + NBM_LEAD_TIME_OFFSET_HOURS
     ceil_grid, vis3_grid, vis1_grid, precip_grid, grid_spec = prepare_ifr_grid(nbm_cycle_date, actual_nbm_fxx)
@@ -101,13 +96,12 @@ def generate_one_snapshot(nbm_cycle_date: datetime, gairmet_cycle_date: datetime
     # time (e.g. 15Z cycle's F00 = 15Z) -- and equals nbm_cycle_date +
     # actual_nbm_fxx by construction, so this is just the more
     # meaningful of two equal ways to express the same instant.
-    fc = polygonize_ifr_grid_active(
-        ceil_grid, vis3_grid, vis1_grid, precip_grid, grid_spec, gairmet_cycle_date, requested_fxx,
+    return cache_and_polygonize_ifr(
+        cache_path, ceil_grid, vis3_grid, vis1_grid, precip_grid, grid_spec, gairmet_cycle_date, requested_fxx,
         threshold_pct=THRESHOLD_PCT,
         neighborhood_radius_nm=NEIGHBORHOOD_RADIUS_NM,
         min_area_sq_mi=MIN_AREA_SQ_MI,
     )
-    return fc, ceil_grid, vis3_grid, vis1_grid, precip_grid, grid_spec
 
 
 def main():
@@ -142,10 +136,14 @@ def main():
     for requested_fxx in FORECAST_HOURS:
         actual_nbm_fxx = requested_fxx + NBM_LEAD_TIME_OFFSET_HOURS
         print(f"\n--- F{requested_fxx:02d} (NBM {nbm_cycle_date:%H}Z F{actual_nbm_fxx:03d}) ---")
+        # The cache holds all four grids separately (not their combined max),
+        # so the web app can re-run threshold/merge/area-filter/cause
+        # attribution with different forecaster-chosen parameters without
+        # re-fetching from NBM. Written BEFORE polygonizing: the published
+        # snapshot is cut from what was read back (see generate_one_snapshot).
+        cache_filename = f"ifr_f{requested_fxx:02d}_grid.npz"
         try:
-            fc, ceil_grid, vis3_grid, vis1_grid, precip_grid, grid_spec = generate_one_snapshot(
-                nbm_cycle_date, gairmet_cycle_date, requested_fxx
-            )
+            fc = generate_one_snapshot(nbm_cycle_date, gairmet_cycle_date, requested_fxx, OUTPUT_DIR / cache_filename)
         except Exception:
             print(f"  FAILED for F{requested_fxx:02d}, skipping this snapshot. Traceback:")
             traceback.print_exc()
@@ -155,16 +153,6 @@ def main():
         with open(OUTPUT_DIR / filename, "w") as f:
             json.dump(fc, f, indent=2)
 
-        # Cache BOTH grids (not just their combined max) -- lets the web
-        # app re-run just the threshold/merge/area-filter/smoothing/
-        # cause-attribution steps with different forecaster-chosen
-        # parameters, without re-fetching from NBM.
-        cache_filename = f"ifr_f{requested_fxx:02d}_grid.npz"
-        save_grid_cache(
-            OUTPUT_DIR / cache_filename,
-            {"ceiling": ceil_grid, "visibility_3sm": vis3_grid, "visibility_1sm": vis1_grid, "precipitation": precip_grid},
-            grid_spec,
-        )
 
         valid_time = gairmet_cycle_date + timedelta(hours=requested_fxx)
         manifest["snapshots"].append({

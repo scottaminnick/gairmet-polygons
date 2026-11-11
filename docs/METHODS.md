@@ -29,6 +29,24 @@ The three forecaster-adjustable parameters — `threshold_pct`,
 `neighborhood_radius_nm`, `min_area_sq_mi` — are all applied in the cheap
 phase, which is what makes them adjustable at all.
 
+**What is published is polygonized from the cache, read back.** The cache
+stores probabilities rounded to whole percent, and the web app recomputes
+from it. The drivers used to polygonize the full-precision grids and write
+the cache afterwards, so a revisited hour (which the viewer recomputes)
+redrew a different map at the same settings: a cell between 49.5% and 50%
+flips at a 50% threshold, and for MTN OBSC a cell at 50.4% reads back as
+exactly 50%, which a contour at 50 does not enclose. Measured on
+2026-11-10 15Z by re-running the pipeline on the original NBM data: IFR F00
+from full precision reproduced the published file (3 polygons); the same
+grids read back from the cache gave 10, the viewer's revisit, and every
+hour's large IFR polygons differed by 1–2% in area. MTN OBSC kept its
+counts but differed by up to ~0.5%. `cache_and_polygonize_ifr()` and
+`cache_and_polygonize_mtn_obsc()` now write the cache, read it back and
+polygonize that, as TANGO's `cache_and_polygonize()` does (§4A), and
+`tests/test_publish_equals_recompute.py` checks the published snapshot
+against the real recompute route at every hour. The cost is the rounding
+itself: a published snapshot now carries the cache's 0.5-point resolution.
+
 ---
 
 ## 2. IFR
