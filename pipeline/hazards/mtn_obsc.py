@@ -225,6 +225,7 @@ from pipeline.polygons import (
     cell_dimensions_km,
     close_mask,
     fill_enclosed_gaps,
+    drop_split_fragments,
     filter_polygons_by_area,
     grid_to_polygons,
     load_grid_cache,
@@ -929,7 +930,11 @@ def polygonize_mtn_obsc_grid(
         smooth_polygon_boundary(p, smoothing_deg=BOUNDARY_SMOOTHING_DEG, join_style=2) for p in polygons
     ]
     polygons = [p.simplify(FINAL_SIMPLIFY_TOLERANCE_DEG, preserve_topology=True) for p in polygons]
-    polygons = [p for p in polygons if not p.is_empty]
+    # MIN AREA judged the whole polygons above, on the fine-grid contour.
+    # Boundary smoothing can then split one into a MultiPolygon; drop
+    # the small parts it split off (the largest part always stays). See
+    # pipeline.polygons.drop_split_fragments.
+    polygons, _sources = drop_split_fragments(polygons, min_area_sq_mi)
 
     all_per_polygon_properties = []
     for p in polygons:

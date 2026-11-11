@@ -67,6 +67,7 @@ import numpy as np
 from scipy.ndimage import distance_transform_edt
 from scipy.ndimage import label as ndimage_label
 from scipy.ndimage import sum_labels as ndimage_sum_labels
+from shapely.geometry import MultiPolygon
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry import mapping as shapely_mapping
 from shapely.ops import transform as shapely_transform
@@ -489,6 +490,63 @@ def geodesic_area_sq_mi(polygon) -> float:
 def filter_polygons_by_area(polygons: list, min_area_sq_mi: float) -> list:
     """Drops polygons smaller than min_area_sq_mi, using true geodesic area."""
     return [p for p in polygons if geodesic_area_sq_mi(p) >= min_area_sq_mi]
+
+
+def drop_split_fragments(polygons: list, min_area_sq_mi: float, groups: list | None = None) -> tuple[list, list[int]]:
+    """
+    MIN AREA judges a WHOLE area once, at the fine-grid stage, before
+    coarsening and simplification. This runs afterwards and removes only
+    what a later step SPLIT OFF: in every set of pieces that came from
+    one area, the largest piece always stays (it IS the area, however
+    much the coarse trace or simplification shaved it), and any other
+    piece below min_area_sq_mi goes.
+
+    A "set of pieces" is the parts of one MultiPolygon (MTN OBSC and
+    TANGO: boundary smoothing split it), or, with `groups`, every part
+    of every geometry that shares a group key (IFR v2: the fine-grid
+    region each coarse piece came from, so pieces the 0.1-degree
+    coarsening pinched apart are judged together).
+
+    Measured, the pieces this removes: IFR 17-339 sq mi slivers pinched
+    off a 197,800 sq mi region (2026-11-10 09Z F00), and 17-58 sq mi
+    MultiPolygon parts in MTN OBSC and LLWS. What it deliberately does
+    NOT remove: a whole area whose emitted shape came out a few percent
+    under the minimum -- the 3,128 sq mi IFR area of 2026-11-11 09Z F00
+    is emitted at 2,923 and is drawn.
+
+    A MultiPolygon keeps its type unless one part is left (then a plain
+    Polygon). Returns the kept geometries and, for each, the index of the
+    input it came from, so callers can keep per-polygon properties
+    aligned.
+    """
+    def parts_of(geometry):
+        return list(geometry.geoms) if geometry.geom_type == "MultiPolygon" else [geometry]
+
+    keys = groups if groups is not None else list(range(len(polygons)))
+    pieces = {}  # group key -> [(area, input index, part index)]
+    for index, geometry in enumerate(polygons):
+        if geometry.is_empty:
+            continue
+        for part_index, part in enumerate(parts_of(geometry)):
+            pieces.setdefault(keys[index], []).append((geodesic_area_sq_mi(part), index, part_index))
+
+    keep = set()
+    for members in pieces.values():
+        largest = max(members)
+        for area, index, part_index in members:
+            if area >= min_area_sq_mi or (area, index, part_index) == largest:
+                keep.add((index, part_index))
+
+    kept, sources = [], []
+    for index, geometry in enumerate(polygons):
+        if geometry.is_empty:
+            continue
+        parts = [part for part_index, part in enumerate(parts_of(geometry)) if (index, part_index) in keep]
+        if not parts:
+            continue
+        kept.append(parts[0] if len(parts) == 1 else MultiPolygon(parts))
+        sources.append(index)
+    return kept, sources
 
 
 def merge_nearby_polygons(polygons: list, radius_nm: float) -> list:

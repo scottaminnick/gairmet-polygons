@@ -49,7 +49,7 @@ from pipeline.hazards.ifr import (
     polygonize_ifr_grid,
     polygonize_ifr_grid_v2,
 )
-from pipeline.polygons import GridSpec, load_grid_cache, save_grid_cache
+from pipeline.polygons import GridSpec, geodesic_area_sq_mi, load_grid_cache, save_grid_cache
 from pipeline.smoothing import gaussian_smooth
 
 VALID_DATE = datetime(2026, 7, 14, 15)
@@ -291,14 +291,18 @@ def test_dominant_class_collapses_the_component_into_one_area():
 def test_area_filter_keeps_a_component_whose_sub_regions_are_each_too_small():
     """
     Three bands (CIG 40%, BR 33%, PCPN 27%) in one component: no class
-    is dominant and none is below the inclusion floor, so all three
-    survive as separate regions. Each band on its own is below
-    min_area_sq_mi; together they are well over it.
+    is dominant and none is below the inclusion floor. Each band on its
+    own is below min_area_sq_mi; together they are well over it.
 
-    v1's failure mode was exactly this: the area filter ran per polygon,
-    so a sub-area that failed it left a hole in the middle of a larger
-    area. Here the filter has already been applied to the whole
-    component, so either all three are drawn or none is.
+    v1's failure mode was a hole: the area filter ran per polygon, so a
+    sub-area that failed it left a gap in the middle of a larger area.
+    Here the filter is applied to the whole component, so the area is
+    drawn whole.
+
+    UPDATED ON PURPOSE (MIN AREA judges whole areas): this used to expect
+    three separate polygons, each below the minimum. Now sub-regions
+    below MIN AREA are absorbed, so the component is ONE polygon whose
+    label is measured over all three bands.
     """
     ceiling, vis3, vis1, precip = _blank_grids()
     ceiling[90:110, 60:84] = 80.0                       # CIG band, 24 cols
@@ -311,10 +315,14 @@ def test_area_filter_keeps_a_component_whose_sub_regions_are_each_too_small():
 
     fc = _polygonize((ceiling, vis3, vis1, precip), neighborhood_radius_nm=0.0, min_area_sq_mi=5000.0)
 
-    causes = sorted(cause for cause, _weather in _labels(fc))
-    assert causes == ["CIG", "VIS", "VIS"], (
-        f"expected all three sub-regions of the surviving component, got {_labels(fc)}"
+    assert _labels(fc) == [("CIG/VIS", "PCPN/BR")], (
+        f"expected the component drawn whole with all three bands in its label, got {_labels(fc)}"
     )
+    (geometry,) = _geometries(fc)
+    for col in (72, 94, 112):  # the middle of each band
+        centre = shapely.Point(RULES_SPEC.west + col * RULES_SPEC.dx, RULES_SPEC.north + 100 * RULES_SPEC.dy)
+        assert geometry.contains(centre), f"band at column {col} is not covered"
+    assert geodesic_area_sq_mi(geometry) >= 5000.0
 
     # The speck (~900 sq mi) is far below the 5,000 sq mi filter.
     speck = shapely.Point(RULES_SPEC.west + 255 * RULES_SPEC.dx, RULES_SPEC.north + 25 * RULES_SPEC.dy)

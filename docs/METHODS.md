@@ -47,6 +47,40 @@ polygonize that, as TANGO's `cache_and_polygonize()` does (§4A), and
 against the real recompute route at every hour. The cost is the rounding
 itself: a published snapshot now carries the cache's 0.5-point resolution.
 
+**MIN AREA judges whole areas; splitting must not add fragments.** MIN AREA
+is applied once, to whole areas at the fine-grid stage, before coarsening and
+simplification (IFR: whole components, then class regions, §2.2 steps 3–4;
+MTN OBSC and TANGO: the fine-grid contours, before boundary smoothing). Every
+layer then runs steps that can split a polygon, and those pieces used to be
+published:
+
+| Layer | Step that splits | Measured |
+|---|---|---|
+| IFR v2 | class partition (§2.2 step 4): a passing component split into sub-minimum regions | 2026-11-11 09Z F00: 3,128 sq mi → 1,538 + 1,589, published as 1,455 and 1,275 |
+| IFR v2 | 0.1° majority reduce erases a neck narrower than one coarse cell; the relabel splits the region | 2026-11-10 09Z F00 (cache path): one 197,800 sq mi region → 9 pieces, 7 of them 17–339 sq mi |
+| MTN OBSC, TANGO | boundary smoothing splits a polygon into a MultiPolygon | 2026-11-10 15Z F00: 17 sq mi part (MTN OBSC), 22 sq mi part (LLWS); 2026-11-11 09Z F09: 58 sq mi part (MTN OBSC) |
+
+Two changes close that. IFR v2 absorbs a class sub-region below the minimum
+into its neighbour (§2.2 step 4), so a component that passed is drawn as one
+polygon. And each polygonizer ends with `drop_split_fragments()`
+(`pipeline/polygons.py`): of the pieces that came from one area — the parts
+of one MultiPolygon, or in IFR v2 every piece of one fine-grid region — the
+largest always stays and any other below `min_area_sq_mi` goes.
+
+**What it deliberately leaves alone:** a whole area whose emitted shape came
+out under the line. The coarse trace and simplification shave a few percent
+off a small area — the 3,128 sq mi IFR area above is emitted at 2,923 — and
+that area is still drawn, because it was judged whole, before those steps.
+Likewise the 274 sq mi LLWS F03 polygon (2026-11-11 09Z) under a 300 minimum:
+a whole polygon that passed before simplification, so it stays.
+
+On the current cycle's caches (2026-11-11 09Z, all hours) the change removes
+one 58 sq mi MTN OBSC part (F09) and nothing else; on the full-precision IFR
+F00 grids it turns the 1,455 + 1,275 pair into one 2,923 sq mi polygon.
+`tests/test_min_area_final.py` checks every layer: no split fragment below
+the minimum, and a whole area that passed stays drawn however much its
+emitted shape shrank.
+
 ---
 
 ## 2. IFR
@@ -98,10 +132,15 @@ decision moves into raster space and the output is contoured once:
 4. **Absorption within each component.** Either one class covers at least
    `DOMINANT_FRACTION` (0.50) and the component is drawn whole, or it
    splits into class sub-regions which then absorb anything below
-   `INCLUDE_FRACTION` (0.25) into its largest-perimeter-sharing neighbour,
-   and anything enclosed by another region regardless of size.
+   `INCLUDE_FRACTION` (0.25) or below `min_area_sq_mi` into its
+   largest-perimeter-sharing neighbour, and anything enclosed by another
+   region regardless of size.
 5. **One contour per region**, traced from a copy of the region grid
    coarsened to `CONTOUR_RESOLUTION_DEG` (0.1°, ≈6 nm).
+6. **Shared-arc simplification**, then **split fragments dropped**:
+   coarsening can pinch a small piece off a region; of each region's pieces
+   the largest stays and any other below the minimum goes (§1, "MIN AREA
+   judges whole areas").
 
 **Why enclosure absorption is mandatory, not cosmetic:** a G-AIRMET GFA
 element is a simple ring and cannot carry a hole. A region wrapping another
@@ -680,7 +719,8 @@ on a cell boundary.
 4. raster closing at the neighborhood radius, gate re-applied, then fill
    enclosed gaps smaller than the minimum area
 5. contour the real-valued layer at 0.5, filter by area, smooth the boundary
-   (0.02°), simplify (0.05°)
+   (0.02°), simplify (0.05°), then drop any part smoothing split off a
+   polygon that is below the minimum area — never the largest part (§1)
 6. per-polygon properties (`peak_speed_kt` from the *raw* grid,
    `area_sq_mi`, `category`, `phenomenon`)
 
