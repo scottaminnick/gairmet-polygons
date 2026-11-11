@@ -9,7 +9,7 @@ WHAT CHANGED, AND WHY THESE TESTS DID. The trigger left `schedule:`.
 GitHub delays scheduled runs by 95 minutes (measured 2026-09-07) to 4.5
 hours (2026-09-10), and the delay is growing; scheduled events are the
 lowest-priority trigger on the platform. `workflow_dispatch` is not
-queued that way, so a Railway cron service POSTs one at +0:45 and the
+queued that way, so a Railway cron service POSTs one at +1:20 and the
 `schedule:` entry survives only as a single +3:37 backstop for the case
 where that dispatch did not happen.
 
@@ -125,19 +125,22 @@ def test_the_whole_backstop_window_stays_inside_its_own_synoptic_slot():
 
 # --- the Railway dispatch -------------------------------------------------
 
-def test_the_dispatch_fires_before_nbm_is_due_with_room_to_wait():
+def test_the_dispatch_is_timed_to_nbm_arrival_with_room_to_wait():
     """
-    The forecaster reports NBM 21Z lands 2215-2230Z (+1:15 to +1:30).
-    Dispatching at +0:45 puts the job in place ~45 minutes early, and the
-    60-minute window carries it to +1:45 -- past the late end of the
-    observed range, with margin.
+    Deliberately +1:20, at NBM's arrival rather than ahead of it: the
+    forecaster reports NBM 21Z lands 2215-2230Z (+1:15 to +1:30), so the
+    job usually finds its cycle on the first probe. The 60-minute window
+    carries a late cycle to +2:20. The latest arrival actually watched
+    (2026-10-28 09Z, over 118 runs to 2026-11-11) was +1:52.
     """
-    assert DISPATCH_OFFSET_MINUTES == 45
+    assert DISPATCH_OFFSET_MINUTES == 80
     assert POLL_WINDOW_MINUTES == 60
-    latest_observed_nbm = 90  # +1:30
-    assert DISPATCH_OFFSET_MINUTES < latest_observed_nbm < (
-        DISPATCH_OFFSET_MINUTES + POLL_WINDOW_MINUTES
-    ), "the poll window no longer straddles NBM's observed arrival range"
+    latest_reported_nbm = 90   # +1:30, the forecaster's late end
+    latest_measured_nbm = 112  # +1:52, the latest a poll watched land
+    window_closes = DISPATCH_OFFSET_MINUTES + POLL_WINDOW_MINUTES
+    assert latest_reported_nbm < window_closes and latest_measured_nbm < window_closes, (
+        "the poll window closes before NBM's observed arrival range ends"
+    )
 
 
 def test_the_railway_config_matches_the_schedule():
@@ -149,7 +152,7 @@ def test_the_railway_config_matches_the_schedule():
     """
     config = json.loads((REPO_ROOT / "railway.dispatch.json").read_text())
     assert config["deploy"]["cronSchedule"] == dispatch_cron_entry()
-    assert dispatch_cron_entry() == "45 3,9,15,21 * * *"
+    assert dispatch_cron_entry() == "20 4,10,16,22 * * *"
 
 
 def test_the_railway_service_runs_the_dispatcher_and_does_not_restart_it():
@@ -400,11 +403,11 @@ def test_the_probe_hour_matches_the_smallest_hour_any_hazard_needs():
 # --- which cycle is a run working on --------------------------------------
 
 @pytest.mark.parametrize("now,target_hour,target_day", [
-    ("2026-09-04T03:45", 3, 4),    # the Railway dispatch
-    ("2026-09-04T04:45", 3, 4),    # its poll window closing
+    ("2026-09-04T04:20", 3, 4),    # the Railway dispatch
+    ("2026-09-04T05:20", 3, 4),    # its poll window closing
     ("2026-09-04T06:37", 3, 4),    # the backstop
     ("2026-09-04T07:37", 3, 4),    # the backstop's own window closing
-    ("2026-09-04T21:45", 21, 4),
+    ("2026-09-04T22:20", 21, 4),
     ("2026-09-05T00:37", 21, 4),   # the 21Z backstop, after midnight
     ("2026-09-05T01:37", 21, 4),
 ])
@@ -423,9 +426,9 @@ def test_the_poll_window_is_measured_from_job_start_not_the_synoptic_hour():
     wait after ASKING, and the backstop gets the same 60 minutes from its
     own later start.
     """
-    dispatch = datetime(2026, 9, 4, 3, 45)
+    dispatch = datetime(2026, 9, 4, 4, 20)
     backstop = datetime(2026, 9, 4, 6, 37)
-    assert poll_deadline(dispatch) == datetime(2026, 9, 4, 4, 45)
+    assert poll_deadline(dispatch) == datetime(2026, 9, 4, 5, 20)
     assert poll_deadline(backstop) == datetime(2026, 9, 4, 7, 37)
 
 
@@ -435,7 +438,7 @@ def test_a_late_dispatch_still_measures_its_own_lateness():
     the dispatch itself is ever late, this has to stay correct rather
     than silently reading as on-time.
     """
-    when = datetime(2026, 9, 4, 4, 20)  # 35 minutes after the +0:45 dispatch
+    when = datetime(2026, 9, 4, 4, 55)  # 35 minutes after the +1:20 dispatch
     assert target_nbm_cycle(when).hour == 3
     assert when - scheduled_start(when, "railway-cron") == timedelta(minutes=35)
 
@@ -455,8 +458,8 @@ def test_the_line_records_which_trigger_started_the_run(capsys):
     safety net.
     """
     target = datetime(2026, 9, 4, 3, 0)
-    log_nbm_arrival(target, "ifr", "railway-cron", datetime(2026, 9, 4, 3, 45),
-                    now=datetime(2026, 9, 4, 4, 20), polled=True)
+    log_nbm_arrival(target, "ifr", "railway-cron", datetime(2026, 9, 4, 4, 20),
+                    now=datetime(2026, 9, 4, 4, 55), polled=True)
     fields = _arrival(capsys)
     assert fields["trigger"] == "railway-cron"
     assert "attempt" not in fields
@@ -470,12 +473,12 @@ def test_a_prompt_dispatch_shows_a_near_zero_start_delay(capsys):
     we find out whether the move worked.
     """
     target = datetime(2026, 9, 4, 3, 0)
-    log_nbm_arrival(target, "ifr", "railway-cron", datetime(2026, 9, 4, 3, 46),
-                    now=datetime(2026, 9, 4, 4, 18), polled=True)
+    log_nbm_arrival(target, "ifr", "railway-cron", datetime(2026, 9, 4, 4, 21),
+                    now=datetime(2026, 9, 4, 4, 53), polled=True)
     fields = _arrival(capsys)
     assert fields["start_delay_min"] == "1"
     assert fields["poll_wait_min"] == "32", "how long we then waited for NBM"
-    assert fields["arrival_min"] == "78", "when the cycle appeared, from its synoptic hour"
+    assert fields["arrival_min"] == "113", "when the cycle appeared, from its synoptic hour"
     assert fields["arrival_measured"] == "yes", "the poll watched this one land"
 
 
@@ -514,8 +517,8 @@ def test_a_cycle_already_there_on_the_first_probe_is_an_upper_bound_only(capsys)
 
 def test_a_cycle_that_never_posted_reports_no_arrival_rather_than_a_number(capsys):
     target = datetime(2026, 9, 4, 3, 0)
-    log_nbm_arrival(target, "ifr", "railway-cron", datetime(2026, 9, 4, 3, 45),
-                    now=datetime(2026, 9, 4, 4, 45), posted=False, polled=True)
+    log_nbm_arrival(target, "ifr", "railway-cron", datetime(2026, 9, 4, 4, 20),
+                    now=datetime(2026, 9, 4, 5, 20), posted=False, polled=True)
     fields = _arrival(capsys)
     assert fields["posted"] == "no"
     assert fields["arrival_min"] == "-"
@@ -528,7 +531,7 @@ def test_the_line_stays_greppable_and_flat(capsys):
     log, not a log pipeline this project does not have.
     """
     log_nbm_arrival(datetime(2026, 9, 4, 3, 0), "ifr", "railway-cron",
-                    datetime(2026, 9, 4, 3, 45), now=datetime(2026, 9, 4, 4, 0))
+                    datetime(2026, 9, 4, 4, 20), now=datetime(2026, 9, 4, 4, 35))
     line = [l for l in capsys.readouterr().out.splitlines() if l.startswith("NBM-ARRIVAL ")][-1]
     for pair in line.split()[1:]:
         assert pair.count("=") >= 1 and not pair.startswith("=")
@@ -545,7 +548,7 @@ def test_the_viewer_uses_the_same_numbers_as_the_scheduler():
 
     window = re.search(r"const PUBLISH_WINDOW_CLOSE_MINUTES = (\d+)", js)
     assert window, "map.js still uses the old publish-grace constant"
-    assert int(window.group(1)) == PUBLISH_WINDOW_CLOSE_MINUTES == 150, (
+    assert int(window.group(1)) == PUBLISH_WINDOW_CLOSE_MINUTES == 185, (
         "the viewer is anchored to a publish window that is not the one the pipeline "
         "actually follows"
     )
@@ -563,10 +566,10 @@ def test_the_viewer_no_longer_compares_the_cycle_to_the_wall_clock():
 
 def test_the_expected_window_follows_the_normal_path_not_the_backstop():
     """
-    Deliberate: +0:45 dispatch, +60 poll, +45 work. Waiting for the
-    +3:37 backstop's own completion (~+4:22) before saying anything would
-    hide a real failure for nearly two hours to avoid one honest warning.
-    Past +2:30 the package IS late; the backstop is recovery, not runway.
+    Deliberate: +1:20 dispatch, +60 poll, +45 work. Waiting for the
+    +3:37 backstop's own completion (~+5:22) before saying anything would
+    hide a real failure for over two hours to avoid one honest warning.
+    Past +3:05 the package IS late; the backstop is recovery, not runway.
     """
     assert PUBLISH_WINDOW_CLOSE_MINUTES == (
         DISPATCH_OFFSET_MINUTES + POLL_WINDOW_MINUTES + max(WORK_ALLOWANCE_MINUTES.values())
@@ -577,23 +580,25 @@ def test_the_expected_window_follows_the_normal_path_not_the_backstop():
 # --- the staleness expectation, on a frozen clock -------------------------
 #     expected_gairmet_cycle() is the Python mirror of map.js's
 #     expectedGairmetCycle(). These are the cases that move when the
-#     publish window moves, which is what just happened: the window closed
-#     at +3:30 under the old poll-job design and closes at +2:30 now.
+#     publish window moves. It closed at +3:30 under the old poll-job
+#     design, at +2:30 while the dispatch was documented as +0:45, and at
+#     +3:05 now that it says +1:20, the minute Railway actually fires.
 
 @pytest.mark.parametrize("now,expected", [
-    # Just before the 03Z cycle's window closes (+2:30 = 05:30Z): the
+    # Just before the 03Z cycle's window closes (+3:05 = 06:05Z): the
     # newest package that SHOULD be out is still the one from 21Z the
     # previous day.
-    ("2026-09-04T05:29", "2026-09-04T03:00"),
+    ("2026-09-04T06:04", "2026-09-04T03:00"),
     # The moment it closes, the 03Z package becomes expected.
-    ("2026-09-04T05:30", "2026-09-04T09:00"),
+    ("2026-09-04T06:05", "2026-09-04T09:00"),
     # The old +3:30 anchor would still have been waiting here. Under the
     # dispatch path the package is genuinely late by now.
-    ("2026-09-04T06:00", "2026-09-04T09:00"),
-    # Midnight rollover: at 23:29Z the 21Z cycle's window is still open,
-    # so the expectation is still the package built from 15Z.
-    ("2026-09-04T23:29", "2026-09-04T21:00"),
-    ("2026-09-04T23:30", "2026-09-05T03:00"),
+    ("2026-09-04T06:20", "2026-09-04T09:00"),
+    # Midnight rollover: the 21Z cycle's window closes at 00:05Z the next
+    # day, so until then the expectation is still the package from 15Z.
+    ("2026-09-04T23:30", "2026-09-04T21:00"),
+    ("2026-09-05T00:04", "2026-09-04T21:00"),
+    ("2026-09-05T00:05", "2026-09-05T03:00"),
     # And just after midnight, still the 21Z cycle's package.
     ("2026-09-05T00:15", "2026-09-05T03:00"),
     # Deep inside a quiet stretch -- nothing due, the last closed window
@@ -635,8 +640,8 @@ def test_the_expectation_never_lags_the_clock_by_a_whole_cycle():
     anything, which is not a staleness check.
 
     The bounds are not symmetric, and that is correct rather than
-    surprising. With a +6h lead and a +2:30 window, the expected package
-    sits anywhere from 2h30m behind the wall clock to 3h30m ahead of it.
+    surprising. With a +6h lead and a +3:05 window, the expected package
+    sits anywhere from 3h05m behind the wall clock to 2h55m ahead of it.
     """
     when = datetime(2026, 9, 4, 0, 0)
     lead = timedelta(hours=NBM_LEAD_TIME_OFFSET_HOURS)

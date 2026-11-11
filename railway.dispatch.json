@@ -5,7 +5,7 @@
   },
   "deploy": {
     "startCommand": "python3 scripts/dispatch_workflows.py",
-    "cronSchedule": "45 3,9,15,21 * * *",
+    "cronSchedule": "20 4,10,16,22 * * *",
     "restartPolicyType": "NEVER"
   }
 }
