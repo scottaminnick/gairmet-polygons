@@ -148,6 +148,7 @@ from pipeline.polygons import (
     cell_areas_sq_mi,
     cell_dimensions_km,
     close_mask,
+    enforce_min_area_on_output,
     filter_polygons_by_area,
     grid_to_polygons,
     lonlat_ring_to_pixel_rowcol,
@@ -654,7 +655,9 @@ def polygonize_ifr_grid(
             for p in polygons
         ]
         polygons = [p.simplify(FINAL_SIMPLIFY_TOLERANCE_DEG, preserve_topology=True) for p in polygons]
-        polygons = [p for p in polygons if not p.is_empty]
+        # MIN AREA on what is emitted -- smoothing and simplification run
+        # after the filter above. See enforce_min_area_on_output().
+        polygons, _sources = enforce_min_area_on_output(polygons, min_area_sq_mi)
 
         # Attribution computed on the FINAL polygon shapes (after all
         # smoothing/simplification), so it matches exactly what's being
@@ -806,7 +809,7 @@ def _absorb_holes(region_ids: np.ndarray, target_id: int, region_mask: np.ndarra
 
 
 def _absorb_within_component(
-    region_ids: np.ndarray, comp_mask: np.ndarray, cell_areas: np.ndarray
+    region_ids: np.ndarray, comp_mask: np.ndarray, cell_areas: np.ndarray, min_area_sq_mi: float = 0.0
 ) -> None:
     """
     Absorbs sub-regions inside one component, in place, until stable:
@@ -815,7 +818,14 @@ def _absorb_within_component(
         see _absorb_holes() for why this one is mandatory;
       - any sub-region covering less than INCLUDE_FRACTION of the
         component, into whichever neighbour it shares the most boundary
-        with.
+        with;
+      - likewise any sub-region below min_area_sq_mi. The component as a
+        whole passed MIN AREA, so splitting it must not produce pieces
+        that would fail it: measured on the 2026-11-11 09Z F00 cycle, a
+        3,128 sq mi component split by class into 1,538 + 1,589, both
+        clearing INCLUDE_FRACTION, and both were published under a
+        3,000 sq mi minimum. Absorbing keeps that area drawn, as one
+        polygon, instead of losing it to the final filter.
 
     Enclosure runs first each pass: absorbing an enclosed region can
     push its host over the inclusion floor, whereas the reverse ordering
@@ -845,7 +855,10 @@ def _absorb_within_component(
             continue
 
         smallest = min(ids, key=lambda rid: region_areas[rid])
-        if region_areas[smallest] / component_area >= INCLUDE_FRACTION:
+        if (
+            region_areas[smallest] / component_area >= INCLUDE_FRACTION
+            and region_areas[smallest] >= min_area_sq_mi
+        ):
             return
 
         neighbour = _largest_shared_boundary_neighbour(region_ids, masks[smallest], comp_mask)
@@ -878,6 +891,7 @@ def _partition_component(
     cell_areas: np.ndarray,
     region_ids: np.ndarray,
     next_region_id: int,
+    min_area_sq_mi: float = 0.0,
 ) -> int:
     """
     Turns one connected component into one or more regions, writing
@@ -919,7 +933,7 @@ def _partition_component(
             region_ids[blobs == blob_id] = next_region_id
             next_region_id += 1
 
-    _absorb_within_component(region_ids, comp_mask, cell_areas)
+    _absorb_within_component(region_ids, comp_mask, cell_areas, min_area_sq_mi)
     return next_region_id
 
 
@@ -1271,6 +1285,9 @@ def polygonize_ifr_grid_v2(
          ring that contains them, so the staircase goes away and the
          shared edges stay shared. Validated, with the tolerance backed
          off on any failure.
+      7. MIN AREA on the emitted polygons -- step 3 filtered fine-grid
+         components, but steps 5-6 can still pinch a piece off a region
+         or shave one below the line; see enforce_min_area_on_output.
 
     Parameters are identical to polygonize_ifr_grid()'s -- see there.
     """
@@ -1333,6 +1350,7 @@ def polygonize_ifr_grid_v2(
             cell_areas[window[0]],
             region_ids[window],
             next_region_id,
+            min_area_sq_mi,
         )
 
     # --- contour once, from a coarsened copy ---
@@ -1405,6 +1423,18 @@ def polygonize_ifr_grid_v2(
             per_polygon_properties.append(dict(properties))
 
     polygons = _simplify_regions(polygons, ARC_SIMPLIFY_TOLERANCE_DEG)
+
+    # 7. MIN AREA on what is emitted. Step 3 filtered whole fine-grid
+    # components, but steps 5-6 can still leave a piece below it: the
+    # 0.1-degree majority reduce erases a neck narrower than one coarse
+    # cell, and the relabel then makes each side its own region
+    # (measured on 2026-11-10 09Z F00: a 197,800 sq mi region came out as
+    # 9 pieces, 7 of them 17-339 sq mi); the AOR trim and arc
+    # simplification can also shave a piece below the line. Dropping a
+    # whole region polygon leaves its neighbours untouched, so the
+    # no-overlap / no-hole guarantee still holds.
+    polygons, sources = enforce_min_area_on_output(polygons, min_area_sq_mi)
+    per_polygon_properties = [per_polygon_properties[i] for i in sources]
 
     return _ifr_feature_collection(
         polygons, per_polygon_properties, date, fxx,

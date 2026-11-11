@@ -67,6 +67,7 @@ import numpy as np
 from scipy.ndimage import distance_transform_edt
 from scipy.ndimage import label as ndimage_label
 from scipy.ndimage import sum_labels as ndimage_sum_labels
+from shapely.geometry import MultiPolygon
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry import mapping as shapely_mapping
 from shapely.ops import transform as shapely_transform
@@ -489,6 +490,46 @@ def geodesic_area_sq_mi(polygon) -> float:
 def filter_polygons_by_area(polygons: list, min_area_sq_mi: float) -> list:
     """Drops polygons smaller than min_area_sq_mi, using true geodesic area."""
     return [p for p in polygons if geodesic_area_sq_mi(p) >= min_area_sq_mi]
+
+
+def enforce_min_area_on_output(polygons: list, min_area_sq_mi: float) -> tuple[list, list[int]]:
+    """
+    MIN AREA, applied to what is actually emitted: every hazard runs this
+    LAST, after every step that can shrink or split a polygon, so no
+    output polygon (and no part of an output MultiPolygon) is below the
+    minimum.
+
+    The earlier filter_polygons_by_area() call in each hazard runs
+    BEFORE smoothing and simplification, and in IFR v2 before the class
+    partition and the 0.1-degree coarsening, so measured on real cycles
+    it let through:
+      - IFR: class sub-regions of a component that passed as a whole
+        (1,538 and 1,589 sq mi out of 3,128), and pieces the coarsening
+        pinched off a large region (17-407 sq mi);
+      - MTN OBSC and TANGO: parts that boundary smoothing split off a
+        polygon (17 and 22 sq mi), and polygons that simplification
+        shrank below the line (310 -> 274 sq mi).
+
+    A MultiPolygon keeps its type: only its sub-minimum parts go (it
+    becomes a plain Polygon when one part is left, and is dropped when
+    none are). Returns the kept geometries and, for each, the index of
+    the input it came from, so a caller can keep per-polygon properties
+    aligned.
+    """
+    kept, sources = [], []
+    for index, geometry in enumerate(polygons):
+        if geometry.is_empty:
+            continue
+        if geometry.geom_type == "MultiPolygon":
+            parts = [p for p in geometry.geoms if geodesic_area_sq_mi(p) >= min_area_sq_mi]
+            if not parts:
+                continue
+            geometry = parts[0] if len(parts) == 1 else MultiPolygon(parts)
+        elif geodesic_area_sq_mi(geometry) < min_area_sq_mi:
+            continue
+        kept.append(geometry)
+        sources.append(index)
+    return kept, sources
 
 
 def merge_nearby_polygons(polygons: list, radius_nm: float) -> list:

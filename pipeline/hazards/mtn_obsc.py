@@ -225,6 +225,7 @@ from pipeline.polygons import (
     cell_dimensions_km,
     close_mask,
     fill_enclosed_gaps,
+    enforce_min_area_on_output,
     filter_polygons_by_area,
     grid_to_polygons,
     load_grid_cache,
@@ -929,7 +930,10 @@ def polygonize_mtn_obsc_grid(
         smooth_polygon_boundary(p, smoothing_deg=BOUNDARY_SMOOTHING_DEG, join_style=2) for p in polygons
     ]
     polygons = [p.simplify(FINAL_SIMPLIFY_TOLERANCE_DEG, preserve_topology=True) for p in polygons]
-    polygons = [p for p in polygons if not p.is_empty]
+    # MIN AREA on what is emitted. The filter above runs BEFORE smoothing
+    # and simplification, either of which can split a polygon or shrink
+    # it below the line. See pipeline.polygons.enforce_min_area_on_output.
+    polygons, _sources = enforce_min_area_on_output(polygons, min_area_sq_mi)
 
     all_per_polygon_properties = []
     for p in polygons:
