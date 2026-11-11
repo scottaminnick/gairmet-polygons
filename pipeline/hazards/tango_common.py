@@ -64,7 +64,7 @@ from pipeline.polygons import (
     cell_dimensions_km,
     close_mask,
     fill_enclosed_gaps,
-    enforce_min_area_on_output,
+    drop_split_fragments,
     filter_polygons_by_area,
     geodesic_area_sq_mi,
     grid_to_polygons,
@@ -278,10 +278,11 @@ def polygonize_tango_grid(
         smooth_polygon_boundary(p, smoothing_deg=BOUNDARY_SMOOTHING_DEG, join_style=2) for p in polygons
     ]
     polygons = [p.simplify(FINAL_SIMPLIFY_TOLERANCE_DEG, preserve_topology=True) for p in polygons]
-    # MIN AREA on what is emitted. The filter above runs BEFORE smoothing
-    # and simplification, either of which can split a polygon or shrink
-    # it below the line. See pipeline.polygons.enforce_min_area_on_output.
-    polygons, _sources = enforce_min_area_on_output(polygons, min_area_sq_mi)
+    # MIN AREA judged the whole polygons above, on the fine-grid contour.
+    # Boundary smoothing can then split one into a MultiPolygon; drop
+    # the small parts it split off (the largest part always stays). See
+    # pipeline.polygons.drop_split_fragments.
+    polygons, _sources = drop_split_fragments(polygons, min_area_sq_mi)
 
     # 6. Per-polygon properties. The peak comes from the RAW grid, not
     # the smoothed mask, so it is a real speed.

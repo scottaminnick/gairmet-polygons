@@ -299,11 +299,10 @@ def test_area_filter_keeps_a_component_whose_sub_regions_are_each_too_small():
     Here the filter is applied to the whole component, so the area is
     drawn whole.
 
-    UPDATED ON PURPOSE (MIN AREA on final polygons): this used to expect
+    UPDATED ON PURPOSE (MIN AREA judges whole areas): this used to expect
     three separate polygons, each below the minimum. Now sub-regions
     below MIN AREA are absorbed, so the component is ONE polygon whose
-    label is measured over all three bands, and no emitted polygon is
-    below the minimum.
+    label is measured over all three bands.
     """
     ceiling, vis3, vis1, precip = _blank_grids()
     ceiling[90:110, 60:84] = 80.0                       # CIG band, 24 cols

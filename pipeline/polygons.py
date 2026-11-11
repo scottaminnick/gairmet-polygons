@@ -492,42 +492,59 @@ def filter_polygons_by_area(polygons: list, min_area_sq_mi: float) -> list:
     return [p for p in polygons if geodesic_area_sq_mi(p) >= min_area_sq_mi]
 
 
-def enforce_min_area_on_output(polygons: list, min_area_sq_mi: float) -> tuple[list, list[int]]:
+def drop_split_fragments(polygons: list, min_area_sq_mi: float, groups: list | None = None) -> tuple[list, list[int]]:
     """
-    MIN AREA, applied to what is actually emitted: every hazard runs this
-    LAST, after every step that can shrink or split a polygon, so no
-    output polygon (and no part of an output MultiPolygon) is below the
-    minimum.
+    MIN AREA judges a WHOLE area once, at the fine-grid stage, before
+    coarsening and simplification. This runs afterwards and removes only
+    what a later step SPLIT OFF: in every set of pieces that came from
+    one area, the largest piece always stays (it IS the area, however
+    much the coarse trace or simplification shaved it), and any other
+    piece below min_area_sq_mi goes.
 
-    The earlier filter_polygons_by_area() call in each hazard runs
-    BEFORE smoothing and simplification, and in IFR v2 before the class
-    partition and the 0.1-degree coarsening, so measured on real cycles
-    it let through:
-      - IFR: class sub-regions of a component that passed as a whole
-        (1,538 and 1,589 sq mi out of 3,128), and pieces the coarsening
-        pinched off a large region (17-407 sq mi);
-      - MTN OBSC and TANGO: parts that boundary smoothing split off a
-        polygon (17 and 22 sq mi), and polygons that simplification
-        shrank below the line (310 -> 274 sq mi).
+    A "set of pieces" is the parts of one MultiPolygon (MTN OBSC and
+    TANGO: boundary smoothing split it), or, with `groups`, every part
+    of every geometry that shares a group key (IFR v2: the fine-grid
+    region each coarse piece came from, so pieces the 0.1-degree
+    coarsening pinched apart are judged together).
 
-    A MultiPolygon keeps its type: only its sub-minimum parts go (it
-    becomes a plain Polygon when one part is left, and is dropped when
-    none are). Returns the kept geometries and, for each, the index of
-    the input it came from, so a caller can keep per-polygon properties
+    Measured, the pieces this removes: IFR 17-339 sq mi slivers pinched
+    off a 197,800 sq mi region (2026-11-10 09Z F00), and 17-58 sq mi
+    MultiPolygon parts in MTN OBSC and LLWS. What it deliberately does
+    NOT remove: a whole area whose emitted shape came out a few percent
+    under the minimum -- the 3,128 sq mi IFR area of 2026-11-11 09Z F00
+    is emitted at 2,923 and is drawn.
+
+    A MultiPolygon keeps its type unless one part is left (then a plain
+    Polygon). Returns the kept geometries and, for each, the index of the
+    input it came from, so callers can keep per-polygon properties
     aligned.
     """
+    def parts_of(geometry):
+        return list(geometry.geoms) if geometry.geom_type == "MultiPolygon" else [geometry]
+
+    keys = groups if groups is not None else list(range(len(polygons)))
+    pieces = {}  # group key -> [(area, input index, part index)]
+    for index, geometry in enumerate(polygons):
+        if geometry.is_empty:
+            continue
+        for part_index, part in enumerate(parts_of(geometry)):
+            pieces.setdefault(keys[index], []).append((geodesic_area_sq_mi(part), index, part_index))
+
+    keep = set()
+    for members in pieces.values():
+        largest = max(members)
+        for area, index, part_index in members:
+            if area >= min_area_sq_mi or (area, index, part_index) == largest:
+                keep.add((index, part_index))
+
     kept, sources = [], []
     for index, geometry in enumerate(polygons):
         if geometry.is_empty:
             continue
-        if geometry.geom_type == "MultiPolygon":
-            parts = [p for p in geometry.geoms if geodesic_area_sq_mi(p) >= min_area_sq_mi]
-            if not parts:
-                continue
-            geometry = parts[0] if len(parts) == 1 else MultiPolygon(parts)
-        elif geodesic_area_sq_mi(geometry) < min_area_sq_mi:
+        parts = [part for part_index, part in enumerate(parts_of(geometry)) if (index, part_index) in keep]
+        if not parts:
             continue
-        kept.append(geometry)
+        kept.append(parts[0] if len(parts) == 1 else MultiPolygon(parts))
         sources.append(index)
     return kept, sources
 
