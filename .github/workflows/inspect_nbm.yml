@@ -17,13 +17,16 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version-file: .python-version
 
       # Just `requests` now -- this script reads NBM's .idx text file
       # directly rather than going through herbie-data/cfgrib/eccodes,
       # which aren't needed just to inspect an index.
       - name: Install dependencies
-        run: pip install requests
+        run: pip install -c requirements.lock requests
+
+      - name: Check the install came from requirements.lock
+        run: python3 scripts/lock_requirements.py --check-installed
 
       - name: Run inspection script
         run: python3 pipeline/inspect_nbm.py

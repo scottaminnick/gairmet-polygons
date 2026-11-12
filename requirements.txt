@@ -22,6 +22,11 @@
 # scikit-image's find_contours() does the same job (see polygons.py's
 # module docstring) with zero system-library dependencies, and
 # benchmarked faster besides.
+# Exact versions come from requirements.lock (generated; never hand-edit it):
+# this line makes every `pip install -r` of this file install the locked
+# version of everything. To add a package, add its name here and run
+# `python3 scripts/lock_requirements.py`; to upgrade, see that script.
+-c requirements.lock
 fastapi
 pydantic        # webapp/main.py imports it directly (the PGEN request models).
                 # Installed transitively by fastapi today, but this repo has

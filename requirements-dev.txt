@@ -1,0 +1,7 @@
+# Test-only dependencies, installed by .github/workflows/tests.yml on top of
+# requirements.txt (the light web-app set). Human-edited input; the pinned
+# versions come from requirements.lock (see scripts/lock_requirements.py).
+-c requirements.lock
+pytest
+pyyaml          # tests/test_workflow_dependencies.py parses the workflow files; named
+                # rather than inherited from uvicorn[standard] -- see tests.yml
