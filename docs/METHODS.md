@@ -1471,10 +1471,11 @@ at 0 in case that stops being true.
 
 The schedule lives in `pipeline/publish_schedule.py` (stdlib-only, so the
 poller, the publish guard and the Railway dispatcher can all share it
-without the fetch stack). The backstop cron, the Railway cron in
-`railway.dispatch.json`, the job timeouts and the browser's staleness
-constants are all generated or derived from it;
-`tests/test_publish_schedule.py` fails if any of them drift.
+without the fetch stack). The backstop cron, the two Railway cron lines
+(service settings, tabled in `RAILWAY_DISPATCH.md`), the job timeouts and
+the browser's staleness constants are all generated or derived from it;
+`tests/test_publish_schedule.py` and `tests/test_railway_settings_doc.py`
+fail if any of them drift.
 
 The generate step is told which cycle to build via `NBM_SOURCE_CYCLE`
 rather than re-deriving one: up to an hour passes between the pre-flight
@@ -1622,10 +1623,16 @@ container whose whole job is two HTTP POSTs, and making the one thing
 that must not fail install the web app's dependency stack would give it a
 large surface to fail on.
 
-Setup is four fields in the Railway UI — config file, `GITHUB_TOKEN`,
-cron schedule, start command — documented in
-[`RAILWAY_DISPATCH.md`](../RAILWAY_DISPATCH.md) and in the script's own
+Both dispatch services are configured by their Railway service settings —
+builder (Railpack), start command, cron schedule, restart policy (Never),
+`GITHUB_TOKEN` — not by a repo file: Railway stops reading Config as Code
+(`railway.json`, and custom paths like `railway.dispatch.json`) on
+2026-12-01 and has deprecated Nixpacks. The settings are tabled in
+[`RAILWAY_DISPATCH.md`](../RAILWAY_DISPATCH.md) (pinned to the code by
+`tests/test_railway_settings_doc.py`) and repeated in the script's own
 header, which is where somebody debugging it at 3am will actually look.
+The start command has to be set explicitly: Railpack's fallback is the
+`Procfile`, whose `web` entry is the web app.
 The token is a fine-grained PAT scoped to this repository with a single
 permission, `Actions: Read and write`; nothing here needs contents write.
 
@@ -1637,7 +1644,7 @@ nothing happens at all. There are two backstops, in order:
 
 | | When | Trigger | Covers |
 |---|---|---|---|
-| 1 | +2:30 | `railway-backstop`: a second Railway cron service, its own token (`railway.backstop.json`) | a primary dispatch that did not happen: a missed or crashed cron run, an expired primary token |
+| 1 | +2:30 | `railway-backstop`: a second Railway cron service, its own token (settings in `RAILWAY_DISPATCH.md`) | a primary dispatch that did not happen: a missed or crashed cron run, an expired primary token |
 | 2 | +3:37 | `schedule-backstop`: one GitHub `schedule:` entry per workflow | Railway itself being down — the one trigger independent of Railway |
 
 **Why Railway first and GitHub last.** GitHub's `schedule:` was meant to be

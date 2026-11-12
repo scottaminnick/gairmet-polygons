@@ -148,7 +148,8 @@ HAZARD_WORKFLOWS = {
 # workflow_dispatch: +1:20, timed to NBM's arrival (see the module
 # docstring). This is the number the forecaster types into the Railway UI;
 # scripts/dispatch_workflows.py prints the cron line for it and
-# tests/test_publish_schedule.py checks railway.dispatch.json against it.
+# tests/test_railway_settings_doc.py checks RAILWAY_DISPATCH.md's settings
+# table against it.
 #
 # It also anchors start_delay_min on the NBM-ARRIVAL line and the viewer's
 # staleness window (PUBLISH_WINDOW_CLOSE_MINUTES), so it has to be the
@@ -369,9 +370,9 @@ def dispatch_cron_entry(trigger: str = "railway-cron") -> str:
     """
     The cron line the forecaster sets on a Railway service: the primary
     dispatch by default, or the +2:30 backstop for "railway-backstop".
-    Generated here so the values in railway.dispatch.json and
-    railway.backstop.json, the ones in this module, and the ones in the
-    docs cannot disagree.
+    Generated here so the Railway service settings tabled in
+    RAILWAY_DISPATCH.md, this module, and the retired railway.*.json
+    files (while they remain) cannot disagree.
     """
     if trigger not in RAILWAY_TRIGGER_OFFSETS:
         raise ValueError(f"not a Railway trigger: {trigger!r}; expected one of {sorted(RAILWAY_TRIGGER_OFFSETS)}")
