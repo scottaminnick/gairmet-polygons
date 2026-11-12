@@ -137,10 +137,12 @@ decision moves into raster space and the output is contoured once:
    region regardless of size.
 5. **One contour per region**, traced from a copy of the region grid
    coarsened to `CONTOUR_RESOLUTION_DEG` (0.1°, ≈6 nm).
-6. **Shared-arc simplification**, then **split fragments dropped**:
-   coarsening can pinch a small piece off a region; of each region's pieces
-   the largest stays and any other below the minimum goes (§1, "MIN AREA
-   judges whole areas").
+6. **Shared-arc simplification**, then **clip to the AOR** (holes
+   filled) buffered by `AOR_CLIP_BUFFER_DEG` (0.02°, §3.7) — the same
+   geometry for every class, so shared arcs stay shared — then **split
+   fragments dropped**: coarsening or the clip can pinch a small piece off a
+   region; of each region's pieces the largest stays and any other below
+   the minimum goes (§1, "MIN AREA judges whole areas").
 
 **Why enclosure absorption is mandatory, not cosmetic:** a G-AIRMET GFA
 element is a simple ring and cannot carry a hole. A region wrapping another
@@ -426,6 +428,66 @@ in CONUS — that is 0 outside cells covered, against 129 with the majority
 rule alone. It was 1 before the coordinate-convention fix (§5). The residue
 is a property of contouring a cell-centred raster at all, not of a closing
 jumping the line, and it cannot grow with the radius.
+
+### 3.7 How far a polygon may reach past the AOR
+
+The raster gate decides which *cells* are inside; the polygon drawn around
+them can still reach a little past the line. Measured on the 2026-11-12 09Z
+cycle against the AOR as the pipeline applies it (holes filled, §3.3):
+
+| Layer | Farthest past the AOR | Created by | Treatment |
+|---|---|---|---|
+| IFR | 3.97 mi before the clip (Haro Strait / Strait of Georgia); ~0.15° (~10 mi) in principle | step 6's shared-arc simplification (0.15°) drawing a straight edge across a notch in the boundary | **clipped**, below |
+| MTN OBSC | 0.85 mi (0.0124°) | the contour: drawn at the 0.5 level between the last cell inside the mask and the first outside, i.e. half a fine cell (0.0125°, ~0.86 mi) past the last mask cell; smoothing and simplification add nothing measurable | **accepted, unclipped** |
+| TANGO (both layers) | none that cycle; bounded the same way as MTN OBSC (same contour step) | same | **accepted, unclipped** |
+
+**IFR is clipped, and only IFR.** After step 6, every IFR polygon is
+intersected with the AOR, holes filled, buffered by `AOR_CLIP_BUFFER_DEG`
+= 0.02° (`pipeline/hazards/ifr.py`; the geometry is built once per boundary
+file by `pipeline.boundaries.get_aor_clip_geometry`). The goal is to
+**bound** the overshoot, not to trace the border: a few miles into Canada
+is acceptable because forecasters fix edges in PGEN. 0.02° is ~1.4 mi
+north–south (~1.0 mi east–west at 45°N), under one NBM grid cell (2.5 km,
+1.55 mi) and one fine cell, so the clip only removes an edge that cut a
+corner, never area the raster put there; it also clears the 0.07 mi the
+unsimplified coarse contour reaches. Details:
+
+- **Same clip for every class.** An arc two classes share is cut at the same
+  points on both sides, so it stays shared: no gap or overlap opens. The
+  only difference from an exact intersection is the GeoJSON writer's
+  6-decimal rounding (~10 cm) along the curved clip edge.
+- **Before MIN AREA's fragment rule.** A clip can split a polygon; the
+  pieces keep their region's group, so step 6's rule judges them like any
+  other split. MIN AREA and the radius stay adjustable exactly as before.
+- **One code path.** The clip is inside `polygonize_ifr_grid_v2`, which
+  both the scheduled run and the web app's recompute call, so the published
+  snapshot still equals the default recompute (§1).
+- **An exact no-op** wherever nothing exceeds the buffer: a polygon inside
+  is passed through untouched.
+
+Measured on 2026-11-12 09Z, IFR F00–F12, against the 1:110m boundary that
+cycle was built with and against the current 1:10m one (identical here):
+
+| | Before | After |
+|---|---|---|
+| Farthest past the AOR | 3.97 mi | 1.35 mi |
+| Area outside (sum of hours) | 247.1 sq mi | 193.0 sq mi |
+| Polygons | 26 | 26 |
+| Vertices | 488 | 528 (+40, +8%: ~12 per clipped hour, from the buffer's rounded corners) |
+| Overlap between classes | 0 | 0 |
+
+Most of the remaining area outside is the 0.07 mi strip along 49°N, inside
+the buffer and untouched by design. MTN OBSC and TANGO output was
+byte-identical before and after. `tests/test_ifr_aor_clip.py` reproduces
+the Strait of Georgia failure with a synthetic notch (3.97 mi without the
+clip, 1.38 mi with it) and checks the bound, the seams, the no-op, the
+published = recompute equality, and that MTN OBSC and TANGO never build
+the clip.
+
+**MTN OBSC and TANGO are left unclipped on purpose.** Their overshoot is
+bounded by construction at half a fine cell (~0.86 mi), smaller than the
+IFR clip's own buffer, and a clip would add vertices and a second boundary
+treatment for nothing a forecaster would notice.
 
 ---
 
