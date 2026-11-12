@@ -218,7 +218,8 @@ could report 0% of everything.
 ## 3. Area of responsibility (every hazard)
 
 `data/boundaries/conus_aor.json` (`pipeline.boundaries.CONUS_BOUNDARY_PATH`)
-— the U.S. domestic FIR. NWSI 10-811 §3 defines AWC's area as "Twenty (20)
+— the U.S. domestic FIR, built against the Natural Earth **1:10m** country
+outlines (§3.2; rebuilt from 1:110m on 2026-11-11, §3.4). NWSI 10-811 §3 defines AWC's area as "Twenty (20)
 domestic Air Route Traffic Control Center (ARTCC) Flight Information Regions
 (FIRs) covering the conterminous U.S. and adjacent coastal waters", and the
 forecaster confirmed that the forecast area is that domestic FIR.
@@ -277,7 +278,7 @@ Caribou, ME and Detroit.
 
 - **Mexico is not subtracted, and the add-back stops at 41°N.** The first
   version added U.S. territory back everywhere. The 1:110m Natural Earth
-  U.S. outline overshoots the Rio Grande by a few miles, so that pulled
+  U.S. outline it was then built from overshoots the Rio Grande by a few miles, so that pulled
   ~1,600 sq mi of Mexico into the AOR (Big Bend, the lower Rio Grande
   valley, El Paso–Juárez). Subtracting the Mexican FIR instead does not
   help either: it and the ARTCC edge disagree along the Rio Grande at this
@@ -294,9 +295,13 @@ Caribou, ME and Detroit.
 
 Inputs (not committed; both public domain): the FAA ADDS **Airspace
 Boundary** GeoJSON (U.S. government work), and the **Natural Earth**
-admin-0 countries shapefile at 1:110m (Natural Earth is public domain).
+admin-0 countries shapefile at **1:10m** (Natural Earth is public domain).
 Run as `python scripts/build_aor_boundary.py --faa Airspace_Boundary.geojson
---ne ne_110m_admin_0_countries.shp --out data/boundaries/conus_aor.json`.
+--ne ne_10m_admin_0_countries.shp --out data/boundaries/conus_aor.json`.
+
+**Canadian land inside the boundary: 1,150 sq mi**, measured against the
+Natural Earth 1:10m Canada outline. The 1:110m-built file, measured the
+same way, had 2,610 sq mi; the 20-ARTCC union it replaced spilled ~17,900.
 
 ### 3.3 Holes are filled on purpose
 
@@ -343,23 +348,60 @@ Superior into central Minnesota. That is the closing and the polygon
 simplifier, not the boundary: when a polygon's vertices at the border move,
 the simplifier can drop a vertex further along and a long edge pivots.
 
+**The 1:10m rebuild (2026-11-11).** Same build, same FAA input; only the
+Natural Earth outlines went from 1:110m to 1:10m. The boundary moved only
+along the Canadian border, land and lake water line; nothing on the
+Mexican border, the Pacific, the Gulf or the Atlantic, and the 22 interior
+holes are unchanged.
+
+| | Vector, sq mi | Mask, IFR grid / TANGO–MTN OBSC grid, sq mi | Where |
+|---|---|---|---|
+| Removed | 1,471 | 1,328 / 1,319 | MN–ON: Boundary Waters 505, Lake of the Woods 171, Rainy River/Lake 126; 49°N in ND/MN 110 (a strip under half a mile wide along 5.4° of longitude); St Croix River, ME–NB 92; Lake Erie water line 86; Detroit River 62; St Marys River 92; ME–QC 35; smaller pieces |
+| Added | 614 | 567 / 632 | Sault Ste. Marie, MI 98; Calais–St Croix, ME 92; Lake Superior water line 69; northern Maine (St John River, Jackman) ~130; Niagara 36; St Lawrence ~48; smaller pieces |
+
+Border towns: International Falls, MN, Sault Ste. Marie, MI, Niagara Falls,
+NY and Madawaska, ME move inside; Windsor, ON moves outside; none moves out
+of the boundary. The changed-mask clusters farthest from U.S. land (up to
+130 km, in Lakes Superior, Huron, Erie and Ontario) all lie within 0–3 km of
+both the old and new lines: the international water border, re-traced.
+
+Recomputing the 2026-11-11 15Z caches (F00–F12) with each boundary:
+
+| Layer | Polygons old → new | Area, sq mi, old → new | Gained / lost |
+|---|---|---|---|
+| IFR | 15 → 15 | 505,083 → 505,083 | 0 / 0 |
+| MTN OBSC | 10 → 10 | 180,046 → 180,066 (+20) | +98 / −77, F00 and F03, Maine–Quebec |
+| TANGO surface wind | 3 → 3 | 44,899 → 44,899 | 0 / 0 |
+| TANGO LLWS | 13 → 13 | 34,701 → 34,701 | 0 / 0 |
+
+One MTN OBSC change reaches well inside the border: at F03 a 17.8 sq mi
+sliver ~0.3 mi wide runs ~100 km along the northern edge of a 6,699 sq mi
+polygon in western Maine, out to 72 km from the nearest cell whose mask
+changed. That polygon contains 4.2 sq mi of the change. MTN OBSC applies the
+mask before its 50 nm (93 km) raster closing, so a border cell can reshape
+the closed envelope up to one radius inland (49 km here with the final
+simplification off), and the 0.05° simplification then re-picks vertices
+along the rest of that edge (72 km with it on).
+
 ### 3.5 Known gaps
 
-- **Border towns the 1:110m outline misses.** International Falls, MN is
-  ~1 mi outside (its airport, KINL, is inside); Sault Ste. Marie, MI is
-  ~5.6 mi outside (it was outside the old union too). Both are pinned as
-  strict `xfail`s in `tests/test_aor_boundary.py`. A 1:10m rebuild is the
-  likely fix.
-- **Slivers along the border.** Against `us_states.json`, ~1,660 sq mi of
-  U.S. land falls outside the AOR, nearly all of it (1,500 sq mi) in
-  strips under 2 mi wide where two outlines disagree, below the 0.025°
-  grid's ~1.7 mi cell.
+- **Border towns.** International Falls, MN and Sault Ste. Marie, MI were
+  outside the 1:110m-built boundary (~1 mi and ~5.6 mi); the 1:10m rebuild
+  puts both inside, and `tests/test_aor_boundary.py` now pins them as
+  ordinary passing tests.
+- **Slivers along the border.** Against `us_states.json` (a coarse
+  outline), ~2,080 sq mi of CONUS land falls outside the AOR (1,660 with
+  the 1:110m build), ~1,580 of it in strips under 2 mi wide, below the
+  0.025° grid's ~1.7 mi cell. The increase is the 1:10m line disagreeing
+  with that coarser outline, not lost territory: every border town checked
+  is inside.
 - **Fort Frances, ON** and International Falls face each other across the
   Rainy River; the town is 0.8 mi from the edge, under one grid cell. The
   test pins (−93.4, 48.75) instead, 10.6 mi outside.
-- **Canadian land spill is ~1,500 sq mi** at 1:110m (the build's figure;
-  it needs the Natural Earth file, which is not committed). The old union
-  spilled ~17,900 sq mi.
+- **Canadian land inside the AOR is 1,150 sq mi**, against the Natural
+  Earth 1:10m Canada outline (2,610 sq mi with the 1:110m-built file,
+  measured the same way; it needs the Natural Earth file, which is not
+  committed). The old 20-ARTCC union spilled ~17,900 sq mi.
 
 ### 3.6 Applying the gate to IFR v2
 
@@ -1660,8 +1702,9 @@ what should have said so first.
   middle latitude, so the closing radius is 10–15% off at the north and
   south edges of a CONUS domain. Cell *areas* are computed per row, where
   the same error would accumulate.
-- The area of responsibility is built from a 1:110m U.S. outline, which
-  leaves International Falls, MN and Sault Ste. Marie, MI just outside it,
-  and oceanic FIRs are not covered — see §3.5.
+- The area of responsibility (built from Natural Earth 1:10m) still holds
+  1,150 sq mi of Canadian land, against the 1:10m Canada outline (2,610
+  with the earlier 1:110m build), and oceanic FIRs are not covered — see
+  §3.5.
 - HZ, FU and BLSN are deliberately not automated for either hazard: no NBM
   field exists, and per AWC practice they are rare enough to add by hand.

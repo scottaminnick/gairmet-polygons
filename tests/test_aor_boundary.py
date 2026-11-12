@@ -56,12 +56,13 @@ OUTSIDE = {
     "Fort Frances, ON": (-93.4, 48.75),
 }
 
-# U.S. towns the 1:110m Natural Earth outline is too coarse to keep
-# inside (docs/METHODS.md section 3, "Known gaps"). Strict, so a rebuild
-# that fixes them fails here and the marker gets removed.
+# U.S. border towns the 1:110m Natural Earth outline was too coarse to
+# keep inside (International Falls ~1 mi outside, Sault Ste. Marie ~5.6 mi).
+# These were strict expected failures until the 1:10m rebuild fixed both;
+# they now pin that fix, so a rebuild at a coarser scale fails here.
 KNOWN_GAPS = {
-    "International Falls, MN": (-93.41, 48.60),  # ~1 mi outside; KINL airport is inside
-    "Sault Ste. Marie, MI": (-84.35, 46.50),  # ~5.6 mi outside; also outside the old union
+    "International Falls, MN": (-93.41, 48.60),
+    "Sault Ste. Marie, MI": (-84.35, 46.50),
 }
 
 
@@ -115,7 +116,6 @@ def test_outside(name):
     assert not _mask_at(lon, lat), f"{name} rasterized mask"
 
 
-@pytest.mark.xfail(strict=True, reason="1:110m U.S. outline too coarse at the border; see METHODS section 3")
 @pytest.mark.parametrize("name", KNOWN_GAPS)
 def test_known_us_gaps_are_inside(name):
     lon, lat = KNOWN_GAPS[name]
