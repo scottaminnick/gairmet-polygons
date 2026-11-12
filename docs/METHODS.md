@@ -381,7 +381,12 @@ changed. That polygon contains 4.2 sq mi of the change. MTN OBSC applies the
 mask before its 50 nm (93 km) raster closing, so a border cell can reshape
 the closed envelope up to one radius inland (49 km here with the final
 simplification off), and the 0.05° simplification then re-picks vertices
-along the rest of that edge (72 km with it on).
+along the rest of that edge (72 km with it on). Accepted.
+
+**Reading a boundary gate:** a change within about one closing radius of a
+boundary change (50 nm for MTN OBSC and IFR, the layer's own radius for
+TANGO), on a polygon that touches that change, is expected; the
+stop-and-report rule applies only to changes with no such link.
 
 ### 3.5 Known gaps
 
