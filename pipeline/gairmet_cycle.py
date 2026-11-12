@@ -96,7 +96,9 @@ def find_latest_gairmet_cycle(probe_fxx: int = PROBE_FORECAST_HOUR,
     pipeline/generate_latest_ifr.py's or
     pipeline/generate_latest_mtn_obsc.py's main() for the +6h shift).
     """
-    now = datetime.now(timezone.utc).replace(tzinfo=None, minute=0, second=0, microsecond=0)
+    # When this search started: the run's job_start for the NBM-ARRIVAL line.
+    started = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+    now = started.replace(minute=0, second=0)
 
     candidates = []
     day_start = now.replace(hour=0)
@@ -112,7 +114,11 @@ def find_latest_gairmet_cycle(probe_fxx: int = PROBE_FORECAST_HOUR,
         try:
             fetch_idx(candidate, probe_fxx)
             print(f"Found available G-AIRMET-aligned NBM cycle: {candidate:%Y-%m-%d %H}Z")
-            log_nbm_arrival(candidate, hazard=hazard)
+            # Only a hand run gets here (the workflows set NBM_SOURCE_CYCLE),
+            # so the trigger is "manual": no schedule, so start_delay_min is
+            # "-". A search that found the cycle already posted did not watch
+            # it appear, so arrival is an upper bound (polled=False).
+            log_nbm_arrival(candidate, hazard or "-", "manual", started)
             return candidate
         except RuntimeError:
             print(f"  not yet available: {candidate:%Y-%m-%d %H}Z")
