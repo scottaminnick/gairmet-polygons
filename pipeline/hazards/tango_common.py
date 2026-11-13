@@ -200,7 +200,7 @@ def cache_and_polygonize(
     construction.
 
     The price is the rounding itself: a cell is flagged from 0.25 kt BELOW the
-    threshold (39.8 kt is stored as 40.0, so it counts at a 40 kt threshold).
+    threshold (29.8 kt is stored as 30.0, so it counts at a 30 kt threshold).
     """
     save_grid_cache(cache_path, {CACHE_GRID_KEY: speed_kt}, grid_spec, scale=CACHE_SCALE)
     grids, loaded_spec = load_grid_cache(cache_path, scale=CACHE_SCALE)

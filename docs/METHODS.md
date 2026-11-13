@@ -703,7 +703,7 @@ confidence. Whether that is good enough is a forecaster's call.
 | Layer | NBM core field | idx filter |
 | --- | --- | --- |
 | STG SFC WND | `WIND`, 10 m above ground, deterministic | `:WIND:` + `:10 m above ground:`, excluding `std dev` |
-| LLWS POTENTIAL | `WIND`, `surface - 610 m above ground` | `:WIND:` + `surface - 610 m above ground` |
+| LLWS POTENTIAL | `WIND`, `surface - 610 m above ground` (NBM's LLWS *speed*, see below) | `:WIND:` + `surface - 610 m above ground` |
 
 `find_message` matches substrings anywhere in the idx line, and the bare
 text `10 m above ground` is **also inside `surface - 610 m above ground`**.
@@ -716,12 +716,75 @@ that proves the trap exists in that file.
 
 Speeds arrive in m/s and are converted with 1.943844 kt per m/s.
 
+**What the LLWS field actually is.** Not a wind at 610 m and not a shear:
+it is the *speed* half of NBM's TAF low-level wind shear guidance.
+
+*The message* (NBM 2026-11-13 03Z f006, fetched with Phase A's byte-range
+route, read with eccodes): discipline 0, category 2, number 1 (`ws`, wind
+speed, m/s); product definition template 0 (an instantaneous value);
+first fixed surface type 1 (ground) at 0, second type 103 (height above
+ground) at 610 m. Packing is 9 bits at 0.4 m/s steps.
+
+*It has siblings.* Two more messages share the exact level: `WDIR`
+(0/2/0, wind direction, degrees true, in 10° steps) and `DIST` (0/3/6,
+geometrical height above ground, m; 304–608 m, about 1,000–2,000 ft, in
+34 distinct values). On that one cycle all three were nonzero in exactly
+the same 104,494 of 3,744,965 cells and zero everywhere else — the three
+parts of a TAF `WShhh/dddffKT` group. (An earlier version of this section
+and of `llws.py` said the field had no siblings; it has two. The filter
+keeps `:WIND:`, so it still matches one line.)
+
+*NBM's own definition.* The NBM Weather Elements page lists LLWS Height,
+Speed and Direction, each "Intended to provide Low Level Wind Shear
+[Height | Speed | Direction] guidance (up to 2,000 feet AGL) for WFO TAFs"
+([VLab, MDL](https://vlab.noaa.gov/web/mdl/nbm-weather-elements)). The
+algorithm, from the NBM v3.2 briefing
+([Craven, NWS](https://www.weather.gov/media/psr/Craven%20SAWS8_%20%20NBM%20v3.2%20DAS.pdf),
+slides 19–20), uses each model's winds at the surface, 500, 1,000, 1,500
+and 2,000 ft:
+
+> "2. Calculate the wind speed at each height and determine the wind speed
+> differences between all possible layers … 3. The models for any
+> particular layer whose wind speed differences are less than 30 knots are
+> ignored … 5. Tabulate which model has the greatest wind speed shear for
+> any given layer and assign the wind speed found at the top of that layer
+> as the LLWS Speed. The LLWS height is simply assigned to the top of this
+> layer."
+
+The 30 kt matches the TAF criterion in
+[NWSI 10-813](https://www.weather.gov/media/directives/010_pdfs/pd01008013curr.pdf)
+§B2.8: "The TAF should identify the lowest layer where the wind shear is
+at least +/- 30 kts within 2,000 ft AGL."
+
+| | |
+|---|---|
+| **Known** | The field is a wind speed over the surface–610 m layer; WDIR and DIST share its level and its nonzero cells; NBM documents the three as LLWS height, speed and direction guidance for TAFs; the v3.2 algorithm keeps only layers with a ≥ 30 kt speed difference and outputs the speed at the top of the strongest-shear layer. |
+| **Inferred** | Zero means no LLWS diagnosed, not calm. Every nonzero cell is an NBM ≥ 30 kt shear event, which is why no value is under 30 kt (smallest seen 30.3 kt). The shear magnitude itself is not in the GRIB2. NBM's shear is a scalar speed difference, whereas NWSI 10-813 and ICAO call for a vector difference. |
+| **Unknown** | Whether NBM v4.x still uses the v3.2 algorithm: v3.2 can only place the top at 500/1,000/1,500/2,000 ft, yet DIST has 34 distinct heights (none under 1,000 ft in the sample), so v4 may blend or interpolate. How models are combined now (VLab gives "Equal-weighted" for direction, nothing for speed or height). Whether the 30 kt cut, the layers and the normalisation are unchanged. |
+
+**The limit, plainly.** The G-AIRMET LLWS criterion is "air speed loss or
+gain of 20 kts or more below 2000 ft AGL". NBM never flags shear between 20
+and 30 kt, so an NBM-based LLWS first guess is a **conservative subset** of
+the operational criterion: it can only show events NBM rated at ≥ 30 kt,
+and no threshold on this field recovers the 20–30 kt cases.
+
+**So the threshold filters on top-of-layer wind, not on shear.** Because
+every nonzero value is already a ≥ 30 kt shear event, the default is the
+field's floor, 30 kt: `>= 30` selects exactly the cells NBM flags. Raising
+it keeps only events whose *top* wind is stronger, which says nothing more
+about the shear. The old 40 kt default discarded 48.7% of flagged cells
+across 15 native grids (2026-11-12 15Z, 21Z and 2026-11-13 03Z, f006–f018)
+and 39.3% in our CONUS cache (2026-11-13 09Z package). Native distribution
+of the nonzero values: p1 31.9, p10 35.0, median 40.4, p90 48.2, max 75.4 kt.
+
 ### 4A.3 Why `nearest` for LLWS and `linear` for surface wind
 
-The LLWS field is a **sparse event field**: in the case that was studied
-(2026-10-04 06Z f006) about 99.7% of cells are zero and the smallest
-nonzero value is about 30 kt. It behaves like a flag that carries a
-magnitude, not like a wind speed with shoulders. Linear interpolation
+The LLWS field is a **sparse event field**, and now we know why (4A.2): it
+is zero wherever NBM diagnosed no LLWS, and the top-of-layer wind of a
+≥ 30 kt shear event elsewhere. About 97–99.7% of cells are zero (99.7% on
+2026-10-04 06Z f006; 97.2–98.2% on the November 2026 cycles checked), and
+the smallest nonzero value is 30.3 kt. It is a flag that carries a
+magnitude, not a wind speed with shoulders. Linear interpolation
 between a 0 and a 30 invents 15 kt values that do not exist in the model
 and blurs thin features into their neighbours, so the regrid is `nearest`:
 every output value is a value NBM actually produced.
@@ -800,9 +863,10 @@ so a mismatched load raises instead of silently returning knots × 2. With
 **The 0.5 kt resolution moves the effective threshold down by 0.25 kt.**
 Speeds are rounded to the nearest half knot when the cache is written, and
 the threshold is then applied to the rounded value (`>=`, §4A.6). A cell is
-therefore flagged from `threshold - 0.25 kt` upward: at a 40 kt threshold a
-39.8 kt cell is stored as 40.0 and counts, while 39.74 kt is stored as 39.5
-and does not. Reported peaks are likewise multiples of 0.5 kt (a 43.3 kt cell
+therefore flagged from `threshold - 0.25 kt` upward: at a 30 kt threshold a
+29.8 kt cell is stored as 30.0 and counts, while 29.74 kt is stored as 29.5
+and does not. (For LLWS this cannot matter at the default: the field has no
+values between 0 and 30.3 kt.) Reported peaks are likewise multiples of 0.5 kt (a 43.3 kt cell
 is reported as 43.5). `tests/test_tango.py` pins both.
 
 **Snapshots are built from the reloaded cache.** The driver writes the cache
@@ -824,7 +888,7 @@ to say so in the data itself.
 | Parameter | Default | Live range |
 | --- | --- | --- |
 | STG SFC WND threshold | 30 kt (the directive's number, but whether NBM 10 m sustained wind at 30 kt matches the product is untested) | 20–50 |
-| LLWS threshold | 40 kt (a guess above the ~30 kt floor of the field) | 30–60 |
+| LLWS threshold (minimum top-of-layer wind of NBM-flagged events) | 30 kt: the field's floor, so it selects exactly the cells NBM flags (4A.2) | 30–60 |
 | Mask smoothing sigma, STG SFC WND | 1.5 cells | 0–3, step 0.5, 0 = off |
 | Mask smoothing sigma, LLWS | 1.0 cells (see below) | 0–3, step 0.5, 0 = off |
 | Neighborhood radius, STG SFC WND | 50 nm (borrowed from MTN OBSC) | — |
@@ -832,9 +896,12 @@ to say so in the data itself.
 | Minimum area, STG SFC WND | 1,000 sq mi | — |
 | Minimum area, LLWS | 300 sq mi (see below) | — |
 
-LLWS is the least grounded: NBM's 610 m wind is a *proxy* for shear
-potential, not a shear diagnostic, and the product's meteorological
-criterion has not been mapped onto it.
+LLWS is now grounded at the threshold and still a placeholder everywhere
+else. The field *is* a shear diagnostic, NBM's TAF LLWS guidance (4A.2),
+and the 30 kt default shows everything NBM flags; but NBM's own cut is
+30 kt against G-AIRMET's 20 kt, so the layer is a conservative subset of
+the product criterion, and sigma, radius and minimum area are untested
+against it.
 
 **LLWS sigma 1.0 and minimum area 300.** LLWS events are small and sparse,
 and the shared 1.5 / 1,000 defaults were set with surface wind in mind. The
@@ -889,6 +956,25 @@ polygon is a hull joining three clusters in southern Arizona through a
 thin corridor, and much of its interior holds no flagged cell. At F00 the
 same step takes 535 sq mi to 2,605 (raw in-AOR: 822 sq mi). Filling
 enclosed gaps changed nothing in either case.
+
+**At 30 kt the 25 nm closing hulls more often.** Recomputed from five
+cached cycles (packages 2026-11-11 09Z and 15Z, 2026-11-12 09Z, 2026-11-13
+09Z and 15Z; F00–F12; sigma 1.0, MIN AREA 300), with "fill" the share of a
+polygon's area made of NBM-flagged cells:
+
+| | Polygons | Area (summed) | Vertices | Area-weighted fill | Area in polygons under 50% fill |
+| --- | --- | --- | --- | --- | --- |
+| 40 kt, 25 nm (old default) | 107 | 1.21 M sq mi | 2,321 | 65% | 19% |
+| 30 kt, 25 nm (current default) | 172 | 2.20 M sq mi | 3,804 | 49% | 41% |
+| 30 kt, 15 nm | 205 | 1.71 M sq mi | 4,447 | 63% | 21% |
+| 30 kt, 10 nm | 234 | 1.45 M sq mi | 5,108 | 72% | 7% |
+
+The extra flagged cells at 30 kt are often a scattered field (the Great
+Basin, 2026-11-13 15Z F12), which the 25 nm closing joins into hulls with
+much empty interior; but some are coherent areas the 40 kt default missed
+almost entirely (the Southeast, 2026-11-12 09Z F03: a sliver at 40 kt, the
+whole event at 30). 15 nm brings the fill back to the old level. The radius
+was not changed with the threshold; it is the next thing to decide.
 
 **The LLWS default is 25 nm, and it is a placeholder.** It was chosen by eye
 from the F00 and F06 frames above, which are two frames from one regime (SW

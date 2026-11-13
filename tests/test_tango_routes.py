@@ -283,13 +283,9 @@ def test_snapshot_named_in_the_manifest_but_missing_on_disk_is_503(served, key):
 def test_recompute_defaults_reproduce_the_known_polygon(served, layer):
     status, _h, fc = get(f"/api/hazards/{layer.key}/00/recompute")
     assert status == 200 and fc["type"] == "FeatureCollection"
-    # Both layers' defaults are met by the 45 kt core and the block at the
-    # sfc_wind default; for llws (40 kt) only the core qualifies, so compare
-    # against the block that each layer's default threshold actually selects.
-    if layer is SFC_WIND:
-        expected = geodesic_block_area(41.0, 39.0, -103.0, -99.0)
-    else:
-        expected = geodesic_block_area(40.5, 39.5, -102.0, -100.0)
+    # Both layers default to 30 kt, so each selects the whole 35 kt block
+    # (with its 45 kt core).
+    expected = geodesic_block_area(41.0, 39.0, -103.0, -99.0)
     assert len(fc["features"]) == 1  # the 2x2-cell specks are smoothed away
     [feature] = fc["features"]
     assert 0.8 * expected <= feature["properties"]["area_sq_mi"] <= 1.3 * expected
@@ -427,7 +423,7 @@ def test_a_larger_minimum_area_drops_small_areas(tmp_path, monkeypatch):
 
 
 def test_llws_defaults_come_from_its_own_config(served):
-    # llws: 40 kt, sigma 1.0, 25 nm, 300 sq mi; sfc_wind: 30 kt, sigma 1.5,
+    # llws: 30 kt, sigma 1.0, 25 nm, 300 sq mi; sfc_wind: 30 kt, sigma 1.5,
     # 50 nm, 1,000 sq mi. The same cached field therefore gives different
     # defaults. Pinned as a set so that changing any one is deliberate
     # (docs/METHODS.md 4A.8 records why each is what it is).
@@ -437,7 +433,7 @@ def test_llws_defaults_come_from_its_own_config(served):
 
     llws = get("/api/hazards/llws/00/recompute")[2]["features"][0]["properties"]
     wind = get("/api/hazards/sfc_wind/00/recompute")[2]["features"][0]["properties"]
-    assert defaults(llws) == (40.0, 1.0, 25.0, 300.0)
+    assert defaults(llws) == (30.0, 1.0, 25.0, 300.0)
     assert defaults(wind) == (30.0, 1.5, 50.0, 1000.0)
 
 

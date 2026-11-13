@@ -44,7 +44,7 @@ on:
         description: "STG SFC WND: minimum polygon area (sq mi) -- blank for default (1000; UNCALIBRATED)"
         required: false
       llws_threshold_kt:
-        description: "LLWS POTENTIAL: speed threshold (kt), >= -- blank for the pipeline default (40; UNCALIBRATED; sensible range 30-60)"
+        description: "LLWS POTENTIAL: minimum top-of-layer wind (kt), >=, of NBM-flagged shear events -- blank for the pipeline default (30, the field floor: every cell NBM flags; range 30-60)"
         required: false
       llws_smooth_sigma_cells:
         description: "LLWS POTENTIAL: Gaussian sigma (cells) applied to the yes/no mask -- blank for default (1.0); 0 = off"

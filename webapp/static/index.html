@@ -321,16 +321,23 @@
         <div class="layer-body" id="adjust-llws-body" hidden>
           <div class="body-title">ADJUST <span id="adjust-llws-status" class="mono"></span></div>
           <div class="adjust-note mono">cycle <span id="adjust-llws-cycle">--------Z</span> &middot; nbm <span id="adjust-llws-nbm">--------Z</span></div>
+          <!-- What the threshold is: NBM only flags a cell where it found a
+               >= 30 kt speed difference within 2,000 ft AGL, and the field's
+               value there is the wind speed at the TOP of that layer. So this
+               is the minimum top-of-layer wind of NBM-flagged shear events,
+               not a shear strength; 30 kt (the field's floor) shows every
+               cell NBM flags. docs/METHODS.md 4A.2. -->
+          <div class="adjust-note mono" title="NBM flags a cell only where it finds a speed difference of 30 kt or more within 2,000 ft AGL. The value is the wind speed at the top of that layer, so this sets the minimum top-of-layer wind of flagged events, not shear strength. 30 kt shows every cell NBM flags.">NBM-flagged shear &ge;30 kt; sets min top wind</div>
           <div class="adjust-row">
             <div class="adjust-label-cell">
-              <span class="mono adjust-label">THRESH</span>
+              <span class="mono adjust-label" title="Minimum top-of-layer wind of NBM-flagged LLWS events (not shear strength)">TOP WIND</span>
               <span class="mono adjust-hint" id="adjust-llws-threshold-val"></span>
             </div>
             <div class="stepper">
-              <button type="button" class="step-btn" data-step="down" aria-label="Decrease speed threshold" disabled>&minus;</button>
-              <input type="number" id="adjust-llws-threshold" class="mono step-input" min="30" max="60" step="1" value="30" inputmode="decimal" aria-label="LLWS speed threshold, knots" disabled />
+              <button type="button" class="step-btn" data-step="down" aria-label="Decrease minimum top wind" disabled>&minus;</button>
+              <input type="number" id="adjust-llws-threshold" class="mono step-input" min="30" max="60" step="1" value="30" inputmode="decimal" aria-label="LLWS: minimum top-of-layer wind of NBM-flagged shear events, knots" disabled />
               <span class="mono step-unit">kt</span>
-              <button type="button" class="step-btn" data-step="up" aria-label="Increase speed threshold" disabled>+</button>
+              <button type="button" class="step-btn" data-step="up" aria-label="Increase minimum top wind" disabled>+</button>
             </div>
           </div>
           <div class="adjust-row">
@@ -460,7 +467,7 @@
   <div class="legend-row"><span class="swatch swatch-ifr"></span><span class="mono">PROB(IFR) &ge; <span id="legend-threshold">70</span>%</span></div>
   <div class="legend-row"><span class="swatch swatch-mtn"></span><span class="mono">MTN OBSC &ge; <span id="legend-mtn-threshold">--</span>%</span></div>
   <div class="legend-row" id="legend-sfc_wind" hidden><span class="swatch swatch-sfc_wind"></span><span class="mono">STG SFC WND &ge; <span id="legend-sfc_wind-threshold">--</span> kt</span></div>
-  <div class="legend-row" id="legend-llws" hidden><span class="swatch swatch-llws"></span><span class="mono">LLWS &ge; <span id="legend-llws-threshold">--</span> kt</span></div>
+  <div class="legend-row" id="legend-llws" hidden><span class="swatch swatch-llws"></span><span class="mono" title="NBM-flagged low-level wind shear (speed difference of 30 kt or more within 2,000 ft AGL) with top-of-layer wind at or above this">LLWS top wind &ge; <span id="legend-llws-threshold">--</span> kt</span></div>
   <div class="panel-row"><span class="label">SMOOTHING</span><span class="mono value"><span id="legend-radius">--</span>nm radius</span></div>
   <div class="panel-row"><span class="label">MIN AREA</span><span class="mono value"><span id="legend-min-area">--</span> sq mi</span></div>
 </div>
