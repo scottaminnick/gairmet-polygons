@@ -219,16 +219,16 @@ def test_polygon_properties():
     assert props["phenomenon"] == "LLWS POTENTIAL"
     assert props["area_sq_mi"] > 20000
     assert props["hazard"] == "LLWS"
-    assert props["speed_threshold_kt"] == 40.0  # LLWS default
+    assert props["speed_threshold_kt"] == 30.0  # LLWS default: the field's floor
     assert props["valid_time"] == "2026-10-04T15:00:00Z"
 
 
 def test_parameters_default_to_the_layers_and_can_be_overridden():
     speed = block(INTERIOR_SPEC, INTERIOR_SHAPE, 41.0, 39.0, -103.0, -99.0, 35.0)
-    # 35 kt: over sfc_wind's 30 default, under llws's 40.
+    # 35 kt: over both layers' 30 kt defaults; an explicit 40 kt overrides it.
     assert len(run(speed, INTERIOR_SPEC, SFC_WIND)["features"]) == 1
-    assert run(speed, INTERIOR_SPEC, LLWS)["features"] == []
-    assert len(run(speed, INTERIOR_SPEC, LLWS, speed_threshold_kt=35.0)["features"]) == 1
+    assert len(run(speed, INTERIOR_SPEC, LLWS)["features"]) == 1
+    assert run(speed, INTERIOR_SPEC, LLWS, speed_threshold_kt=40.0)["features"] == []
 
 
 def test_min_area_drops_small_features():
@@ -288,30 +288,32 @@ def test_the_stored_snapshot_equals_polygonizing_the_reloaded_cache(tmp_path):
 
 
 def test_a_cell_just_under_the_threshold_is_flagged_because_of_the_rounding(tmp_path):
-    from pipeline.hazards.llws import LLWS as layer  # threshold 40 kt
+    from pipeline.hazards.llws import LLWS as layer  # threshold 30 kt
 
-    speed = block(INTERIOR_SPEC, INTERIOR_SHAPE, 41.0, 39.0, -103.0, -99.0, 39.8)
+    speed = block(INTERIOR_SPEC, INTERIOR_SHAPE, 41.0, 39.0, -103.0, -99.0, 29.8)
 
-    # Control: polygonizing the in-memory grid does NOT flag 39.8 kt at 40.
+    # Control: polygonizing the in-memory grid does NOT flag 29.8 kt at 30.
     assert polygonize_tango_grid(speed, INTERIOR_SPEC, layer, CYCLE, 0)["features"] == []
 
-    # The cache stores round(39.8 * 2) / 2 = 40.0, so the snapshot DOES.
+    # The cache stores round(29.8 * 2) / 2 = 30.0, so the snapshot DOES.
+    # (The real field never holds 29.8: its nonzero floor is 30.3 kt. This
+    # pins the rounding mechanism, not a value NBM produces.)
     stored = cache_and_polygonize(tmp_path / "g.npz", speed, INTERIOR_SPEC, layer, CYCLE, 0)
     assert len(stored["features"]) == 1
-    assert stored["features"][0]["properties"]["peak_speed_kt"] == 40.0
+    assert stored["features"][0]["properties"]["peak_speed_kt"] == 30.0
 
 
 def test_the_effective_threshold_is_a_quarter_knot_lower(tmp_path):
-    from pipeline.hazards.llws import LLWS as layer  # 40 kt
+    from pipeline.hazards.llws import LLWS as layer  # 30 kt
 
     def flagged(value):
         speed = block(INTERIOR_SPEC, INTERIOR_SHAPE, 41.0, 39.0, -103.0, -99.0, value)
         fc = cache_and_polygonize(tmp_path / "g.npz", speed, INTERIOR_SPEC, layer, CYCLE, 0)
         return len(fc["features"]) == 1
 
-    assert flagged(39.76)      # rounds to 40.0
-    assert not flagged(39.74)  # rounds to 39.5
-    assert flagged(40.0)
+    assert flagged(29.76)      # rounds to 30.0
+    assert not flagged(29.74)  # rounds to 29.5
+    assert flagged(30.0)
 
 
 def test_peak_speed_is_a_multiple_of_half_a_knot(tmp_path):
@@ -338,3 +340,30 @@ def test_the_driver_publishes_through_the_cache():
     source = (Path(__file__).resolve().parent.parent / "pipeline" / "generate_latest_tango.py").read_text()
     assert "cache_and_polygonize(" in source
     assert "polygonize_tango_grid(" not in source
+
+
+# --- the LLWS default is the NBM field's own floor -----------------------------
+#
+# The field is the speed half of NBM's TAF LLWS guidance: zero = no LLWS
+# diagnosed; nonzero = wind speed at the top of a layer with a >= 30 kt
+# speed difference, so never under 30 kt (smallest seen 30.3 kt). A 30 kt
+# default therefore selects exactly the cells NBM flags (docs/METHODS.md 4A.2).
+
+NBM_LLWS_FLOOR_KT = 30.0          # NBM's own speed-difference cut (NBM v3.2, slide 19)
+SMALLEST_NONZERO_SEEN_KT = 30.3   # 15.6 m/s, NBM 2026-11-13 03Z f006
+
+
+def test_the_llws_default_is_the_fields_floor():
+    assert LLWS.default_threshold_kt == NBM_LLWS_FLOOR_KT
+    assert LLWS.threshold_range_kt == (30.0, 60.0), "the live range stays 30-60"
+    assert LLWS.default_threshold_kt == LLWS.threshold_range_kt[0]
+    assert LLWS.default_threshold_kt <= SMALLEST_NONZERO_SEEN_KT
+
+
+def test_a_30_3_kt_cell_is_selected_at_the_default(tmp_path):
+    """The weakest value NBM has been seen to produce is drawn at the defaults --
+    in memory and through the cache the snapshot is published from."""
+    speed = block(INTERIOR_SPEC, INTERIOR_SHAPE, 41.0, 39.0, -103.0, -99.0, SMALLEST_NONZERO_SEEN_KT)
+    assert len(run(speed, INTERIOR_SPEC, LLWS)["features"]) == 1
+    stored = cache_and_polygonize(tmp_path / "g.npz", speed, INTERIOR_SPEC, LLWS, CYCLE, 0)
+    assert len(stored["features"]) == 1
