@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "steps": {
+    "install": {
+      "commands": [
+        { "src": "requirements.lock", "dest": "requirements.lock" },
+        "..."
+      ]
+    },
+    "build": {
+      "commands": [
+        "...",
+        "/app/.venv/bin/python scripts/lock_requirements.py --check-installed"
+      ]
+    }
+  }
+}

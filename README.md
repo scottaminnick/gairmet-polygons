@@ -215,14 +215,12 @@ Currently working:
       handling for it.
 - [ ] Terrain/DEM sourcing for Mountain Obscuration
 - [ ] Mountain Obscuration hazard definition (`pipeline/hazards/mtn_obsc.py`)
-- [ ] **Dependencies are unpinned.** `requirements.txt` and
-      `requirements-pipeline.txt` name packages without versions, so CI,
-      the scheduled pipeline and Railway each install whatever is newest
-      that day. starlette 1.10.0 showed the cost: CI went red on code
-      nobody had changed (it was the test helper, not the app, but nothing
-      told the two apart). Candidates: a lock file (`pip-compile` /
-      `uv lock`) installed everywhere, plus an occasional deliberate
-      upgrade PR so versions move on a day someone is watching.
+- [x] **Dependencies are locked.** One generated `requirements.lock`, for
+      Python 3.12 (`.python-version`), constrains every install: CI, the
+      pipeline and terrain workflows, and Railway. Versions move only in a
+      deliberate upgrade PR — see "Requirements files and the lock" below.
+      (Before this, each installed whatever was newest that day;
+      starlette 1.10.0 turned CI red on code nobody had changed.)
 
 ## Running the web app locally
 
@@ -356,7 +354,49 @@ triggered only by real code changes on `main`; fresh forecast data
 arrives at runtime instead, within 5 minutes of the pipeline publishing
 it, with no redeploy.
 
-## Why there are two requirements files
+## Requirements files and the lock
+
+Four **human-edited** inputs name what each environment needs, and one
+**generated** lock decides the exact versions:
+
+| File | Edited by | Installed by |
+|---|---|---|
+| `requirements.txt` | people | Railway (web app and dispatchers), CI |
+| `requirements-dev.txt` | people | CI, on top of `requirements.txt` (pytest, pyyaml) |
+| `requirements-pipeline.txt` | people | the generate workflows, the live IFR test |
+| `requirements-terrain.txt` | people | the terrain fetch and radius-sweep workflows |
+| `requirements.lock` | `scripts/lock_requirements.py` only | nobody directly: each input starts with `-c requirements.lock` |
+| `.python-version` | people | `actions/setup-python` (every workflow) and Railpack |
+
+The `-c requirements.lock` line makes every `pip install -r <input>`
+install the locked version of everything it pulls in, without installing
+anything the input doesn't ask for, so each set stays as light as before.
+After installing, every workflow and the Railway build run
+`python3 scripts/lock_requirements.py --check-installed`, which fails if
+anything installed is not the locked version, was never locked, or if
+Python is not the version in `.python-version`. `railpack.json` copies the
+lock into Railpack's install step, because Railpack otherwise copies
+`requirements.txt` alone.
+
+**Adding a package:** add its name to the right input, run
+`python3 scripts/lock_requirements.py` (needs
+[uv](https://docs.astral.sh/uv/)), and commit both. Existing pins don't
+move. `tests/test_dependency_lock.py` fails if an input names a package
+the lock doesn't cover.
+
+**Upgrading, deliberately:** one PR that runs
+`python3 scripts/lock_requirements.py --upgrade` (or
+`--upgrade-package <name>` for one) and commits the regenerated lock. CI
+then runs the full suite against the new versions, and merging it is the
+upgrade. To move Python, change `.python-version` and `PYTHON_VERSION` in
+the script, then re-lock with `--upgrade`, in the same kind of PR.
+
+**No hashes in the lock.** pip treats hashes in a constraints file as
+hash-checking mode for the whole install, which then rejects the unpinned
+names in the human files. The lock pins exact versions; that is what makes
+the installs reproducible.
+
+### Why there are separate requirements sets
 
 - `requirements.txt` — `fastapi` + `uvicorn` plus a handful of
   lightweight geospatial libraries (`numpy`, `scipy`, `shapely`,

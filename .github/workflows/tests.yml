@@ -33,14 +33,18 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version-file: .python-version
           # Caches pip downloads between runs, keyed on the requirements
-          # file -- shaves most of the install time off repeat runs.
+          # files and the lock -- shaves most of the install time off repeat runs.
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            requirements.lock
 
       # Deliberately requirements.txt (the LIGHT set the webapp deploys
-      # with) plus pytest -- NOT requirements-pipeline.txt, even though
+      # with) plus requirements-dev.txt (pytest, pyyaml), both pinned by
+      # requirements.lock -- NOT requirements-pipeline.txt, even though
       # pytest is declared there. Verified directly: the whole suite
       # passes without the heavy GRIB2 stack (cfgrib/xarray/herbie/
       # pandas/matplotlib), because the modules that need those import
@@ -56,7 +60,10 @@ jobs:
       # (affine, when rasterio was removed), so it is named here rather
       # than relied on.
       - name: Install dependencies (light set + test deps)
-        run: pip install -r requirements.txt pytest pyyaml
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Check the install came from requirements.lock
+        run: python3 scripts/lock_requirements.py --check-installed
 
       # Guards the specific Railway failure mode this repo has actually
       # hit: pipeline/fetch_terrain.py imported requests at module level

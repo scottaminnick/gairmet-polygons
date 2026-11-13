@@ -522,7 +522,7 @@ def test_every_dependency_allowance_carries_a_reason():
 # ---------------------------------------------------------------------------
 # The test suite is an entry point too.
 #
-# tests.yml runs the whole suite under `requirements.txt pytest pyyaml`
+# tests.yml runs the whole suite under `requirements.txt` + `requirements-dev.txt`
 # -- the LIGHT set, deliberately, so CI fails if a module-level heavy
 # import creeps into a path the webapp touches. That makes the suite
 # itself subject to exactly the failure this file guards against, and it

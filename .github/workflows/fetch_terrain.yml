@@ -41,7 +41,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version-file: .python-version
 
       # Deliberately much lighter than requirements-pipeline.txt -- this
       # script talks to a plain S3 bucket over HTTPS, not GRIB2/NBM, so
@@ -53,6 +53,9 @@ jobs:
         # pipeline/fetch_terrain.py imports can be checked against it --
         # see requirements-terrain.txt for the failure that motivated it.
         run: pip install -r requirements-terrain.txt
+
+      - name: Check the install came from requirements.lock
+        run: python3 scripts/lock_requirements.py --check-installed
 
       # THE MOSAIC IS CHECKPOINTED SEPARATELY FROM THE STEPS THAT USE IT.
       #

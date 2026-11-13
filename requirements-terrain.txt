@@ -17,6 +17,11 @@
 # ModuleNotFoundError AFTER downloading all 1,708 tiles.
 # tests/test_workflow_dependencies.py now pins this file against what each
 # entry point actually imports.
+# Exact versions come from requirements.lock (generated; never hand-edit it):
+# this line makes every `pip install -r` of this file install the locked
+# version of everything. To add a package, add its name here and run
+# `python3 scripts/lock_requirements.py`; to upgrade, see that script.
+-c requirements.lock
 
 requests        # tile downloads (imported lazily inside the fetch functions)
 numpy

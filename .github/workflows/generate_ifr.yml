@@ -132,7 +132,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version-file: .python-version
 
       # CHECK BEFORE DOING THE WORK. The next three steps run BEFORE
       # `pip install`, before the NBM poll, and before any data is
@@ -254,6 +254,10 @@ jobs:
       - name: Install dependencies
         if: steps.await_nbm.outputs.posted == 'yes'
         run: pip install -r requirements-pipeline.txt
+
+      - name: Check the install came from requirements.lock
+        if: steps.await_nbm.outputs.posted == 'yes'
+        run: python3 scripts/lock_requirements.py --check-installed
 
       - name: Generate latest IFR polygons
         if: steps.await_nbm.outputs.posted == 'yes'

@@ -50,7 +50,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version-file: .python-version
 
       # Same file fetch_terrain.yml uses, for the same two entry points
       # this job runs (pipeline/fetch_terrain.py and, new here,
@@ -59,6 +59,9 @@ jobs:
       # that fetch_terrain.py itself never touches.
       - name: Install dependencies
         run: pip install -r requirements-terrain.txt
+
+      - name: Check the install came from requirements.lock
+        run: python3 scripts/lock_requirements.py --check-installed
 
       # Identical checkpoint steps to fetch_terrain.yml, and the same
       # key (terrain-mosaic-v1) deliberately -- reusing that job's
