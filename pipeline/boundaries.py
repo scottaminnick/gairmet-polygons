@@ -150,3 +150,38 @@ def warm_boundary_masks(requests, executor) -> int:
             _boundary_mask_cache[cache_key] = future.result()
             computed += 1
     return computed
+
+
+_aor_clip_cache: dict = {}
+
+
+def get_aor_clip_geometry(boundaries_path: str, buffer_deg: float):
+    """
+    The vector clip IFR applies to its finished polygons: the boundary file
+    unioned, its interior rings FILLED (as load_boundary_mask fills them, so
+    the clip and the raster gate agree on what is inside), then buffered
+    outward by buffer_deg. Memoized per (path, buffer) with the same
+    per-key lock as the masks; building it is a union plus one buffer of a
+    ~5,000-vertex ring, well under a second.
+
+    Returns a shapely geometry. Callers must not mutate it (shapely
+    geometries are immutable, so sharing one across threads is safe).
+    """
+    import json
+
+    from shapely.geometry import MultiPolygon, Polygon, shape
+    from shapely.ops import unary_union
+
+    cache_key = ("aor_clip", boundaries_path, float(buffer_deg))
+    clip = _aor_clip_cache.get(cache_key)
+    if clip is not None:
+        return clip
+    with _lock_for(cache_key):
+        if cache_key not in _aor_clip_cache:
+            with open(boundaries_path) as f:
+                features = json.load(f)["features"]
+            union = unary_union([shape(feature["geometry"]) for feature in features])
+            parts = list(union.geoms) if isinstance(union, MultiPolygon) else [union]
+            filled = unary_union([Polygon(part.exterior) for part in parts])
+            _aor_clip_cache[cache_key] = filled.buffer(buffer_deg)
+        return _aor_clip_cache[cache_key]

@@ -140,7 +140,7 @@ from scipy.ndimage import binary_dilation, binary_fill_holes, distance_transform
 from shapely.geometry import Polygon as ShapelyPolygon
 from skimage import measure
 
-from pipeline.boundaries import CONUS_BOUNDARY_PATH, get_boundary_mask
+from pipeline.boundaries import CONUS_BOUNDARY_PATH, get_aor_clip_geometry, get_boundary_mask
 from pipeline.polygons import (
     GridSpec,
     KM_PER_DEG_LAT,
@@ -330,6 +330,26 @@ ADJACENT_REGION_EROSION_DEG = 0.0
 # halved on failure, so the no-overlap guarantee is checked, not assumed.
 ARC_SIMPLIFY_TOLERANCE_DEG = 0.15
 ARC_SIMPLIFY_RETRIES = 4
+
+# How far past the AOR an IFR polygon may reach, in degrees. Step 7 of v2
+# clips every finished polygon to the AOR (holes filled, as the raster gate
+# fills them) buffered by this much. Without it, the shared-arc
+# simplification above can draw a straight edge across a notch in the
+# boundary: measured 3.97 mi into Canada in Haro Strait / the Strait of
+# Georgia (2026-11-12 09Z), and up to ~ARC_SIMPLIFY_TOLERANCE_DEG (~10 mi)
+# in principle. A few miles is acceptable -- forecasters fix edges in
+# PGEN -- so this BOUNDS the overshoot rather than tracing the border.
+#
+# 0.02 deg is ~1.4 mi north-south (1 deg lat = 69 mi) and less east-west
+# (~1.0 mi at 45N): under one NBM grid cell (2.5 km = 1.55 mi) and under
+# one 0.025-deg fine cell, so the clip only ever removes an edge that cut
+# a corner, never area the raster itself put there. It also clears the
+# 0.07 mi the unsimplified coarse contour reaches past the line, so
+# nowhere the simplification did NOT cut a corner is touched.
+#
+# IFR only. MTN OBSC and TANGO overshoot by at most half a fine cell
+# (~0.86 mi) at their contour step, accepted as-is (METHODS 3.7).
+AOR_CLIP_BUFFER_DEG = 0.02
 
 # KM_PER_DEG_LAT / KM_PER_NM and the cell sizing and area helpers that use
 # them live in pipeline.polygons, shared with MTN OBSC.
@@ -1285,9 +1305,13 @@ def polygonize_ifr_grid_v2(
          ring that contains them, so the staircase goes away and the
          shared edges stay shared. Validated, with the tolerance backed
          off on any failure.
-      7. Split fragments dropped -- MIN AREA judged whole areas at
-         steps 3-4; coarsening can still pinch a small piece off a
-         region, and that piece goes. See drop_split_fragments.
+      7. Clipped to the AOR (holes filled) buffered by
+         AOR_CLIP_BUFFER_DEG, the same geometry for every region so shared
+         arcs stay shared -- step 6 can cut across a notch in the
+         boundary. Then split fragments dropped: MIN AREA judged whole
+         areas at steps 3-4; coarsening or the clip can still pinch a
+         small piece off a region, and that piece goes. See
+         drop_split_fragments.
 
     Parameters are identical to polygonize_ifr_grid()'s -- see there.
     """
@@ -1434,7 +1458,16 @@ def polygonize_ifr_grid_v2(
 
     polygons = _simplify_regions(polygons, ARC_SIMPLIFY_TOLERANCE_DEG)
 
-    # 7. Drop the fragments splitting created. MIN AREA was judged on
+    # 7a. Bound the overshoot past the AOR. Every region gets the SAME clip
+    # geometry, so an arc two regions share is cut at the same points on
+    # both sides and stays shared: no gap or overlap opens between classes.
+    # Clipping can split a polygon; the pieces keep their region's group,
+    # so 7b judges them like any other split.
+    polygons, per_polygon_properties, source_regions = _clip_to_aor(
+        polygons, per_polygon_properties, source_regions
+    )
+
+    # 7b. Drop the fragments splitting created. MIN AREA was judged on
     # whole fine-grid areas (steps 3-4), and a whole area stays drawn even
     # if the coarse trace and simplification shave its emitted shape
     # under the line. But the 0.1-degree majority reduce erases a neck
@@ -1450,6 +1483,28 @@ def polygonize_ifr_grid_v2(
         polygons, per_polygon_properties, date, fxx,
         threshold_pct, neighborhood_radius_nm, min_area_sq_mi,
     )
+
+
+def _clip_to_aor(polygons: list, properties: list, groups: list) -> tuple[list, list, list]:
+    """
+    Intersects each polygon with the AOR (holes filled) buffered by
+    AOR_CLIP_BUFFER_DEG. A polygon already inside is passed through
+    untouched, so the step is an exact no-op wherever nothing overshoots.
+    A clipped polygon that falls apart contributes each piece, with its
+    properties and group; zero-area slivers and empty results are dropped.
+    """
+    clip = get_aor_clip_geometry(CONUS_BOUNDARY_PATH, AOR_CLIP_BUFFER_DEG)
+    out_polygons, out_properties, out_groups = [], [], []
+    for polygon, props, group in zip(polygons, properties, groups):
+        if clip.contains(polygon):
+            out_polygons.append(polygon); out_properties.append(props); out_groups.append(group)
+            continue
+        clipped = polygon.intersection(clip)
+        pieces = [clipped] if clipped.geom_type == "Polygon" else list(getattr(clipped, "geoms", []))
+        for piece in pieces:
+            if piece.geom_type == "Polygon" and not piece.is_empty and piece.area > 0:
+                out_polygons.append(piece); out_properties.append(dict(props)); out_groups.append(group)
+    return out_polygons, out_properties, out_groups
 
 
 def _ifr_feature_collection(
