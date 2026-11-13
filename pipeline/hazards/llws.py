@@ -45,10 +45,19 @@ A SPARSE EVENT FIELD, hence "nearest" in Phase A (a 0 next to a 30 must
 not become a 15) and smoothing of the mask rather than the values in
 Phase B (see tango_common's docstring).
 
-UNCALIBRATED. Sigma 1.0, the 25 nm radius and the 300 sq mi minimum area
-are placeholders (docs/METHODS.md 4A.8-4A.9). Measured with the 30 kt
-default on five cycles: the 25 nm closing joins scattered clusters into
-hulls that are often mostly unflagged; 15 nm roughly restores the old fill.
+WHY THE RADIUS IS 15 NM. It was 25 nm, chosen by eye at the old 40 kt
+threshold (SW Arizona / New Mexico, 2026-10-04). At 30 kt more of the
+selected cells are scattered, and the 25 nm closing joined them into
+hulls that were mostly unflagged: on five cycles, area-weighted fill
+fell from 65% (40 kt, 25 nm) to 49%, with 41% of the area in polygons
+under half flagged. 15 nm brings fill back to 63% (21%) and keeps the
+events 30 kt adds. The threshold and the radius are one default pair;
+change them together. The radius stays adjustable in the viewer.
+
+UNCALIBRATED. Sigma 1.0, the 15 nm radius and the 300 sq mi minimum area
+are placeholders (docs/METHODS.md 4A.8-4A.9). 15 nm comes from five
+cycles in two regimes (Pacific Northwest / Great Basin and the
+Southeast, November 2026): a placeholder, not a calibration.
 """
 
 from pipeline.hazards.tango_common import TangoLayer
@@ -63,6 +72,6 @@ LLWS = TangoLayer(
     default_threshold_kt=30.0,  # the field's floor: selects exactly NBM-flagged cells
     threshold_range_kt=(30.0, 60.0),
     default_smooth_sigma_cells=1.0,
-    default_neighborhood_radius_nm=25.0,
+    default_neighborhood_radius_nm=15.0,  # was 25; changed with the threshold, see docstring
     default_min_area_sq_mi=300.0,
 )

@@ -892,7 +892,7 @@ to say so in the data itself.
 | Mask smoothing sigma, STG SFC WND | 1.5 cells | 0–3, step 0.5, 0 = off |
 | Mask smoothing sigma, LLWS | 1.0 cells (see below) | 0–3, step 0.5, 0 = off |
 | Neighborhood radius, STG SFC WND | 50 nm (borrowed from MTN OBSC) | — |
-| Neighborhood radius, LLWS | 25 nm, chosen by eye from two frames in one regime (SW AZ/NM, 2026-10-04); see 4A.9 | — |
+| Neighborhood radius, LLWS | 15 nm, set with the 30 kt threshold from five cycles in two regimes (November 2026); was 25 nm, chosen by eye at 40 kt from two frames in one regime (SW AZ/NM, 2026-10-04); see 4A.9 | — |
 | Minimum area, STG SFC WND | 1,000 sq mi | — |
 | Minimum area, LLWS | 300 sq mi (see below) | — |
 
@@ -901,7 +901,9 @@ else. The field *is* a shear diagnostic, NBM's TAF LLWS guidance (4A.2),
 and the 30 kt default shows everything NBM flags; but NBM's own cut is
 30 kt against G-AIRMET's 20 kt, so the layer is a conservative subset of
 the product criterion, and sigma, radius and minimum area are untested
-against it.
+against it. The radius was changed with the threshold (25 → 15 nm) because
+the two are one default pair: at 30 kt the old 25 nm hulled the extra,
+scattered cells (4A.9).
 
 **LLWS sigma 1.0 and minimum area 300.** LLWS events are small and sparse,
 and the shared 1.5 / 1,000 defaults were set with surface wind in mind. The
@@ -932,15 +934,17 @@ and then erodes it by the same amount. Two flagged areas closer together
 than roughly 2 x radius grow into each other during the dilation and stay
 joined after the erosion, and so does any concave notch narrower than that.
 At 50 nm (the surface-wind default) that is up to about 100 nm between
-clusters; at 25 nm (the LLWS default) about 50 nm. This is
+clusters; at 15 nm (the LLWS default) about 30 nm. This is
 different from a buffer: an isolated cluster comes back to roughly its own
 size, but a *group* of small clusters is joined into one footprint that
 includes the empty ground between them. It is the only parameter that
 joins clusters, and for a sparse field like LLWS it is by far the largest
 influence on polygon area.
 
-Measured on the 2026-10-04 03Z cycle (LLWS, 40 kt, sigma 1.5, minimum area
-1,000 sq mi), from the cached grids:
+Measured on the 2026-10-04 03Z cycle at the settings of the time (LLWS,
+40 kt, sigma 1.5, minimum area 1,000 sq mi), from the cached grids. This
+is the measurement the original 25 nm default was chosen from; the cycle
+is no longer cached, so it has not been re-run at the current defaults:
 
 | Radius | F00 polygons / sq mi | F06 polygons / sq mi |
 | --- | --- | --- |
@@ -957,37 +961,68 @@ thin corridor, and much of its interior holds no flagged cell. At F00 the
 same step takes 535 sq mi to 2,605 (raw in-AOR: 822 sq mi). Filling
 enclosed gaps changed nothing in either case.
 
-**At 30 kt the 25 nm closing hulls more often.** Recomputed from five
-cached cycles (packages 2026-11-11 09Z and 15Z, 2026-11-12 09Z, 2026-11-13
-09Z and 15Z; F00–F12; sigma 1.0, MIN AREA 300), with "fill" the share of a
+**Why the default changed from 25 to 15 nm: at 30 kt the 25 nm closing
+hulls.** When the threshold went from 40 to 30 kt (4A.2), the radius was
+re-measured with it. Recomputed from five cached cycles (packages
+2026-11-11 09Z and 15Z, 2026-11-12 09Z, 2026-11-13 09Z and 15Z; F00–F12,
+25 package-hours; sigma 1.0, MIN AREA 300), with "fill" the share of a
 polygon's area made of NBM-flagged cells:
 
 | | Polygons | Area (summed) | Vertices | Area-weighted fill | Area in polygons under 50% fill |
 | --- | --- | --- | --- | --- | --- |
 | 40 kt, 25 nm (old default) | 107 | 1.21 M sq mi | 2,321 | 65% | 19% |
-| 30 kt, 25 nm (current default) | 172 | 2.20 M sq mi | 3,804 | 49% | 41% |
-| 30 kt, 15 nm | 205 | 1.71 M sq mi | 4,447 | 63% | 21% |
+| 30 kt, 25 nm | 172 | 2.20 M sq mi | 3,804 | 49% | 41% |
+| **30 kt, 15 nm (current default)** | 205 | 1.71 M sq mi | 4,447 | 63% | 21% |
 | 30 kt, 10 nm | 234 | 1.45 M sq mi | 5,108 | 72% | 7% |
 
-The extra flagged cells at 30 kt are often a scattered field (the Great
-Basin, 2026-11-13 15Z F12), which the 25 nm closing joins into hulls with
-much empty interior; but some are coherent areas the 40 kt default missed
-almost entirely (the Southeast, 2026-11-12 09Z F03: a sliver at 40 kt, the
-whole event at 30). 15 nm brings the fill back to the old level. The radius
-was not changed with the threshold; it is the next thing to decide.
+The extra flagged cells at 30 kt are often a scattered field, which the
+25 nm closing joined into hulls with much empty interior; but some are
+coherent areas the 40 kt default missed almost entirely (the Southeast,
+2026-11-12 09Z F03: a 3,304 sq mi sliver in California was the largest
+polygon at 40 kt; at 30 kt / 15 nm the largest is the Carolinas event,
+35,609 sq mi at 75% fill). The worst 25 nm cases, side by side:
 
-**The LLWS default is 25 nm, and it is a placeholder.** It was chosen by eye
-from the F00 and F06 frames above, which are two frames from one regime (SW
-Arizona / New Mexico, 2026-10-04). Nothing here tests it against other
-patterns or against a forecaster's idea of the right footprint, and the
-radius remains a forecaster decision. Surface wind keeps 50 nm, which has
+| Package | Hr | 25 nm: polygons | largest (sq mi, fill) | 15 nm: polygons | largest (sq mi, fill) |
+| --- | --- | --- | --- | --- | --- |
+| 2026-11-13 15Z (Great Basin) | F12 | 13 | 180,956, 44% | 16 | 118,701, 54% |
+| 2026-11-13 15Z | F09 | 12 | 38,504, 27% | 13 | 18,281, 50% |
+| 2026-11-12 09Z (S Oregon) | F06 | 5 | 15,734, 32% | 7 | 10,621, 40% |
+| 2026-11-12 09Z (S Oregon) | F09 | 3 | 17,228, 29% | 3 | 14,181, 35% |
+| 2026-11-12 09Z (S Oregon) | F12 | 3 | 8,260, 23% | 4 | 4,445, 33% |
+
+15 nm brings the fill back to the old level without losing the new
+events. It does not fix every case: the southern Oregon frames stay
+under half filled at 15 nm (their flagged cells are a loose scatter at
+the 0.025° cache scale), and 10 nm would tighten them further at the cost
+of more, smaller polygons and more vertices. One package not used to
+choose the value (2026-11-10 15Z, F00–F12) shows the same pattern: fill
+63% at 40 kt / 25 nm, 44% at 30 / 25, 60% at 30 / 15.
+
+**The cost of the smaller radius.** More polygons (172 → 205) and more
+vertices (3,804 → 4,447) than 30 kt at 25 nm, because fewer clusters are
+joined; total area is lower (2.20 M → 1.71 M sq mi), because less empty
+ground is enclosed.
+
+**The LLWS default is 15 nm, and it is a placeholder, not a calibration.**
+It comes from five cycles in two regimes (Pacific Northwest / Great Basin
+and the Southeast, all November 2026), judged by one measure (fill
+against NBM's own flagged cells), and checked on one more package. The
+25 nm it replaced was chosen by eye from the F00 and F06 frames above,
+two frames from one regime (SW Arizona / New Mexico, 2026-10-04, at
+40 kt). Neither value has been tested against a forecaster's idea of the
+right footprint, against convective-season events, or against PIREPs; the
+radius stays adjustable in the viewer and remains a forecaster decision.
+The threshold and the radius are one default pair: changing either should
+re-run the A/B above. Surface wind keeps 50 nm, which has
 not been examined for that layer.
 
-**Radius 0 (or 15 nm here) produces no polygon, and that is the minimum
-area at work.** The flagged cells are many small clusters, none of which
-reaches 1,000 sq mi on its own, so without the closing to join them every
-one is dropped. For this field the radius and the minimum area are in
-effect a single decision.
+**Radius 0 (or 15 nm on that cycle, at the settings of the time) produced
+no polygon, and that was the minimum area at work.** The flagged cells
+there were many small clusters, none of which reached 1,000 sq mi on its
+own, so without the closing to join them every one was dropped. The
+current minimum area is 300 sq mi, which is part of why 15 nm now draws
+polygons. For this field the radius and the minimum area are in effect a
+single decision.
 
 **Known behavior: smoothing can trim a cluster's peak cell.** Smoothing the
 mask re-cuts the edge at 0.5, so a one- or two-cell protrusion is removed

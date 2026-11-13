@@ -50,7 +50,7 @@ on:
         description: "LLWS POTENTIAL: Gaussian sigma (cells) applied to the yes/no mask -- blank for default (1.0); 0 = off"
         required: false
       llws_neighborhood_radius_nm:
-        description: "LLWS POTENTIAL: raster closing radius (nm) -- blank for default (25)"
+        description: "LLWS POTENTIAL: raster closing radius (nm) -- blank for default (15)"
         required: false
       llws_min_area_sq_mi:
         description: "LLWS POTENTIAL: minimum polygon area (sq mi) -- blank for default (300; UNCALIBRATED)"
