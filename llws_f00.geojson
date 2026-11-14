@@ -1,0 +1,461 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -118.172063,
+              36.45
+            ],
+            [
+              -118.511543,
+              36.35
+            ],
+            [
+              -118.527917,
+              36.65
+            ],
+            [
+              -118.425,
+              36.840027
+            ],
+            [
+              -118.172063,
+              36.45
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "hazard": "LLWS",
+        "speed_threshold_kt": 30.0,
+        "smooth_sigma_cells": 1.0,
+        "neighborhood_radius_nm": 15.0,
+        "min_area_sq_mi": 300.0,
+        "valid_time": "2026-11-14T15:00:00Z",
+        "model_cycle": "2026-11-14T15:00:00Z",
+        "forecast_hour": 0,
+        "peak_speed_kt": 46.5,
+        "area_sq_mi": 368,
+        "category": "TANGO",
+        "phenomenon": "LLWS POTENTIAL"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -79.2,
+              38.369846
+            ],
+            [
+              -79.4,
+              38.6375
+            ],
+            [
+              -79.568999,
+              38.675
+            ],
+            [
+              -79.225,
+              39.195502
+            ],
+            [
+              -79.185923,
+              39.15
+            ],
+            [
+              -79.3625,
+              38.725
+            ],
+            [
+              -79.225,
+              38.5625
+            ],
+            [
+              -79.033241,
+              38.525
+            ],
+            [
+              -79.2,
+              38.369846
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "hazard": "LLWS",
+        "speed_threshold_kt": 30.0,
+        "smooth_sigma_cells": 1.0,
+        "neighborhood_radius_nm": 15.0,
+        "min_area_sq_mi": 300.0,
+        "valid_time": "2026-11-14T15:00:00Z",
+        "model_cycle": "2026-11-14T15:00:00Z",
+        "forecast_hour": 0,
+        "peak_speed_kt": 53.5,
+        "area_sq_mi": 405,
+        "category": "TANGO",
+        "phenomenon": "LLWS POTENTIAL"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -103.3,
+              47.559492
+            ],
+            [
+              -103.625,
+              47.358244
+            ],
+            [
+              -103.5375,
+              47.7
+            ],
+            [
+              -103.711611,
+              47.875
+            ],
+            [
+              -103.6,
+              48.204943
+            ],
+            [
+              -103.480976,
+              47.975
+            ],
+            [
+              -103.5375,
+              47.775
+            ],
+            [
+              -103.4,
+              47.603114
+            ],
+            [
+              -103.042532,
+              47.609308
+            ],
+            [
+              -103.3,
+              47.559492
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "hazard": "LLWS",
+        "speed_threshold_kt": 30.0,
+        "smooth_sigma_cells": 1.0,
+        "neighborhood_radius_nm": 15.0,
+        "min_area_sq_mi": 300.0,
+        "valid_time": "2026-11-14T15:00:00Z",
+        "model_cycle": "2026-11-14T15:00:00Z",
+        "forecast_hour": 0,
+        "peak_speed_kt": 39.5,
+        "area_sq_mi": 378,
+        "category": "TANGO",
+        "phenomenon": "LLWS POTENTIAL"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -102.1,
+              47.019617
+            ],
+            [
+              -102.288881,
+              47.025
+            ],
+            [
+              -102.025,
+              47.289782
+            ],
+            [
+              -101.825,
+              47.355591
+            ],
+            [
+              -101.5,
+              47.417623
+            ],
+            [
+              -101.30978,
+              47.237306
+            ],
+            [
+              -101.725,
+              47.180591
+            ],
+            [
+              -102.1,
+              47.019617
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "hazard": "LLWS",
+        "speed_threshold_kt": 30.0,
+        "smooth_sigma_cells": 1.0,
+        "neighborhood_radius_nm": 15.0,
+        "min_area_sq_mi": 300.0,
+        "valid_time": "2026-11-14T15:00:00Z",
+        "model_cycle": "2026-11-14T15:00:00Z",
+        "forecast_hour": 0,
+        "peak_speed_kt": 42.0,
+        "area_sq_mi": 538,
+        "category": "TANGO",
+        "phenomenon": "LLWS POTENTIAL"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -101.125,
+              42.989131
+            ],
+            [
+              -101.216664,
+              43.0
+            ],
+            [
+              -101.162518,
+              43.225
+            ],
+            [
+              -101.3,
+              43.431168
+            ],
+            [
+              -100.775,
+              43.362501
+            ],
+            [
+              -100.6,
+              43.494117
+            ],
+            [
+              -100.339963,
+              43.385751
+            ],
+            [
+              -100.5,
+              43.385985
+            ],
+            [
+              -100.7,
+              43.189569
+            ],
+            [
+              -100.975,
+              43.162294
+            ],
+            [
+              -101.125,
+              42.989131
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "hazard": "LLWS",
+        "speed_threshold_kt": 30.0,
+        "smooth_sigma_cells": 1.0,
+        "neighborhood_radius_nm": 15.0,
+        "min_area_sq_mi": 300.0,
+        "valid_time": "2026-11-14T15:00:00Z",
+        "model_cycle": "2026-11-14T15:00:00Z",
+        "forecast_hour": 0,
+        "peak_speed_kt": 52.0,
+        "area_sq_mi": 627,
+        "category": "TANGO",
+        "phenomenon": "LLWS POTENTIAL"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -115.951577,
+              32.65
+            ],
+            [
+              -116.225,
+              32.666306
+            ],
+            [
+              -116.566269,
+              33.05
+            ],
+            [
+              -116.429317,
+              33.425
+            ],
+            [
+              -116.45,
+              33.612892
+            ],
+            [
+              -116.260321,
+              33.475
+            ],
+            [
+              -116.134363,
+              32.95
+            ],
+            [
+              -115.960275,
+              32.75
+            ],
+            [
+              -115.951577,
+              32.65
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "hazard": "LLWS",
+        "speed_threshold_kt": 30.0,
+        "smooth_sigma_cells": 1.0,
+        "neighborhood_radius_nm": 15.0,
+        "min_area_sq_mi": 300.0,
+        "valid_time": "2026-11-14T15:00:00Z",
+        "model_cycle": "2026-11-14T15:00:00Z",
+        "forecast_hour": 0,
+        "peak_speed_kt": 59.0,
+        "area_sq_mi": 1059,
+        "category": "TANGO",
+        "phenomenon": "LLWS POTENTIAL"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -110.25,
+              34.845198
+            ],
+            [
+              -110.5,
+              34.86941
+            ],
+            [
+              -110.95,
+              35.097043
+            ],
+            [
+              -111.275,
+              35.398555
+            ],
+            [
+              -111.675,
+              35.330984
+            ],
+            [
+              -111.575581,
+              35.55
+            ],
+            [
+              -111.594339,
+              35.7
+            ],
+            [
+              -111.75,
+              35.919269
+            ],
+            [
+              -111.892919,
+              35.975
+            ],
+            [
+              -111.875662,
+              36.075
+            ],
+            [
+              -112.104798,
+              36.425
+            ],
+            [
+              -112.05,
+              36.836736
+            ],
+            [
+              -111.942473,
+              36.85
+            ],
+            [
+              -111.9427,
+              36.6
+            ],
+            [
+              -111.531996,
+              36.1
+            ],
+            [
+              -111.387501,
+              35.625
+            ],
+            [
+              -111.25,
+              35.480479
+            ],
+            [
+              -110.85,
+              35.35489
+            ],
+            [
+              -110.425,
+              35.106019
+            ],
+            [
+              -110.25,
+              34.845198
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "hazard": "LLWS",
+        "speed_threshold_kt": 30.0,
+        "smooth_sigma_cells": 1.0,
+        "neighborhood_radius_nm": 15.0,
+        "min_area_sq_mi": 300.0,
+        "valid_time": "2026-11-14T15:00:00Z",
+        "model_cycle": "2026-11-14T15:00:00Z",
+        "forecast_hour": 0,
+        "peak_speed_kt": 55.0,
+        "area_sq_mi": 2411,
+        "category": "TANGO",
+        "phenomenon": "LLWS POTENTIAL"
+      }
+    }
+  ]
+}

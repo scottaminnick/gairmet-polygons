@@ -1,0 +1,149 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -102.748462,
+              44.675
+            ],
+            [
+              -103.309425,
+              44.65
+            ],
+            [
+              -103.325,
+              44.985438
+            ],
+            [
+              -103.15,
+              45.086347
+            ],
+            [
+              -102.613564,
+              45.05
+            ],
+            [
+              -102.748462,
+              44.675
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "hazard": "SFC_WIND",
+        "speed_threshold_kt": 30.0,
+        "smooth_sigma_cells": 1.5,
+        "neighborhood_radius_nm": 50.0,
+        "min_area_sq_mi": 1000.0,
+        "valid_time": "2026-11-14T21:00:00Z",
+        "model_cycle": "2026-11-14T15:00:00Z",
+        "forecast_hour": 6,
+        "peak_speed_kt": 32.5,
+        "area_sq_mi": 860,
+        "category": "TANGO",
+        "phenomenon": "STG SFC WND"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -126.0,
+              48.431249
+            ],
+            [
+              -125.493929,
+              48.45
+            ],
+            [
+              -124.875,
+              48.199725
+            ],
+            [
+              -124.725,
+              48.022498
+            ],
+            [
+              -124.648226,
+              47.85
+            ],
+            [
+              -124.712469,
+              47.625
+            ],
+            [
+              -124.662494,
+              47.325
+            ],
+            [
+              -124.12508,
+              46.675
+            ],
+            [
+              -124.134982,
+              46.175
+            ],
+            [
+              -123.99218,
+              45.725
+            ],
+            [
+              -124.637034,
+              43.5
+            ],
+            [
+              -124.39642,
+              42.6
+            ],
+            [
+              -124.414669,
+              42.15
+            ],
+            [
+              -125.1,
+              41.986982
+            ],
+            [
+              -125.435,
+              41.675
+            ],
+            [
+              -125.575,
+              41.359973
+            ],
+            [
+              -125.975,
+              41.250389
+            ],
+            [
+              -126.0,
+              48.431249
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "hazard": "SFC_WIND",
+        "speed_threshold_kt": 30.0,
+        "smooth_sigma_cells": 1.5,
+        "neighborhood_radius_nm": 50.0,
+        "min_area_sq_mi": 1000.0,
+        "valid_time": "2026-11-14T21:00:00Z",
+        "model_cycle": "2026-11-14T15:00:00Z",
+        "forecast_hour": 6,
+        "peak_speed_kt": 44.5,
+        "area_sq_mi": 35450,
+        "category": "TANGO",
+        "phenomenon": "STG SFC WND"
+      }
+    }
+  ]
+}
